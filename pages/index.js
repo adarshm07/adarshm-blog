@@ -27,7 +27,7 @@ export default function Home({ posts }) {
           {posts.slice(0, MAX_DISPLAY).map((frontMatter) => {
             const { slug, date, title, summary, tags } = frontMatter
             return (
-              <li key={slug} className="border-2 px:4 border-gray-100 p-6">
+              <li key={slug} className="border-2 px:4 border-slate-100 rounded-md p-6">
                 <article>
                   <div className="space-y-2">
                     <dl>
