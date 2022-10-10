@@ -16,7 +16,7 @@ const PostSchema = new mongoose.Schema({
   },
   categories: {
     type: [String],
-    default: "Uncategorised",
+    ref: "Category",
   },
   status: {
     type: String,

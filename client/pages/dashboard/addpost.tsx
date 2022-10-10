@@ -2,17 +2,19 @@ import axios from 'axios';
 import { useState, useEffect } from 'react';
 import RichText from '../../components/RichText';
 import { useSelector } from "react-redux"
+import Layout from '../../components/Layout';
+import { Checkbox } from '@mantine/core';
 
 export default function AddPost() {
   const [title, setTitle] = useState<string>("");
   const [description, setDescription] = useState<string>("");
   const [slug, setSlug] = useState<string>("");
-  const [categories, setCategories] = useState<string>("");
+  const [categories, setCategories] = useState<string[]>("");
   const [status, setStatus] = useState<string>("PUBLISHED");
-  const [author, setAuthor] = useState<[string]>([]);
+  const [author, setAuthor] = useState<string[]>([""]);
   const [metaTitle, setMetaTitle] = useState<string>("");
   const [metaDescription, setMetaDescription] = useState<string>("");
-  const [authors, setAuthors] = useState<[string]>([]);
+  const [authors, setAuthors] = useState<string[]>([""]);
 
   const userData = useSelector((state: any) => state.user);
 
@@ -27,7 +29,7 @@ export default function AddPost() {
     }
 
     listOfAllAuthors()
-  }, [])
+  }, [userData?.user._id])
 
   const publish = async () => {
     let data = JSON.stringify({ title, description, slug, categories, status, author, metaTitle, metaDescription })
@@ -53,30 +55,53 @@ export default function AddPost() {
   }
 
   return (
-    <div className="container">
-      <input type={"text"} value={title} onChange={(e) => setTitle(e.target.value)} id="post_title" placeholder='Post Title' className='w-100 my-4 border border-1 rounded p-2' />
-      <input type={"text"} value={slug} onChange={(e) => setSlug(e.target.value)} id="slug" className='w-100 my-4 border border-1 rounded p-2' />
-      <RichText value={description} onChange={setDescription} id="rte" />
-      <div className='my-4'></div>
-      {/* SEO */}
-      <input type={"text"} value={metaTitle} onChange={(e) => setMetaTitle(e.target.value)} id="meta_title" placeholder='Meta Title' className='w-100 my-2 border border-1 rounded p-2' />
-      <textarea value={metaDescription} onChange={(e) => setMetaDescription(e.target.value)} id="meta_description" placeholder='Meta Description' className='w-100 my-2 border border-1 rounded p-2' />
+    <Layout>
+      <div className="container mt-5">
+        <div className="row">
+          <div className="col-9">
+            <input type={"text"} value={title} onChange={(e) => setTitle(e.target.value)} id="post_title" placeholder='Post Title' className='w-100 border border-1 rounded p-2' />
+            <div className="d-flex align-items-center">
+              <span>{window.location.origin + '/'}</span>
+              <input type={"text"} value={title.split(' ').join('-')} onChange={(e) => setSlug(e.target.value)} id="slug" className='w-100 my-4 border-0' />
+            </div>
+            <RichText value={description} onChange={setDescription} id="rte" />
+            <div className='my-4'></div>
+            <input type={"text"} value={metaTitle} onChange={(e) => setMetaTitle(e.target.value)} id="meta_title" placeholder='Meta Title' className='w-100 my-2 border border-1 rounded p-2' />
+            <textarea value={metaDescription} onChange={(e) => setMetaDescription(e.target.value)} id="meta_description" placeholder='Meta Description' className='w-100 my-2 border border-1 rounded p-2' />
+          </div>
 
-      <select name="status" id="status" onChange={(e) => setStatus(e.target.value)}>
-        <option value="PUBLISH">Publish</option>
-        <option value="DRAFT">Draft</option>
-        <option value="TRASH">Trash</option>
-      </select>
+          <div className="col-3 d-flex flex-column gap-4">
+            <Checkbox.Group
+              defaultValue={['react']}
+              orientation="vertical"
+              label="Category"
+              spacing="xs"
+              size="xs"
+              onChange={setCategories}
+            >
+              <Checkbox value="react" label="React" />
+              <Checkbox value="svelte" label="Svelte" />
+              <Checkbox value="ng" label="Angular" />
+              <Checkbox value="vue" label="Vue" />
+            </Checkbox.Group>
+            <select className='form-control' name="status" id="status" onChange={(e) => setStatus(e.target.value)}>
+              <option value="PUBLISH">Publish</option>
+              <option value="DRAFT">Draft</option>
+              <option value="TRASH">Trash</option>
+            </select>
 
-      <select name="author" id="author" onChange={(e) => setAuthor([e.target.value])}>
-        {authors?.map((item) => {
-          return (
-            <option key={item._id} value={item._id}>{item.username}</option>
-          )
-        })}
-      </select>
+            <select className='form-control' name="author" id="author" onChange={(e) => setAuthor([e.target.value])}>
+              {authors?.map((item: any) => {
+                return (
+                  <option key={item._id} value={item._id}>{item.username}</option>
+                )
+              })}
+            </select>
 
-      <button className='btn btn-primary' onClick={publish}>Publish</button>
-    </div >
+            <button className='btn btn-primary' onClick={publish}>Publish</button>
+          </div>
+        </div>
+      </div >
+    </Layout>
   )
 }

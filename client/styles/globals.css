@@ -33,6 +33,16 @@ a {
   color: #ffffff;
 }
 
+.mantine-RichTextEditor-toolbar {
+  background-color: #f9f9f9;
+}
+
+.mantine-RichTextEditor-root .ql-editor {
+  min-height: 400px;
+  max-height: 900px;
+  overflow-y: scroll;
+}
+
 @media (prefers-color-scheme: dark) {
   html {
     color-scheme: dark;

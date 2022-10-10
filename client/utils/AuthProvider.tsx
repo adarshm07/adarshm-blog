@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 import { useSelector } from "react-redux"
+import Router from "next/router";
 
 type Props = {
     children?: React.ReactNode
@@ -27,17 +28,13 @@ export default function AuthProvider({ children }: Props) {
             .catch(function (error) {
                 setIsAuthenticated(false);
             });
-
     }, [userData])
-    console.log('user', isAuthenticated);
+
+    if (isAuthenticated) Router.push('/dashboard/addpost');
 
     return (
         <div className="container">
-            <div className="text-center mt-5">
-                {isAuthenticated && <p>You are already logged in.</p>}
-            </div>
             {!isAuthenticated && children}
-
         </div>
     )
 }
