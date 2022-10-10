@@ -23,6 +23,16 @@ a {
   font-size: 14px;
 }
 
+.navbar-nav .nav-item.login-cta {
+  border-radius: 4px;
+  padding: 4px 16px !important;
+  display: flex;
+  align-items: center;
+  margin-left: 20px;
+  background: #2e2e2e;
+  color: #ffffff;
+}
+
 @media (prefers-color-scheme: dark) {
   html {
     color-scheme: dark;
