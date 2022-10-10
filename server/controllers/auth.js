@@ -56,5 +56,15 @@ export const login = async (req, res, next) => {
 export const logout = async (req, res) => {
   try {
     res.cookie("access_token", "").status(200).json("Logged out");
-  } catch (error) {}
+  } catch (error) {
+    res.status(400).json("Error.");
+  }
+};
+
+export const session = async (req, res) => {
+  try {
+    res.status(200).json("valid");
+  } catch (error) {
+    res.status(401).json("invalid");
+  }
 };

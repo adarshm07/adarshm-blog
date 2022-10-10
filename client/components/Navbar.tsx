@@ -1,3 +1,4 @@
+import axios from "axios";
 import Link from "next/link";
 import { useSelector, useDispatch } from "react-redux";
 import { loggedInUser } from '../store/user';
@@ -5,6 +6,15 @@ import { loggedInUser } from '../store/user';
 export default function Navbar() {
     const dispatch = useDispatch();
     const user = useSelector((state: any) => state.user);
+
+    const logout = () => {
+        dispatch(loggedInUser(""));
+        axios.get('http://localhost:4000/auth/logout')
+            .then((res) => console.log('logged out.'))
+            .catch((err) => console.log('error'))
+    }
+    console.log(user.user);
+
 
     return (
         <nav className="navbar navbar-expand-lg" style={{ boxShadow: "3px 3px 0px 0px #f9f9f9" }}>
@@ -20,7 +30,7 @@ export default function Navbar() {
                             <Link href="/"><a className="nav-item nav-link">Resume</a></Link>
                             <Link href="/"><a className="nav-item nav-link">Blog</a></Link>
                             <Link href="/"><a className="nav-item nav-link">Contact</a></Link>
-                            {Object.keys(user?.user).length ? <a className="nav-item nav-link login-cta" onClick={() => dispatch(loggedInUser(""))}>Logout</a> : <Link href="/login"><a className="nav-item nav-link login-cta">Login</a></Link>}
+                            {Object.keys(user?.user).length ? <a className="nav-item nav-link login-cta" onClick={logout}>Logout</a> : <Link href="/login"><a className="nav-item nav-link login-cta">Login</a></Link>}
                         </div>
                     </div>
                 </div>
