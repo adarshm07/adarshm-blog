@@ -74,8 +74,6 @@ export default function AddPost() {
         axios(configSignedUrl)
           .then(function (res) {
             uploadImage(res)
-            console.log(res.data.signedUrl);
-
           })
           .catch(function (error) {
             console.log(error);
@@ -150,9 +148,9 @@ export default function AddPost() {
             </select>
 
             <select className='form-control' name="author" id="author" onChange={(e) => setAuthor([e.target.value])}>
-              {authors?.map((item: any) => {
+              {authors?.map((item: any, index: Number) => {
                 return (
-                  <option key={item._id} value={item._id}>{item.username}</option>
+                  <option key={index} value={item._id}>{item.username}</option>
                 )
               })}
             </select>
