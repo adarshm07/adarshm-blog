@@ -31,6 +31,13 @@ export default function AddPost() {
     listOfAllAuthors()
   }, [userData?.user._id])
 
+  useEffect(() => {
+    console.log(categories);
+    console.log(slug);
+    console.log(status);
+    console.log(author);
+  }, [author, categories, slug, status])
+
   const publish = async () => {
     let data = JSON.stringify({ title, description, slug, categories, status, author, metaTitle, metaDescription })
 
@@ -62,7 +69,7 @@ export default function AddPost() {
             <input type={"text"} value={title} onChange={(e) => setTitle(e.target.value)} id="post_title" placeholder='Post Title' className='w-100 border border-1 rounded p-2' />
             <div className="d-flex align-items-center">
               <span>{window.location.origin + '/'}</span>
-              <input type={"text"} value={title.split(' ').join('-')} onChange={(e) => setSlug(e.target.value)} id="slug" className='w-100 my-4 border-0' />
+              <input type={"text"} value={slug}  onChange={(e) => setSlug(e.target.value.split(' ').join('-'))} id="slug" className='w-100 my-4 border-0' />
             </div>
             <RichText value={description} onChange={setDescription} id="rte" />
             <div className='my-4'></div>

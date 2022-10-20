@@ -13,7 +13,7 @@ export default function Navbar() {
             .then((res) => console.log('logged out.'))
             .catch((err) => console.log('error'))
     }
-    console.log(user.user);
+    // console.log(user.user);
 
 
     return (

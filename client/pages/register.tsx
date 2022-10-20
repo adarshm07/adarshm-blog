@@ -24,7 +24,7 @@ export default function Register() {
                 ) => {
                     values = { ...values }
                     axios.post('http://localhost:4000/auth/register', values, { withCredentials: true })
-                        .then((res) => console.log(res))
+                        // .then((res) => console.log(res))
                         .then(() => setSubmitting(false))
                 }}
             >
