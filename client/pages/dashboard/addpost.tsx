@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import RichText from '../../components/RichText';
 import { useSelector } from "react-redux"
 import Layout from '../../components/Layout';
@@ -31,13 +31,6 @@ export default function AddPost() {
     listOfAllAuthors()
   }, [userData?.user._id])
 
-  useEffect(() => {
-    console.log(categories);
-    console.log(slug);
-    console.log(status);
-    console.log(author);
-  }, [author, categories, slug, status])
-
   const publish = async () => {
     let data = JSON.stringify({ title, description, slug, categories, status, author, metaTitle, metaDescription })
 
@@ -58,8 +51,67 @@ export default function AddPost() {
       .catch(function (error) {
         console.log(error);
       });
-
   }
+
+  const handleImageUpload = useCallback(
+    (file: File): Promise<string> =>
+      new Promise((resolve, reject) => {
+        const body: any = {
+          fileName: file.name,
+          fileType: file.type
+        }
+
+        var configSignedUrl = {
+          method: 'post',
+          url: 'http://localhost:4000/auth/signedUrl',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${userData.user.token}`
+          },
+          data: body
+        };
+
+        axios(configSignedUrl)
+          .then(function (res) {
+            uploadImage(res)
+            console.log(res.data.signedUrl);
+
+          })
+          .catch(function (error) {
+            console.log(error);
+          });
+
+        function uploadImage(res: any) {
+          const configImageUpload = {
+            method: 'put',
+            url: res.data.signedUrl,
+            data: file
+          }
+          axios(configImageUpload)
+            .then((res: any) => {
+              previewImage(res);
+            })
+            .catch(() => reject(new Error('Upload failed')));
+        }
+
+        function previewImage(res: any) {
+          const configImagePreview = {
+            method: 'post',
+            url: 'http://localhost:4000/auth/previewUrl',
+            data: {
+              fileName: file.name,
+              fileType: file.type
+            }
+          }
+          axios(configImagePreview)
+            .then((res: any) => {
+              resolve(res.data.previewUrl)
+            })
+            .catch(() => reject(new Error('Upload failed')));
+        }
+      }),
+    []
+  );
 
   return (
     <Layout>
@@ -69,9 +121,9 @@ export default function AddPost() {
             <input type={"text"} value={title} onChange={(e) => setTitle(e.target.value)} id="post_title" placeholder='Post Title' className='w-100 border border-1 rounded p-2' />
             <div className="d-flex align-items-center">
               <span>{window.location.origin + '/'}</span>
-              <input type={"text"} value={slug}  onChange={(e) => setSlug(e.target.value.split(' ').join('-'))} id="slug" className='w-100 my-4 border-0' />
+              <input type={"text"} value={slug} onChange={(e) => setSlug(e.target.value.split(' ').join('-'))} id="slug" className='w-100 my-4 border-0' />
             </div>
-            <RichText value={description} onChange={setDescription} id="rte" />
+            <RichText value={description} onChange={setDescription} onImageUpload={handleImageUpload} id="rte" />
             <div className='my-4'></div>
             <input type={"text"} value={metaTitle} onChange={(e) => setMetaTitle(e.target.value)} id="meta_title" placeholder='Meta Title' className='w-100 my-2 border border-1 rounded p-2' />
             <textarea value={metaDescription} onChange={(e) => setMetaDescription(e.target.value)} id="meta_description" placeholder='Meta Description' className='w-100 my-2 border border-1 rounded p-2' />
