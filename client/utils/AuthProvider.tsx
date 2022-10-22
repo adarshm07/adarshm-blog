@@ -30,7 +30,9 @@ export default function AuthProvider({ children }: Props) {
             });
     }, [userData])
 
-    if (isAuthenticated) Router.push('/dashboard/addpost');
+    if (isAuthenticated) Router.push('/dashboard');
+    // if (!isAuthenticated && !Router.pathname.includes('/login')) Router.push('/login')
+
 
     return (
         <div className="container">

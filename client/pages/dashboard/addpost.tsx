@@ -9,8 +9,8 @@ export default function AddPost() {
   const [title, setTitle] = useState<string>("");
   const [description, setDescription] = useState<string>("");
   const [slug, setSlug] = useState<string>("");
-  const [categories, setCategories] = useState<string[]>("");
-  const [status, setStatus] = useState<string>("PUBLISHED");
+  const [categories, setCategories] = useState<string[]>([]);
+  const [status, setStatus] = useState<string>("PUBLISH");
   const [author, setAuthor] = useState<string[]>([""]);
   const [metaTitle, setMetaTitle] = useState<string>("");
   const [metaDescription, setMetaDescription] = useState<string>("");
