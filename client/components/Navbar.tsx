@@ -28,7 +28,7 @@ export default function Navbar() {
                         <div className="navbar-nav">
                             <Link href="/"><a className="nav-item nav-link">Work</a></Link>
                             <Link href="/"><a className="nav-item nav-link">Resume</a></Link>
-                            <Link href="/dashboard"><a className="nav-item nav-link">Blog</a></Link>
+                            <Link href="/blog"><a className="nav-item nav-link">Blog</a></Link>
                             <Link href="/"><a className="nav-item nav-link">Contact</a></Link>
                             {Object.keys(user?.user).length ? <a className="nav-item nav-link login-cta" onClick={logout}>Logout</a> : <Link href="/login"><a className="nav-item nav-link login-cta">Login</a></Link>}
                         </div>
