@@ -123,8 +123,6 @@ function EditPost({ data }) {
 EditPost.getInitialProps = async ({ query }) => {
   const res = await fetch(`http://localhost:4000/posts/edit-post/${query.editPost}`)
   const json = await res.json()
-  console.log(json);
-
   return { data: json }
 }
 
