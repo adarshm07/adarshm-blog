@@ -1,11 +1,11 @@
 import axios from 'axios';
-import { useState, useEffect, useCallback } from 'react';
-import RichText from '../../components/RichText';
+import { useState, useEffect } from 'react';
+import RichText from '../../../components/RichText';
 import { useSelector } from "react-redux"
-import Layout from '../../components/Layout';
+import Layout from '../../../components/Layout';
 import { Checkbox } from '@mantine/core';
 
-export default function AddPost() {
+function EditPost({ data }) {
   const [title, setTitle] = useState<string>("");
   const [description, setDescription] = useState<string>("");
   const [slug, setSlug] = useState<string>("");
@@ -18,17 +18,29 @@ export default function AddPost() {
 
   const userData = useSelector((state: any) => state.user);
 
-  useEffect(() => {
-    const listOfAllAuthors = async () => {
-      await axios.get('http://localhost:4000/posts/getAllAuthors')
-        .then((res: any) => {
-          setAuthors(res.data)
-          setAuthor([userData?.user._id])
-        })
-        .catch((err) => console.log(err));
-    }
+  // get list of authors
+  const listOfAllAuthors = async () => {
+    await axios.get('http://localhost:4000/posts/getAllAuthors')
+      .then((res: any) => {
+        setAuthors(res.data)
+        // setAuthor([userData?.user._id])
+      })
+      .catch((err) => console.log(err));
+  }
 
-    listOfAllAuthors()
+
+  useEffect(() => {
+    setTitle(data.title)
+    setDescription(data.description)
+    setMetaTitle(data.metaTitle)
+    setMetaDescription(data.metaDescription)
+    setSlug(data.slug)
+    setAuthor(data.author[0].username)
+    setStatus(data.status)
+
+    console.log('data', data);
+
+    listOfAllAuthors();
   }, [userData?.user._id])
 
   const publish = async () => {
@@ -83,14 +95,17 @@ export default function AddPost() {
               <Checkbox value="ng" label="Angular" />
               <Checkbox value="vue" label="Vue" />
             </Checkbox.Group>
-            <select className='form-control' name="status" id="status" onChange={(e) => setStatus(e.target.value)}>
+            <select className='form-control' name="status" id="status" value={status} onChange={(e) => setStatus(e.target.value)}>
               <option value="PUBLISH">Publish</option>
               <option value="DRAFT">Draft</option>
               <option value="TRASH">Trash</option>
             </select>
-
+            <div className='d-flex'>
+              <label htmlFor="author">Author: </label>
+              <p >{data.author[0].username}</p>
+            </div>
             <select className='form-control' name="author" id="author" onChange={(e) => setAuthor([e.target.value])}>
-              {authors?.map((item: any, index: Number) => {
+              {authors?.map((item: any, index: any) => {
                 return (
                   <option key={index} value={item._id}>{item.username}</option>
                 )
@@ -101,6 +116,16 @@ export default function AddPost() {
           </div>
         </div>
       </div >
-    </Layout>
+    </Layout >
   )
 }
+
+EditPost.getInitialProps = async ({ query }) => {
+  const res = await fetch(`http://localhost:4000/posts/edit-post/${query.editPost}`)
+  const json = await res.json()
+  console.log(json);
+
+  return { data: json }
+}
+
+export default EditPost;

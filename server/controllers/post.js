@@ -44,9 +44,10 @@ export const getPost = async (req, res) => {
 
 export const editPost = async (req, res) => {
   try {
-    const slug = req.params.slug;
-    const post = await Post.findOne({ slug });
+    const { slug } = req.params;
+    const post = await Post.findOne({ slug }).populate("author");;
     if (!post) res.status(400).json("Post not found");
+    if(post) res.status(200).json(post)
   } catch (error) {
     res.status(400).json("Post not found");
   }
