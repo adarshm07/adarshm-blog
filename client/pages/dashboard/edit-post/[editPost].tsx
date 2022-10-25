@@ -6,7 +6,8 @@ import Layout from '../../../components/Layout';
 import { Checkbox } from '@mantine/core';
 import Router from 'next/router';
 
-function EditPost({ data }) {
+function EditPost() {
+  const [post, setPost] = useState<[]>([])
   const [title, setTitle] = useState<string>("");
   const [description, setDescription] = useState<string>("");
   const [slug, setSlug] = useState<string>("");
@@ -18,6 +19,8 @@ function EditPost({ data }) {
   const [authors, setAuthors] = useState<string[]>([""]);
 
   const userData = useSelector((state: any) => state.user);
+
+  const { query } = Router
 
   // get list of authors
   const listOfAllAuthors = async () => {
@@ -31,15 +34,32 @@ function EditPost({ data }) {
 
 
   useEffect(() => {
-    setTitle(data.title)
-    setDescription(data.description)
-    setMetaTitle(data.metaTitle)
-    setMetaDescription(data.metaDescription)
-    setSlug(data.slug)
-    setAuthor(data && data.author && data.author[0]?.username)
-    setStatus(data.status)
+    async function getPost() {
+      await axios.get(`http://localhost:4000/posts/edit-post/${query.editPost}`,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${userData.user.token}`
+          }
+        })
+        .then((res) => {
+          let data = res.data;
+          setPost(data);
+        })
+    }
 
-    // if (data === 'Not authenticated.') Router.push('/login')
+    getPost()
+
+
+    setTitle(post.title)
+    setDescription(post.description)
+    setMetaTitle(post.metaTitle)
+    setMetaDescription(post.metaDescription)
+    setSlug(post.slug)
+    setAuthor(post && post.author && post.author[0]?.username)
+    setStatus(post.status)
+
+    if (post === 'Not authenticated.') Router.push('/login')
 
 
     listOfAllAuthors();
@@ -104,7 +124,7 @@ function EditPost({ data }) {
             </select>
             <div className='d-flex'>
               <label htmlFor="author">Author: </label>
-              <p >{data && data.author && data.author[0]?.username}</p>
+              {/* <p >{post && post.author && post.author[0]?.username}</p> */}
             </div>
             <select className='form-control' name="author" id="author" onChange={(e) => setAuthor([e.target.value])}>
               {authors?.map((item: any, index: any) => {
@@ -120,12 +140,6 @@ function EditPost({ data }) {
       </div >
     </Layout >
   )
-}
-
-EditPost.getInitialProps = async ({ query }) => {
-  const res = await fetch(`http://localhost:4000/posts/edit-post/${query.editPost}`)
-  const json = await res.json()
-  return { data: json }
 }
 
 export default EditPost;
