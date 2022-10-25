@@ -16,63 +16,45 @@ export default function Blog() {
                 url: `http://localhost:4000/posts/allposts`,
             };
             const posts = await axios(config)
-            setPosts(posts.data)
+            const publishedPosts = posts.data.filter((post: any) => post.status === 'PUBLISH')
+            setPosts(publishedPosts)
         }
         getPostByUser();
-
-        const findAllImageUrl = () => {
-            // const images = await posts[1]?.description?.match(/(?<=<img src=").*?(?=")/gm);
-            // console.log(images);
-            // loop through posts
-            // find all images in each post and push it to an array [title: {img1: '', img2: ''}]
-            // pass this to previewImage(images)
-
-            posts.forEach((post: any) => {
-                console.log('images', post?.description?.match(/(?<=<img src=").*?(?=")/gm));
-
-            })
-
-        }
-
-        function previewImage(res: any) {
-            const configImagePreview = {
-                method: 'post',
-                url: 'http://localhost:4000/auth/previewUrl',
-                data: {
-                    fileName: file.name,
-                    fileType: file.type
-                }
-            }
-            axios(configImagePreview)
-                .then((res: any) => {
-                    console.log('previiew ', res.data.previewUrl)
-                })
-                .catch(() => { throw new Error('Upload failed') });
-        }
-
-        findAllImageUrl()
     }, [])
 
     return (
         <Layout>
             <div className="header-blog">
-                <h2 className="text-center">Blog</h2>
+                <h2 className="text-center">My Blog</h2>
+                <div className="d-flex justify-content-center gap-2 text-center">
+                    <span className="badge rounded-pill bg-primary">JavaScript</span>
+                    <span className="badge rounded-pill bg-secondary">ReactJS</span>
+                    <span className="badge rounded-pill bg-warning">NextJS</span>
+                    <span className="badge rounded-pill bg-primary">VueJS</span>
+                    <span className="badge rounded-pill bg-primary">NodeJS</span>
+                    <span className="badge rounded-pill bg-primary">Personal</span>
+                </div>
             </div>
             <div className="container">
-                {posts?.map((item: any) => {
-                    return (
-                        <div key={item._id}>
-                            <div className="card" style={{ width: "18rem" }}>
-                                <img src="" className="card-img-top" alt="..." />
-                                <div className="card-body">
-                                    <h5 className="card-title">{item.title}</h5>
-                                    <p className="card-text">Some quick example text to build on the card title and make up the bulk of the card's content.</p>
-                                    <a href="#" className="btn btn-link">Read More</a>
+                <div className="row">
+                    <div className="col-10 d-flex flex-wrap gap-4">
+                        {posts?.map((post: any) => {
+                            let featuredImg = post.description?.match(/(?<=<img src=").*?(?=")/gm);
+                            return (
+                                <div className="col-4 p-0" key={post._id}>
+                                    <div className="d-flex flex-column gap-3">
+                                        <img src={featuredImg} className="card-img-top" alt={post.title} style={{ width: "auto", height: `clamp(200px, 240px, 400px)` }} />
+                                        <div className="card-body">
+                                            <h5 className="card-title">{post.title}</h5>
+                                            <p className="card-text">{post.metaDescription}</p>
+                                            <Link href={`/dashboard/edit-post/${post.slug}`} className="btn btn-link">Read More</Link>
+                                        </div>
+                                    </div>
                                 </div>
-                            </div>
-                        </div>
-                    )
-                })}
+                            )
+                        })}
+                    </div>
+                </div>
             </div>
         </Layout >
     )
