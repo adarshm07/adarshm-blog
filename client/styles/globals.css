@@ -63,10 +63,45 @@ a {
   );
   color: #ffffff;
 }
+
 .header-blog {
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: center;
   height: 400px;
+}
+
+.blog-posts-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 400px));
+  justify-content: space-between;
+  gap: 40px;
+}
+
+.search-blog-posts {
+  font: 300 14px "Inter", sans-serif;
+}
+
+.card-title {
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.card-text {
+  font-size: 13px;
+  color: #c0c0c0;
+  margin-top: 10px;
+}
+
+.btn-read-more {
+  font-size: 12px;
+  color: #bd0c0c;
+  border: 0;
+  border-radius: 4px;
+  padding: 0;
+  position: absolute;
+  right: 4px;
+  bottom: -4px;
+  text-decoration: none;
 }

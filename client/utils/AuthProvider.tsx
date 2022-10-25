@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
-import { useSelector } from "react-redux"
+import { useDispatch, useSelector } from "react-redux"
 import Router from "next/router";
+import { loggedInUser } from "../store/user";
 
 type Props = {
     children?: React.ReactNode
 };
 
 export default function AuthProvider({ children }: Props) {
+    const dispatch = useDispatch();
     const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
     const userData = useSelector((state: any) => state.user);
 
@@ -27,11 +29,12 @@ export default function AuthProvider({ children }: Props) {
             })
             .catch(function (error) {
                 setIsAuthenticated(false);
+                dispatch(loggedInUser(""));
             });
     }, [userData])
 
     if (isAuthenticated) Router.push('/dashboard');
-    // if (!isAuthenticated && !Router.pathname.includes('/login')) Router.push('/login')
+    if (!isAuthenticated && !Router.pathname.includes('/login')) Router.push('/login')
 
 
     return (

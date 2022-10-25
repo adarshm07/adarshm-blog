@@ -9,7 +9,7 @@ router.get("/getpost", getPost);
 router.get("/getAllAuthors", getAllAuthors);
 // protected routes
 router.get("/my-posts/:id", verifyToken, getPostsByUser);
-router.get("/edit-post/:slug", editPost);
+router.get("/edit-post/:slug", verifyToken, editPost);
 router.post("/publish", verifyToken, publishPost);
 router.patch("/update/:id", verifyToken, updatePost);
 router.patch("/status/:id", verifyToken, statusUpdate);

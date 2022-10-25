@@ -4,6 +4,7 @@ import RichText from '../../../components/RichText';
 import { useSelector } from "react-redux"
 import Layout from '../../../components/Layout';
 import { Checkbox } from '@mantine/core';
+import Router from 'next/router';
 
 function EditPost({ data }) {
   const [title, setTitle] = useState<string>("");
@@ -35,10 +36,11 @@ function EditPost({ data }) {
     setMetaTitle(data.metaTitle)
     setMetaDescription(data.metaDescription)
     setSlug(data.slug)
-    setAuthor(data.author[0].username)
+    setAuthor(data && data.author && data.author[0]?.username)
     setStatus(data.status)
 
-    console.log('data', data);
+    // if (data === 'Not authenticated.') Router.push('/login')
+
 
     listOfAllAuthors();
   }, [userData?.user._id])
@@ -102,7 +104,7 @@ function EditPost({ data }) {
             </select>
             <div className='d-flex'>
               <label htmlFor="author">Author: </label>
-              <p >{data.author[0].username}</p>
+              <p >{data && data.author && data.author[0]?.username}</p>
             </div>
             <select className='form-control' name="author" id="author" onChange={(e) => setAuthor([e.target.value])}>
               {authors?.map((item: any, index: any) => {
