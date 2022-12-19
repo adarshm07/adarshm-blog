@@ -32,7 +32,7 @@ const Home: NextPage = () => {
       </Head>
 
       <Layout>
-        <div className={styles.container} style={{ height: "70vh", display: "flex", justifyContent: "center", alignItems: "flex-end" }}>
+        <div className={styles.container} style={{ height: "70vh", display: "flex", justifyContent: "center", alignItems: "flex-end", paddingBottom: "64px" }}>
           <GlitchText title="Full Stack Developer" />
         </div>
       </Layout>
