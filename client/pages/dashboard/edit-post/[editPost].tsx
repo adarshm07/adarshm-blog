@@ -7,7 +7,7 @@ import { Checkbox } from '@mantine/core';
 import Router from 'next/router';
 
 function EditPost() {
-  const [post, setPost] = useState<[]>([])
+  const [post, setPost] = useState<any>("")
   const [title, setTitle] = useState<string>("");
   const [description, setDescription] = useState<string>("");
   const [slug, setSlug] = useState<string>("");
@@ -60,7 +60,6 @@ function EditPost() {
     setStatus(post.status)
 
     if (post === 'Not authenticated.') Router.push('/login')
-
 
     listOfAllAuthors();
   }, [userData?.user._id])

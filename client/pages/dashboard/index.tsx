@@ -33,27 +33,27 @@ export default function Dashboard() {
             // pass this to previewImage(images)
 
             posts.forEach((post: any) => {
-                console.log('images',post?.description?.match(/(?<=<img src=").*?(?=")/gm));
+                console.log('images', post?.description?.match(/(?<=<img src=").*?(?=")/gm));
 
             })
 
         }
 
-        function previewImage(res: any) {
-            const configImagePreview = {
-                method: 'post',
-                url: 'http://localhost:4000/auth/previewUrl',
-                data: {
-                    fileName: file.name,
-                    fileType: file.type
-                }
-            }
-            axios(configImagePreview)
-                .then((res: any) => {
-                    console.log('previiew ', res.data.previewUrl)
-                })
-                .catch(() => { throw new Error('Upload failed') });
-        }
+        // function previewImage(res: any) {
+        //     const configImagePreview = {
+        //         method: 'post',
+        //         url: 'http://localhost:4000/auth/previewUrl',
+        //         data: {
+        //             fileName: file.name,
+        //             fileType: file.type
+        //         }
+        //     }
+        //     axios(configImagePreview)
+        //         .then((res: any) => {
+        //             console.log('previiew ', res.data.previewUrl)
+        //         })
+        //         .catch(() => { throw new Error('Upload failed') });
+        // }
 
         findAllImageUrl()
     }, [])

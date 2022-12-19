@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, Key } from 'react';
 import RichText from '../../components/RichText';
 import { useSelector } from "react-redux"
 import Layout from '../../components/Layout';
@@ -90,7 +90,7 @@ export default function AddPost() {
             </select>
 
             <select className='form-control' name="author" id="author" onChange={(e) => setAuthor([e.target.value])}>
-              {authors?.map((item: any, index: Number) => {
+              {authors?.map((item: any, index: any) => {
                 return (
                   <option key={index} value={item._id}>{item.username}</option>
                 )
