@@ -25,7 +25,7 @@ export default function Blog() {
         getPostByUser();
     }, [])
 
-    function searchPost(keyword) {
+    function searchPost(keyword: string) {
         if (keyword.length > 3) {
             console.log(keyword.toUpperCase());
             setFilterPosts(posts.filter((post: string) => post?.title?.toLowerCase().includes(keyword)))
