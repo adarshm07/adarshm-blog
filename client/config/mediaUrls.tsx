@@ -1,0 +1,1 @@
+export const ResumeLink = "https://s3.ap-south-1.amazonaws.com/adarshm.com/assets/pdf/ADARSH+M.pdf";

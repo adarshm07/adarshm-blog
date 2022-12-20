@@ -7,6 +7,8 @@ import axios from 'axios';
 import Layout from '../components/Layout';
 import GlitchText from '../components/GlitchText';
 import MultiColorText from '../components/MultiColorText';
+import FloatingButton from '../components/FloatingButton';
+import { ResumeLink } from '../config/mediaUrls';
 
 const Home: NextPage = () => {
   const user = useSelector((state: any) => state.user);
@@ -46,6 +48,7 @@ const Home: NextPage = () => {
             </div>
           </div>
         </div>
+        <FloatingButton link={ResumeLink} text={"Download Resume"} bottom={"10px"} left={"10px"} />
       </Layout>
     </div>
   )

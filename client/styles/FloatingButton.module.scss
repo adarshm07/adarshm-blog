@@ -1,0 +1,36 @@
+button.floatingbtn {
+  font-size: 14px;
+  animation: animate 6s linear 0s infinite normal;
+
+  &:hover {
+    transition: ease-in-out 0.2s;
+    background-color: orange !important;
+  }
+}
+
+@keyframes animate {
+  50% {
+    transform: scale(1);
+  }
+  10% {
+    transform: scale(0.9);
+  }
+  15% {
+    transform: scale(1.15);
+  }
+  20% {
+    transform: scale(1.15) rotate(-5deg);
+  }
+  25% {
+    transform: scale(1.15) rotate(5deg);
+  }
+  30% {
+    transform: scale(1.15) rotate(-3deg);
+  }
+  35% {
+    transform: scale(1.15) rotate(2deg);
+  }
+  40% {
+    transform: scale(1.15) rotate(0);
+  }
+}
