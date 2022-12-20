@@ -9,7 +9,9 @@ export default function Layout({ children }: Props) {
     return (
         <React.Fragment>
             <Header />
-            {children}
+            <div style={{ marginTop: "4rem" }}>
+                {children}
+            </div>
         </React.Fragment>
     )
 }

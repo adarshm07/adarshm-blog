@@ -4,7 +4,8 @@ button.floatingbtn {
 
   &:hover {
     transition: ease-in-out 0.2s;
-    background-color: orange !important;
+    background-color: #0f6962 !important;
+    animation: animate 4s linear 0s infinite normal;
   }
 }
 

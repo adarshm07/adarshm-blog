@@ -28,7 +28,7 @@
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.5);
+  background: #0e9689cc;
   visibility: hidden;
   opacity: 0;
   transition: 0.3s;
@@ -58,12 +58,13 @@
 
 .navbarburger {
   position: absolute;
-  top: 16px;
-  left: 10px;
+  top: 0;
+  left: 0;
+  z-index: 4;
   display: grid;
   place-items: center;
-  //   width: 64px;
-  //   height: 64px;
+  width: 64px;
+  height: 64px;
 }
 
 @media only screen and (min-width: 600px) {
@@ -75,6 +76,7 @@
 .navbartitle {
   margin: 0;
   font-size: 16px;
+  cursor: pointer;
 }
 
 .navbarmenu {
@@ -82,17 +84,15 @@
   z-index: 3;
   top: 0;
   left: 0;
-  translate: -100% 0;
-  width: 270px;
-  height: 100%;
-  padding: 20px;
   display: flex;
-  gap: 8px;
+  gap: 14px;
   flex-direction: column;
-  align-items: flex-start;
-  background: #000000;
+  justify-content: center;
+  align-items: center;
   visibility: hidden;
   transition: translate 0.3s;
+  height: 100%;
+  width: 100%;
 }
 
 .open .navbarmenu {
@@ -100,7 +100,7 @@
   visibility: visible;
 }
 
-@media only screen and (min-width: 600px) {
+@media only screen and (min-width: 768) {
   .navbarmenu {
     position: static;
     translate: 0 0;
@@ -112,11 +112,89 @@
 }
 
 .navbarmenu > button {
-  color: rgba(255, 255, 255, 0.5);
   background: transparent;
   padding: 0 8px;
 }
 
 .navbarmenu > button.active {
   color: inherit;
+}
+
+.navbarmenu > .nav-item.nav-link {
+  font-size: 14px;
+  font-weight: 300;
+  color: inherit;
+  text-decoration: none;
+
+  @media screen and (max-width: 768px) {
+    font-size: 20px;
+  }
+}
+
+.navbarmenu > .nav-item.nav-link.login-cta {
+  border: 1px solid #26c6b9;
+  border-radius: 50px;
+  padding: 4px 20px;
+  display: flex;
+  align-items: center;
+  color: #ffffff;
+}
+
+.gg-menu-left {
+  transform: scale(var(--ggs, 1));
+}
+
+.gg-menu-left,
+.gg-menu-left::after,
+.gg-menu-left::before {
+  box-sizing: border-box;
+  position: relative;
+  display: block;
+  width: 20px;
+  height: 2px;
+  border-radius: 3px;
+  background: currentColor;
+}
+
+.gg-menu-left::after,
+.gg-menu-left::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  width: 10px;
+}
+
+.gg-menu-left::after {
+  top: 6px;
+  width: 14px;
+}
+
+.gg-close {
+  box-sizing: border-box;
+  position: relative;
+  display: block;
+  transform: scale(var(--ggs, 1));
+  width: 22px;
+  height: 22px;
+  border: 2px solid transparent;
+  border-radius: 40px;
+}
+
+.gg-close::after,
+.gg-close::before {
+  content: "";
+  display: block;
+  box-sizing: border-box;
+  position: absolute;
+  width: 16px;
+  height: 2px;
+  background: currentColor;
+  transform: rotate(45deg);
+  border-radius: 5px;
+  top: 8px;
+  left: 1px;
+}
+
+.gg-close::after {
+  transform: rotate(-45deg);
 }

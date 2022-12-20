@@ -12,7 +12,7 @@ type FloatingButtonProp = {
     className: String
 }
 
-export default function FloatingButton({ text = "Floating button", link, top = "initial", bottom = "initial", left = "initial", right = "initial", background = "green", borderRadius = "50px", className = "classname" }: FloatingButtonProp) {
+export default function FloatingButton({ text = "Floating button", link, top = "initial", bottom = "initial", left = "initial", right = "initial", background = "#14948a", borderRadius = "50px", className = "classname" }: FloatingButtonProp) {
     return (
         <button className={`${className} ${styles.floatingbtn}`} style={{
             position: "fixed",
