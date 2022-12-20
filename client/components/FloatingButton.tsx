@@ -1,15 +1,15 @@
 import styles from "../styles/FloatingButton.module.scss"
 
 type FloatingButtonProp = {
-    text: String,
-    link: String,
-    top: String,
-    bottom: String,
-    left: String,
-    right: String,
-    background: String,
-    borderRadius: String,
-    className: String
+    text?: String,
+    link?: String,
+    top?: String,
+    bottom?: String,
+    left?: String,
+    right?: String,
+    background?: String,
+    borderRadius?: String,
+    className?: String
 }
 
 export default function FloatingButton({ text = "Floating button", link, top = "initial", bottom = "initial", left = "initial", right = "initial", background = "#14948a", borderRadius = "50px", className = "classname" }: FloatingButtonProp) {
