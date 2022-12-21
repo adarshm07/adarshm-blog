@@ -3,7 +3,6 @@ import axios from 'axios'
 import { useSelector, useDispatch } from "react-redux";
 import { loggedInUser } from '../store/user';
 import Layout from '../components/Layout';
-import Router from 'next/router';
 import AuthProvider from '../utils/AuthProvider';
 import { apiDomain } from '../config/mediaUrls';
 
@@ -30,7 +29,9 @@ export default function LoginForm() {
 
                                 onSubmit={(values: Values, { setSubmitting }: FormikHelpers<Values>
                                 ) => {
-                                    axios.post(`${apiDomain}/auth/login`, values, { withCredentials: true })
+                                    axios.post(`${apiDomain}/auth/login`, values, {
+                                        withCredentials: true
+                                    })
                                         .then((res) => {
                                             dispatch(loggedInUser(res.data))
                                         })
