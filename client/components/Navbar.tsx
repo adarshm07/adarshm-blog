@@ -1,6 +1,7 @@
 import axios from "axios";
 import Link from "next/link";
 import { useSelector, useDispatch } from "react-redux";
+import { apiDomain } from "../config/mediaUrls";
 import { loggedInUser } from '../store/user';
 
 export default function Navbar() {
@@ -9,7 +10,7 @@ export default function Navbar() {
 
     const logout = () => {
         dispatch(loggedInUser(""));
-        axios.get('http://localhost:4000/auth/logout')
+        axios.get(`${apiDomain}/auth/logout`)
             .then((res) => console.log('logged out.'))
             .catch((err) => console.log('error'))
     }

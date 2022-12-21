@@ -5,6 +5,7 @@ import Link from "next/link"
 import React, { useEffect, useState } from "react"
 import { useSelector } from "react-redux"
 import Layout from "../../components/Layout"
+import { apiDomain } from "../../config/mediaUrls"
 
 export default function Blog() {
     const [posts, setPosts] = useState([])
@@ -15,7 +16,7 @@ export default function Blog() {
         const getPostByUser = async () => {
             var config = {
                 method: 'get',
-                url: `http://localhost:4000/posts/allposts`,
+                url: `${apiDomain}/posts/allposts`,
             };
             const posts = await axios(config)
             const publishedPosts = posts.data.filter((post: any) => post.status === 'PUBLISH')
@@ -27,7 +28,6 @@ export default function Blog() {
 
     function searchPost(keyword: string) {
         if (keyword.length > 3) {
-            console.log(keyword.toUpperCase());
             setFilterPosts(posts.filter((post: any) => post?.title?.toLowerCase().includes(keyword)))
         }
         if (keyword.length === 0) {

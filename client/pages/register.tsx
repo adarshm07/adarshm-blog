@@ -1,6 +1,7 @@
 import { Formik, Field, Form, FormikHelpers } from 'formik';
 import axios from 'axios'
 import { useState } from 'react';
+import { apiDomain } from '../config/mediaUrls';
 
 interface Values {
     username: string;
@@ -23,7 +24,7 @@ export default function Register() {
                 onSubmit={(values: Values, { setSubmitting }: FormikHelpers<Values>
                 ) => {
                     values = { ...values }
-                    axios.post('http://localhost:4000/auth/register', values, { withCredentials: true })
+                    axios.post(`${apiDomain}/auth/register`, values, { withCredentials: true })
                         // .then((res) => console.log(res))
                         .then(() => setSubmitting(false))
                 }}

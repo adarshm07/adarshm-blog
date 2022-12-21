@@ -4,6 +4,7 @@ import RichText from '../../components/RichText';
 import { useSelector } from "react-redux"
 import Layout from '../../components/Layout';
 import { Checkbox } from '@mantine/core';
+import { apiDomain } from '../../config/mediaUrls';
 
 export default function AddPost() {
   const [title, setTitle] = useState<string>("");
@@ -20,7 +21,7 @@ export default function AddPost() {
 
   useEffect(() => {
     const listOfAllAuthors = async () => {
-      await axios.get('http://localhost:4000/posts/getAllAuthors')
+      await axios.get(`${apiDomain}/posts/getAllAuthors`)
         .then((res: any) => {
           setAuthors(res.data)
           setAuthor([userData?.user._id])
@@ -36,7 +37,7 @@ export default function AddPost() {
 
     var config = {
       method: 'post',
-      url: 'http://localhost:4000/posts/publish',
+      url: `${apiDomain}/posts/publish`,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${userData.user.token}`

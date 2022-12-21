@@ -5,6 +5,7 @@ import { useSelector } from "react-redux"
 import Layout from '../../../components/Layout';
 import { Checkbox } from '@mantine/core';
 import Router from 'next/router';
+import { apiDomain } from '../../../config/mediaUrls';
 
 function EditPost() {
   const [post, setPost] = useState<any>("")
@@ -24,7 +25,7 @@ function EditPost() {
 
   // get list of authors
   const listOfAllAuthors = async () => {
-    await axios.get('http://localhost:4000/posts/getAllAuthors')
+    await axios.get(`${apiDomain}/posts/getAllAuthors`)
       .then((res: any) => {
         setAuthors(res.data)
         // setAuthor([userData?.user._id])
@@ -35,7 +36,7 @@ function EditPost() {
 
   useEffect(() => {
     async function getPost() {
-      await axios.get(`http://localhost:4000/posts/edit-post/${query.editPost}`,
+      await axios.get(`${apiDomain}/posts/edit-post/${query.editPost}`,
         {
           headers: {
             'Content-Type': 'application/json',
@@ -69,7 +70,7 @@ function EditPost() {
 
     var config = {
       method: 'post',
-      url: 'http://localhost:4000/posts/publish',
+      url: `${apiDomain}/posts/publish`,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${userData.user.token}`

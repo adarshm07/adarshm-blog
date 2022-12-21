@@ -3,6 +3,7 @@ import axios from "axios";
 import { useDispatch, useSelector } from "react-redux"
 import Router from "next/router";
 import { loggedInUser } from "../store/user";
+import { apiDomain } from "../config/mediaUrls";
 
 type Props = {
     children?: React.ReactNode
@@ -15,7 +16,7 @@ export default function AuthProvider({ children }: Props) {
 
     var config = {
         method: 'get',
-        url: 'http://localhost:4000/auth/me',
+        url: `${apiDomain}/auth/me`,
         headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${userData.user.token}`

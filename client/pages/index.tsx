@@ -8,7 +8,7 @@ import Layout from '../components/Layout';
 import GlitchText from '../components/GlitchText';
 import MultiColorText from '../components/MultiColorText';
 import FloatingButton from '../components/FloatingButton';
-import { ResumeLink } from '../config/mediaUrls';
+import { apiDomain, ResumeLink } from '../config/mediaUrls';
 
 const Home: NextPage = () => {
   const user = useSelector((state: any) => state.user);
@@ -16,7 +16,7 @@ const Home: NextPage = () => {
 
   useEffect(() => {
     const listAllPosts = async () => {
-      await axios.get('http://localhost:4000/posts/allposts')
+      await axios.get(`${apiDomain}/posts/allposts`)
         .then((res: any) => {
           setPosts(res.data)
         })
