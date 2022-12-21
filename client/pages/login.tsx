@@ -29,9 +29,7 @@ export default function LoginForm() {
 
                                 onSubmit={(values: Values, { setSubmitting }: FormikHelpers<Values>
                                 ) => {
-                                    axios.post(`${apiDomain}/auth/login`, values, {
-                                        withCredentials: true
-                                    })
+                                    axios.post(`${apiDomain}/auth/login`, values, { headers: { 'Access-Control-Allow-Credentials': true } })
                                         .then((res) => {
                                             dispatch(loggedInUser(res.data))
                                         })
