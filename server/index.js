@@ -13,24 +13,22 @@ import PostRoute from "./routes/post.routes.js";
 app.use(bodyParser.json({ limit: "30mb", extended: true }));
 app.use(bodyParser.urlencoded({ limit: "30mb", extended: true }));
 
-// enableCORS(app);
+enableCORS(app);
 
-// function enableCORS(expressInstance) {
-//   expressInstance.use((req, res, next) => {
-//     res.header("Access-Control-Allow-Origin", "*");
-//     res.header(
-//       "Access-Control-Allow-Headers",
-//       "Origin, X-Requested-With, Content-Type, Accept, Authorization, timeZone"
-//     );
-//     res.header(
-//       "Access-Control-Allow-Methods",
-//       "GET, POST, PUT, DELETE, OPTIONS,PATCH"
-//     );
-//     next();
-//   });
-// }
-
-app.use(cors());
+function enableCORS(expressInstance) {
+  expressInstance.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header(
+      "Access-Control-Allow-Headers",
+      "Origin, X-Requested-With, Content-Type, Accept, Authorization, timeZone"
+    );
+    res.header(
+      "Access-Control-Allow-Methods",
+      "GET, POST, PUT, DELETE, OPTIONS,PATCH"
+    );
+    next();
+  });
+}
 
 app.use(cookieParser());
 
