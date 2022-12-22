@@ -5,6 +5,7 @@ import { apiDomain } from '../../config/mediaUrls'
 // Initializing the cors middleware
 const cors = Cors({
   methods: ['GET', 'POST', 'HEAD'],
+  origin: '*'
 })
 
 // Helper method to wait for a middleware to execute before continuing
@@ -26,8 +27,22 @@ async function handler(req: any, res: { json: (arg0: { message: string }) => voi
   await runMiddleware(req, res, cors)
 
   try {
-    const data = await axios.post(`${apiDomain}/auth/login`, req.body, { headers: { 'Access-Control-Allow-Credentials': true } })
-    res.json(data.data)
+    const config: any = {
+      method: 'POST',
+      headers: {
+        "Content-Type": "application/json",
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Credentials': true,
+        'withCredentials': true
+      },
+      body: JSON.stringify(req.body),
+      redirect: 'follow'
+    };
+
+    // const data = await axios.post(`${apiDomain}/auth/login`, req.body, { headers: { 'Access-Control-Allow-Credentials': true } })
+    const data = await fetch(`${apiDomain}/auth/login`, config)
+    const json = await data.json()
+    res.json(json)
   } catch (error: any) {
     console.log(error.message);
   }
