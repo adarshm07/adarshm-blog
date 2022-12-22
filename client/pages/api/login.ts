@@ -28,7 +28,7 @@ async function handler(req: any, res: { json: (arg0: { message: string }) => voi
   try {
     const data = await axios.post(`${apiDomain}/auth/login`, req.body, { headers: { 'Access-Control-Allow-Credentials': true } })
     res.json(data.data)
-  } catch (error) {
+  } catch (error: any) {
     console.log(error.message);
   }
 }
