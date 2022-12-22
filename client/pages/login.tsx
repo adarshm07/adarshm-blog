@@ -29,12 +29,21 @@ export default function LoginForm() {
 
                                 onSubmit={(values: Values, { setSubmitting }: FormikHelpers<Values>
                                 ) => {
-                                    axios.post(`${apiDomain}/auth/login`, values, { headers: { 'Access-Control-Allow-Credentials': true } })
-                                        .then((res) => {
+                                    axios.post(`${apiDomain}/auth/login`, values, {
+                                        headers: {
+                                            // "Content-Type": "application/json",
+                                            // 'Access-Control-Allow-Origin': '*',
+                                            'Access-Control-Allow-Credentials': true,
+                                            // 'withCredentials': true
+                                        }
+                                    })
+                                        .then((res: any) => {
+
                                             dispatch(loggedInUser(res.data))
                                         })
                                         .then(() => {
                                             setSubmitting(false)
+                                            console.log('res', user);
                                             // Router.push('/');
                                         })
                                         .catch((err) => console.log(err));
