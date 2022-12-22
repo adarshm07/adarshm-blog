@@ -14,6 +14,7 @@ a {
 * {
   box-sizing: border-box;
   font-family: "Inter", sans-serif;
+  background-color: black;
 }
 
 .mantine-RichTextEditor-toolbar {

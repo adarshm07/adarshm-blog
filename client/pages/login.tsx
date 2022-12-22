@@ -4,7 +4,7 @@ import { useSelector, useDispatch } from "react-redux";
 import { loggedInUser } from '../store/user';
 import Layout from '../components/Layout';
 import AuthProvider from '../utils/AuthProvider';
-import { apiDomain } from '../config/mediaUrls';
+import { apiDomain, domain } from '../config/mediaUrls';
 
 interface Values {
     username: string;
@@ -29,13 +29,13 @@ export default function LoginForm() {
 
                                 onSubmit={(values: Values, { setSubmitting }: FormikHelpers<Values>
                                 ) => {
-                                    axios.post(`${apiDomain}/auth/login`, values, {
-                                        headers: {
-                                            // "Content-Type": "application/json",
-                                            // 'Access-Control-Allow-Origin': '*',
-                                            'Access-Control-Allow-Credentials': true,
-                                            // 'withCredentials': true
-                                        }
+                                    axios.post(`${domain}/api/login`, values, {
+                                        // headers: {
+                                        //     // "Content-Type": "application/json",
+                                        //     // 'Access-Control-Allow-Origin': '*',
+                                        //     'Access-Control-Allow-Credentials': true,
+                                        //     // 'withCredentials': true
+                                        // }
                                     })
                                         .then((res: any) => {
 

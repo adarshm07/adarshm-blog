@@ -27,6 +27,7 @@
     "@reduxjs/toolkit": "^1.8.5",
     "axios": "^0.27.2",
     "bootstrap": "^5.2.1",
+    "cors": "^2.8.5",
     "dayjs": "^1.11.5",
     "embla-carousel-react": "^7.0.3",
     "formik": "^2.2.9",
@@ -38,6 +39,7 @@
     "redux-thunk": "^2.4.1"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.13",
     "@types/node": "18.7.20",
     "@types/react": "18.0.21",
     "@types/react-dom": "18.0.6",
