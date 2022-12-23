@@ -35,23 +35,24 @@ async function handler(req: any, res: { json: (arg0: { message: string }) => voi
         'Access-Control-Allow-Credentials': true,
         'withCredentials': true
       },
-      // body: JSON.stringify(req.body),
-      // redirect: 'follow'
+      body: JSON.stringify(req.body),
+      redirect: 'follow'
     };
 
-    const data = await axios.post(`${apiDomain}/auth/login`, req.body, {
-      headers: {
-        "Content-Type": "application/json",
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Credentials': true,
-        'withCredentials': true
-      }
-    })
-    // const data = await fetch(`${apiDomain}/auth/login`, config)
-    // const json = await data.json()
-    res.json(data.data)
+    // const data = await axios.post(`${apiDomain}/auth/login`, req.body, {
+    //   headers: {
+    //     "Content-Type": "application/json",
+    //     'Access-Control-Allow-Origin': '*',
+    //     'Access-Control-Allow-Credentials': true,
+    //     'withCredentials': true
+    //   }
+    // })
+    const data = await fetch(`${apiDomain}/auth/login`, config)
+    const json = await data.json()
+    res.json(json)
   } catch (error: any) {
-    console.log(error.message);
+    console.log('error', error.message);
+    res.json({ "message": error.message })
   }
 }
 
