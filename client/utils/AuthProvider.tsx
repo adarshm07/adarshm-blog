@@ -3,7 +3,7 @@ import axios from "axios";
 import { useDispatch, useSelector } from "react-redux"
 import Router from "next/router";
 import { loggedInUser } from "../store/user";
-import { apiDomain } from "../config/mediaUrls";
+import { apiDomain, domain } from "../config/mediaUrls";
 
 type Props = {
     children?: React.ReactNode
@@ -31,6 +31,7 @@ export default function AuthProvider({ children }: Props) {
             .catch(function (error) {
                 setIsAuthenticated(false);
                 dispatch(loggedInUser(""));
+                if (process.env.NODE_ENV === "production") Router.push(`${domain}/login`);
             });
     }, [userData])
 

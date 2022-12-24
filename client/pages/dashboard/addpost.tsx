@@ -35,6 +35,8 @@ export default function AddPost() {
   const publish = async () => {
     let data = JSON.stringify({ title, description, slug, categories, status, author, metaTitle, metaDescription })
 
+    console.log('data', title, description, slug, categories, status, author, metaTitle, metaDescription);
+    
     var config = {
       method: 'post',
       url: `${apiDomain}/posts/publish`,

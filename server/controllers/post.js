@@ -5,7 +5,23 @@ export const getAllPosts = async (req, res) => {
   try {
     const allPosts = await Post.find().populate("author");
     if (!allPosts.length) res.status(400).json("No Posts.");
-    res.status(200).json(allPosts);
+    const arr = [];
+    allPosts.forEach((item) => {
+      let featuredImg = item.description?.match(/(?<=<img src=").*?(?=")/gm);
+      const data = {
+        id: item._id,
+        title: item.title,
+        description: item.metaDescription,
+        author: item.author.name,
+        status: item.status,
+        updatedDate: item.updatedDate,
+        slug: item.slug,
+        featuredImg,
+      };
+      arr.push(data);
+    });
+
+    res.status(200).json(arr);
   } catch (error) {
     res.status(400).json(error);
   }
@@ -47,21 +63,20 @@ export const editPost = async (req, res) => {
     const { slug } = req.params;
     const post = await Post.findOne({ slug }).populate("author");
     if (!post) res.status(400).json("Post not found");
-    if(post) res.status(200).json(post)
+    if (post) res.status(200).json(post);
   } catch (error) {
     res.status(400).json("Post not found");
   }
 };
 
 export const publishPost = async (req, res) => {
-  // console.log(req.body);
   try {
     const newPost = new Post({
       ...req.body,
     });
 
-    await newPost.save();
-    res.status(200).json("Posted.");
+    const post = await newPost.save();
+    res.status(200).json({ status: "Success", post_id: post._id });
   } catch (error) {
     res.status(400).json(error);
   }

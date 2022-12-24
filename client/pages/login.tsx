@@ -19,7 +19,7 @@ export default function LoginForm() {
             <AuthProvider>
                 <div className='container'>
                     <div className="row">
-                        <div className="col-3 border border-1 rounded m-auto p-4 mt-5">
+                        <div className="col-12 col-md-3 border border-1 rounded m-auto p-4 mt-5">
                             <p className='fs-5 fw-regular'>Login</p>
                             <Formik
                                 initialValues={{
@@ -34,16 +34,13 @@ export default function LoginForm() {
                                             "Content-Type": "application/json",
                                             'Access-Control-Allow-Origin': '*',
                                             'Access-Control-Allow-Credentials': true,
-                                            // 'withCredentials': true
                                         }
                                     })
                                         .then((res: any) => {
-                                            console.log(res.data);
                                             dispatch(loggedInUser(res.data))
                                         })
                                         .then(() => {
                                             setSubmitting(false)
-                                            console.log('res', user);
                                             // Router.push('/');
                                         })
                                         .catch((err) => console.log(err.message));
@@ -63,10 +60,6 @@ export default function LoginForm() {
                             </Formik>
                         </div>
                     </div>
-                    <div className="mx-auto my-4 w-50">
-                        <p className='fw-light text-center' style={{ fontSize: "14px" }}>This is a personal project. At the moment for external users, I am only showing a demo, and you can access it with the demo account details.</p>
-                    </div>
-
                 </div>
             </AuthProvider>
         </Layout>

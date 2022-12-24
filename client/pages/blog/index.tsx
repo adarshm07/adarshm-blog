@@ -7,6 +7,17 @@ import { useSelector } from "react-redux"
 import Layout from "../../components/Layout"
 import { apiDomain } from "../../config/mediaUrls"
 
+type Post = {
+    id: any,
+    title: string,
+    description: string,
+    author: string,
+    status: string,
+    updatedDate: Date,
+    slug: string,
+    featuredImg: string
+}
+
 export default function Blog() {
     const [posts, setPosts] = useState([])
     const [filterPosts, setFilterPosts] = useState([])
@@ -58,20 +69,19 @@ export default function Blog() {
                 <div className="container">
                     <div className="row">
                         <div className="blog-posts-container mt-5 col-12 col-lg-8">
-                            {filterPosts?.map((post: any) => {
-                                let featuredImg = post.description?.match(/(?<=<img src=").*?(?=")/gm);
+                            {filterPosts?.map((post: Post) => {
                                 return (
-                                    <div className="col-12 p-3" style={{ boxShadow: "6px 0px 16px #f4f4f4" }} key={post._id}>
+                                    <div className="col-12 p-3" style={{ boxShadow: "6px 0px 16px #f4f4f4" }} key={post.id}>
                                         <div className="d-flex flex-column gap-3">
-                                            <img src={featuredImg} className="card-img-top" alt={post.title} style={{ width: "auto", height: `clamp(200px, 240px, 400px)` }} />
+                                            <img src={post.featuredImg} className="card-img-top" alt={post.title} style={{ width: "auto", height: `clamp(200px, 240px, 400px)` }} />
                                             <div className="card-body position-relative">
                                                 <h5 className="card-title">{post.title}</h5>
                                                 <div className="d-flex">
                                                     <p className="card-text">{new Date(post.updatedDate).toLocaleDateString('en-IN')}</p> &nbsp;
                                                     <p className="card-text">by</p> &nbsp;
-                                                    <p className="card-text">{post.author[0].name}</p>
+                                                    <p className="card-text">{post.author}</p>
                                                 </div>
-                                                <p className="card-text">{post.metaDescription}</p>
+                                                <p className="card-text">{post.description}</p>
                                                 <Link href={`/dashboard/edit-post/${post.slug}`}>
                                                     <a className="btn-read-more">
                                                         Read More
