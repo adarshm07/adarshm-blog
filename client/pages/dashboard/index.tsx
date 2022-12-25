@@ -57,7 +57,6 @@ export default function Dashboard() {
                                 <Link href={`/dashboard/edit-post/${item.slug}`}><a className="fs-5 fw-bold">{item.title}</a></Link>
                                 <span>Categories: {item.categories}</span>
                                 <span>Last modified date: {new Date(item.updatedDate).toLocaleString("en-in")}</span>
-                                {/* <div dangerouslySetInnerHTML={{ __html: item.description }}></div> */}
                                 <button className="btn btn-link text-secondary p-0 position-absolute end-0" onClick={(e) => deletePost(item._id)}>Delete</button>
                             </div>
                         )

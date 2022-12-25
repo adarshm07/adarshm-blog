@@ -50,7 +50,7 @@ export const getPost = async (req, res) => {
   try {
     const slug = req.params.slug;
     const post = await Post.findOne({ slug: slug });
-    if (!post) res.status(400).json("Post not found");
+    // if (!post) res.status(400).json("Post not found");
     res.status(200).json(post);
   } catch (error) {
     res.status(400).json("Post not found");

@@ -5,7 +5,8 @@ import { useSelector } from "react-redux"
 import Layout from '../../../components/Layout';
 import { Checkbox } from '@mantine/core';
 import Router from 'next/router';
-import { apiDomain } from '../../../config/mediaUrls';
+import { apiDomain, domain } from '../../../config/mediaUrls';
+import ImageUpload from '../../../components/ImageUpload';
 
 function EditPost() {
   const [post, setPost] = useState<any>("")
@@ -18,7 +19,7 @@ function EditPost() {
   const [metaTitle, setMetaTitle] = useState<string>("");
   const [metaDescription, setMetaDescription] = useState<string>("");
   const [authors, setAuthors] = useState<string[]>([""]);
-
+  const [disabled, setDisabled] = useState<boolean>(true);
   const userData = useSelector((state: any) => state.user);
 
   const { query } = Router
@@ -89,13 +90,21 @@ function EditPost() {
 
   return (
     <Layout>
-      <div className="container mt-5">
+      <div className="container mt-6 py-4">
         <div className="row">
           <div className="col-9">
-            <input type={"text"} value={title} onChange={(e) => setTitle(e.target.value)} id="post_title" placeholder='Post Title' className='w-100 border border-1 rounded p-2' />
+            <input type={"text"} value={title} onChange={(e) => {
+              setTitle(e.target.value)
+              setSlug(e.target.value.split(' ').join('-').replace(/['/`~!#*$@_%+=.,^&(){}[\]|;:"<>?\\]/g, ""))
+            }} id="post_title" placeholder='Post Title' className='w-100 border border-1 rounded p-2' />
             <div className="d-flex align-items-center">
-              <span>{window.location.origin + '/'}</span>
-              <input type={"text"} value={slug} onChange={(e) => setSlug(e.target.value.split(' ').join('-'))} id="slug" className='w-100 my-4 border-0' />
+              <span>{domain + '/'}</span>
+              <input type={"text"} value={slug} disabled={disabled} onChange={(e) => setSlug(e.target.value.split(' ').join('-'))} id="slug" className='my-4 w-100' style={{
+                background: !disabled ? '' : 'transparent',
+                border: !disabled ? '' : '0',
+                color: !disabled ? '' : '#020202'
+              }} />
+              <button className='btn btn-link p-0' onClick={() => setDisabled(!disabled)} style={{ fontSize: "14px" }}>{disabled ? 'Edit' : 'Save'}</button>
             </div>
             <RichText value={description} onChange={setDescription} id="rte" />
             <div className='my-4'></div>
@@ -133,7 +142,7 @@ function EditPost() {
                 )
               })}
             </select>
-
+            <ImageUpload />
             <button className='btn btn-primary' onClick={publish}>Publish</button>
           </div>
         </div>

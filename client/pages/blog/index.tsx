@@ -3,7 +3,6 @@ import axios from "axios"
 import Head from "next/head"
 import Link from "next/link"
 import React, { useEffect, useState } from "react"
-import { useSelector } from "react-redux"
 import Layout from "../../components/Layout"
 import { apiDomain } from "../../config/mediaUrls"
 
@@ -75,7 +74,7 @@ export default function Blog() {
                                                     <p className="card-text">{post.author}</p>
                                                 </div>
                                                 <p className="card-text">{post.description}</p>
-                                                <Link href={`/dashboard/edit-post/${post.slug}`}>
+                                                <Link href={`/blog/${post.slug}`}>
                                                     <a className="btn-read-more">
                                                         Read More
                                                     </a>
