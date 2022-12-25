@@ -59,7 +59,6 @@ a {
 .blog-posts-container {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 400px));
-  justify-content: space-between;
   gap: 40px;
 }
 

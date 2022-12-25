@@ -21,7 +21,6 @@ type Post = {
 export default function Blog() {
     const [posts, setPosts] = useState([])
     const [filterPosts, setFilterPosts] = useState([])
-    const userData = useSelector((state: any) => state.user)
 
     useEffect(() => {
         const getPostByUser = async () => {
@@ -39,7 +38,7 @@ export default function Blog() {
 
     function searchPost(keyword: string) {
         if (keyword.length > 3) {
-            setFilterPosts(posts.filter((post: any) => post?.title?.toLowerCase().includes(keyword)))
+            setFilterPosts(posts.filter((post: Post) => post?.title?.toLowerCase().includes(keyword) || post?.slug?.toLowerCase().includes(keyword)))
         }
         if (keyword.length === 0) {
             setFilterPosts(posts)
@@ -56,19 +55,13 @@ export default function Blog() {
             <Layout>
                 <div className="header-blog">
                     <h2 className="text-center">My Blog</h2>
-                    <div className="d-flex justify-content-center gap-2 text-center">
+                    <div className="d-flex flex-column justify-content-center align-items-center gap-2 text-center">
                         <input type="text" placeholder="Search for blog title here..." className="p-3 border-0 rounded search-blog-posts mt-4" style={{ width: `clamp(240px, 300px, 600px)` }} onChange={(e) => searchPost(e.target.value)} />
-                        {/* <span className="badge rounded-pill bg-primary">JavaScript</span>
-                    <span className="badge rounded-pill bg-secondary">ReactJS</span>
-                    <span className="badge rounded-pill bg-warning">NextJS</span>
-                    <span className="badge rounded-pill bg-primary">VueJS</span>
-                    <span className="badge rounded-pill bg-primary">NodeJS</span>
-                    <span className="badge rounded-pill bg-primary">Personal</span> */}
                     </div>
                 </div>
                 <div className="container">
                     <div className="row">
-                        <div className="blog-posts-container mt-5 col-12 col-lg-8">
+                        <div className="blog-posts-container mt-5 col-12">
                             {filterPosts?.map((post: Post) => {
                                 return (
                                     <div className="col-12 p-3" style={{ boxShadow: "6px 0px 16px #f4f4f4" }} key={post.id}>

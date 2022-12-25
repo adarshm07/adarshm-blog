@@ -30,9 +30,7 @@ export const getAllPosts = async (req, res) => {
 export const getPostsByUser = async (req, res) => {
   try {
     const id = req.params.id;
-    const myPosts = await Post.find({
-      author: { $elemMatch: { $eq: id } },
-    }).populate("author");
+    const myPosts = await Post.find({ author: id });
     res.status(200).json(myPosts);
   } catch (error) {
     res.status(400).json("No data.");
@@ -51,8 +49,9 @@ export const getAllAuthors = async (req, res) => {
 export const getPost = async (req, res) => {
   try {
     const slug = req.params.slug;
-    const post = await Post.findOne({ slug });
+    const post = await Post.findOne({ slug: slug });
     if (!post) res.status(400).json("Post not found");
+    res.status(200).json(post);
   } catch (error) {
     res.status(400).json("Post not found");
   }

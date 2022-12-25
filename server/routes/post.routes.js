@@ -5,7 +5,7 @@ import { deletePost, editPost, getAllAuthors, getAllPosts, getPost, getPostsByUs
 import { verifyToken } from "../utils/verifyToken.js";
 
 router.get("/allposts", getAllPosts);
-router.get("/getpost", getPost);
+router.get("/getpost/:slug", getPost);
 router.get("/getAllAuthors", getAllAuthors);
 // protected routes
 router.get("/my-posts/:id", verifyToken, getPostsByUser);
