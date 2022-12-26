@@ -12,7 +12,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@hapi/joi": "^17.1.1",
+    "aws-sdk": "^2.1282.0",
     "bcryptjs": "^2.4.3",
     "body-parser": "^1.20.0",
     "cookie-parser": "^1.4.6",
@@ -20,9 +20,7 @@
     "dotenv": "^16.0.2",
     "express": "^4.18.1",
     "jsonwebtoken": "^8.5.1",
-    "mongoose": "^6.6.1",
-    "socket.io": "^4.5.2",
-    "socket.io-client": "^4.5.2"
+    "mongoose": "^6.6.1"
   },
   "devDependencies": {
     "nodemon": "^2.0.20"

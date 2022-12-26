@@ -1,7 +1,18 @@
 import express from "express";
 const router = express.Router();
 
-import { deletePost, editPost, getAllAuthors, getAllPosts, getPost, getPostsByUser, publishPost, statusUpdate, updatePost } from "../controllers/post.js";
+import {
+  deletePost,
+  editPost,
+  getAllAuthors,
+  getAllPosts,
+  getPost,
+  getPostsByUser,
+  publishPost,
+  statusUpdate,
+  updatePost,
+} from "../controllers/post.js";
+import { upload } from "../utils/awsUtil.js";
 import { verifyToken } from "../utils/verifyToken.js";
 
 router.get("/allposts", getAllPosts);
@@ -14,5 +25,25 @@ router.post("/publish", verifyToken, publishPost);
 router.patch("/update/:id", verifyToken, updatePost);
 router.patch("/status/:id", verifyToken, statusUpdate);
 router.delete("/delete/:id", verifyToken, deletePost);
+
+// image upload
+router.post("/upload", async (req, res, next) => {
+  const base64Image = req.body.image;
+  const imageName = req.body.imageName;
+  const type = req.body.type;
+  const lastModified = req.body.lastModified;
+
+  //   console.log(req.body);
+  let response;
+
+  try {
+    response = await upload(imageName, lastModified, base64Image);
+  } catch (err) {
+    console.error(`Error uploading image: ${err.message}`);
+    return next(new Error(`Error uploading image: ${imageName}`));
+  }
+
+  res.send({ link: response });
+});
 
 export default router;
