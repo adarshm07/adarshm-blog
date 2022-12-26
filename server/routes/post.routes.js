@@ -31,13 +31,12 @@ router.post("/upload", async (req, res, next) => {
   const base64Image = req.body.image;
   const imageName = req.body.imageName;
   const type = req.body.type;
-  const lastModified = req.body.lastModified;
 
   //   console.log(req.body);
   let response;
 
   try {
-    response = await upload(imageName, lastModified, base64Image);
+    response = await upload(imageName, base64Image);
   } catch (err) {
     console.error(`Error uploading image: ${err.message}`);
     return next(new Error(`Error uploading image: ${imageName}`));

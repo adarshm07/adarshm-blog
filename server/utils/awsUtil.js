@@ -13,10 +13,10 @@ const s3 = new AWS.S3({
   region: REGION,
 });
 
-export async function upload(imageName, lastModified, base64Image, type) {
-  const date = new Date(lastModified).getDate();
-  const month = new Date(lastModified).getMonth();
-  const year = new Date(lastModified).getFullYear();
+export async function upload(imageName, base64Image, type) {
+  const date = new Date().getDate();
+  const month = new Date().getMonth();
+  const year = new Date().getFullYear();
   const customDateString = `${date}-${month}-${year}`;
 
   const params = {
