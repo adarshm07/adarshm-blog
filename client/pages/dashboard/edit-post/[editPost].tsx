@@ -1,12 +1,11 @@
 import axios from 'axios';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import RichText from '../../../components/RichText';
 import { useSelector } from "react-redux"
 import Layout from '../../../components/Layout';
 import { Checkbox } from '@mantine/core';
 import Router from 'next/router';
 import { apiDomain, domain } from '../../../config/mediaUrls';
-import ImageUpload from '../../../components/ImageUpload';
 
 function EditPost() {
   const [post, setPost] = useState<any>("")
@@ -15,11 +14,12 @@ function EditPost() {
   const [slug, setSlug] = useState<string>("");
   const [categories, setCategories] = useState<string[]>([]);
   const [status, setStatus] = useState<string>("PUBLISH");
-  const [author, setAuthor] = useState<string[]>([""]);
+  const [author, setAuthor] = useState<string>("");
   const [metaTitle, setMetaTitle] = useState<string>("");
   const [metaDescription, setMetaDescription] = useState<string>("");
   const [authors, setAuthors] = useState<string[]>([""]);
   const [disabled, setDisabled] = useState<boolean>(true);
+  const [imageLoading, setImageLoading] = useState<boolean>(false);
   const userData = useSelector((state: any) => state.user);
 
   const { query } = Router
@@ -50,21 +50,55 @@ function EditPost() {
         })
     }
 
-    getPost()
+    if (query.editPost) {
+      getPost();
+    }
 
+    listOfAllAuthors();
+  }, [query.editPost, userData.user._id, userData.user.token])
 
+  useEffect(() => {
     setTitle(post.title)
     setDescription(post.description)
     setMetaTitle(post.metaTitle)
     setMetaDescription(post.metaDescription)
     setSlug(post.slug)
-    setAuthor(post && post.author && post.author[0]?.username)
+    setAuthor(post && post.author && post.author?.username)
     setStatus(post.status)
 
     if (post === 'Not authenticated.') Router.push('/login')
+  }, [post])
 
-    listOfAllAuthors();
-  }, [userData?.user._id])
+  const handleImageUpload = useCallback(
+    (file: File): Promise<string> =>
+      new Promise(async (resolve, reject) => {
+        setImageLoading(true);
+        const convertedFile = await convertToBase64(file);
+
+        await axios.post(
+          `${apiDomain}/posts/upload`,
+          {
+            image: convertedFile,
+            imageName: file.name,
+            lastModified: file.lastModified
+          }
+        ).then((res: any) => {
+          if (res.status === 200) setImageLoading(false)
+          resolve(res.data.link)
+        }).catch(() => reject(new Error('Upload failed')));
+      }),
+    []
+  );
+
+  const convertToBase64 = (file: any) => {
+    return new Promise(resolve => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => {
+        resolve(reader.result);
+      }
+    })
+  }
 
   const publish = async () => {
     let data = JSON.stringify({ title, description, slug, categories, status, author, metaTitle, metaDescription })
@@ -106,7 +140,7 @@ function EditPost() {
               }} />
               <button className='btn btn-link p-0' onClick={() => setDisabled(!disabled)} style={{ fontSize: "14px" }}>{disabled ? 'Edit' : 'Save'}</button>
             </div>
-            <RichText value={description} onChange={setDescription} id="rte" />
+            <RichText value={description} onChange={setDescription} onImageUpload={handleImageUpload} id="rte" />
             <div className='my-4'></div>
             <input type={"text"} value={metaTitle} onChange={(e) => setMetaTitle(e.target.value)} id="meta_title" placeholder='Meta Title' className='w-100 my-2 border border-1 rounded p-2' />
             <textarea value={metaDescription} onChange={(e) => setMetaDescription(e.target.value)} id="meta_description" placeholder='Meta Description' className='w-100 my-2 border border-1 rounded p-2' />
@@ -135,14 +169,13 @@ function EditPost() {
               <label htmlFor="author">Author: </label>
               {/* <p >{post && post.author && post.author[0]?.username}</p> */}
             </div>
-            <select className='form-control' name="author" id="author" onChange={(e) => setAuthor([e.target.value])}>
+            <select className='form-control' name="author" id="author" onChange={(e) => setAuthor(e.target.value)}>
               {authors?.map((item: any, index: any) => {
                 return (
                   <option key={index} value={item._id}>{item.username}</option>
                 )
               })}
             </select>
-            <ImageUpload />
             <button className='btn btn-primary' onClick={publish}>Publish</button>
           </div>
         </div>
