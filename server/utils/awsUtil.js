@@ -13,6 +13,33 @@ const s3 = new AWS.S3({
   region: REGION,
 });
 
+export async function listAllImages() {
+  const params = {
+    Bucket: S3_BUCKET,
+    Prefix: "assets/images/",
+  };
+
+  const data = await s3.listObjects(params).promise();
+
+  const allImages = [];
+
+  data.Contents.forEach((item) => {
+    const currentItem = {
+      Key: `${process.env.S3_BUCKET_URL}/${item.Key}`,
+      LastModified: item.LastModified,
+      Size: item.Size,
+    };
+
+    // check if it is an image
+    let isImage = /\.(gif|jpe?g|png|webp)$/i;
+
+    if (item.Key.match(isImage)) {
+      allImages.push(currentItem);
+    }
+  });
+  return allImages;
+}
+
 export async function upload(imageName, base64Image, type) {
   const date = new Date().getDate();
   const month = new Date().getMonth();

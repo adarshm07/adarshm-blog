@@ -1,5 +1,6 @@
 import Post from "../models/Post.js";
 import User from "../models/User.js";
+import { listAllImages, upload } from "../utils/awsUtil.js";
 
 export const getAllPosts = async (req, res) => {
   try {
@@ -26,7 +27,6 @@ export const getAllPosts = async (req, res) => {
     res.status(400).json(error);
   }
 };
-
 
 export const getPostsByUser = async (req, res) => {
   try {
@@ -110,4 +110,30 @@ export const deletePost = async (req, res) => {
   } catch (error) {
     res.status(400).json("Post not deleted.");
   }
+};
+
+export const uploadImage = async (req, res, next) => {
+  const base64Image = req.body.image;
+  const imageName = req.body.imageName;
+  const type = req.body.type;
+
+  //   console.log(req.body);
+  let response;
+
+  try {
+    response = await upload(imageName, base64Image);
+  } catch (err) {
+    console.error(`Error uploading image: ${err.message}`);
+    return next(new Error(`Error uploading image: ${imageName}`));
+  }
+
+  res.send({ link: response });
+};
+
+export const fetchImages = async (req, res) => {
+  const data = await listAllImages();
+  if (!data) {
+    res.status(400).json({ message: "No files" });
+  }
+  res.status(200).json({ data: data });
 };

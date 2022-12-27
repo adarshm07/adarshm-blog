@@ -4,6 +4,7 @@ const router = express.Router();
 import {
   deletePost,
   editPost,
+  fetchImages,
   getAllAuthors,
   getAllPosts,
   getPost,
@@ -11,8 +12,8 @@ import {
   publishPost,
   statusUpdate,
   updatePost,
+  uploadImage,
 } from "../controllers/post.js";
-import { upload } from "../utils/awsUtil.js";
 import { verifyToken } from "../utils/verifyToken.js";
 
 router.get("/allposts", getAllPosts);
@@ -27,22 +28,8 @@ router.patch("/status/:id", verifyToken, statusUpdate);
 router.delete("/delete/:id", verifyToken, deletePost);
 
 // image upload
-router.post("/upload", async (req, res, next) => {
-  const base64Image = req.body.image;
-  const imageName = req.body.imageName;
-  const type = req.body.type;
+router.post("/upload", uploadImage);
 
-  //   console.log(req.body);
-  let response;
-
-  try {
-    response = await upload(imageName, base64Image);
-  } catch (err) {
-    console.error(`Error uploading image: ${err.message}`);
-    return next(new Error(`Error uploading image: ${imageName}`));
-  }
-
-  res.send({ link: response });
-});
+router.get("/fetchImages", fetchImages);
 
 export default router;
