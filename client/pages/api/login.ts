@@ -39,14 +39,6 @@ async function handler(req: any, res: { json: (arg0: { message: string }) => voi
       redirect: 'follow'
     };
 
-    // const data = await axios.post(`${apiDomain}/auth/login`, req.body, {
-    //   headers: {
-    //     "Content-Type": "application/json",
-    //     'Access-Control-Allow-Origin': '*',
-    //     'Access-Control-Allow-Credentials': true,
-    //     'withCredentials': true
-    //   }
-    // })
     const data = await fetch(`${apiDomain}/auth/login`, config)
     const json = await data.json()
     res.json(json)

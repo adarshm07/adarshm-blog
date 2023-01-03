@@ -124,61 +124,61 @@ function EditPost() {
 
   return (
     <Layout>
-      <div className="container mt-6 py-4">
-        <div className="row">
-          <div className="col-9">
-            <input type={"text"} value={title} onChange={(e) => {
-              setTitle(e.target.value)
-              setSlug(e.target.value.split(' ').join('-').replace(/['/`~!#*$@_%+=.,^&(){}[\]|;:"<>?\\]/g, ""))
-            }} id="post_title" placeholder='Post Title' className='w-100 border border-1 rounded p-2' />
-            <div className="d-flex align-items-center">
-              <span>{domain + '/'}</span>
-              <input type={"text"} value={slug} disabled={disabled} onChange={(e) => setSlug(e.target.value.split(' ').join('-'))} id="slug" className='my-4 w-100' style={{
-                background: !disabled ? '' : 'transparent',
-                border: !disabled ? '' : '0',
-                color: !disabled ? '' : '#020202'
-              }} />
-              <button className='btn btn-link p-0' onClick={() => setDisabled(!disabled)} style={{ fontSize: "14px" }}>{disabled ? 'Edit' : 'Save'}</button>
-            </div>
-            <RichText value={description} onChange={setDescription} onImageUpload={handleImageUpload} id="rte" />
-            <div className='my-4'></div>
-            <input type={"text"} value={metaTitle} onChange={(e) => setMetaTitle(e.target.value)} id="meta_title" placeholder='Meta Title' className='w-100 my-2 border border-1 rounded p-2' />
-            <textarea value={metaDescription} onChange={(e) => setMetaDescription(e.target.value)} id="meta_description" placeholder='Meta Description' className='w-100 my-2 border border-1 rounded p-2' />
+      <div className="container mt-20 py-4 mx-auto">
+        {/* <div className="row"> */}
+        <div>
+          <input type={"text"} value={title} onChange={(e) => {
+            setTitle(e.target.value)
+            setSlug(e.target.value.split(' ').join('-').replace(/['/`~!#*$@_%+=.,^&(){}[\]|;:"<>?\\]/g, ""))
+          }} id="post_title" placeholder='Post Title' className='w-full border-1 rounded p-2' />
+          <div className="flex items-center px-4">
+            <span className='text-black'>{domain + '/'}</span>
+            <input type={"text"} value={slug} disabled={disabled} onChange={(e) => setSlug(e.target.value.split(' ').join('-'))} id="slug" className='my-4 w-full text-black dark:text-white' style={{
+              background: !disabled ? '' : 'transparent',
+              border: !disabled ? '' : '0',
+              color: !disabled ? '' : '#020202'
+            }} />
+            <button className='text-black' onClick={() => setDisabled(!disabled)} style={{ fontSize: "14px" }}>{disabled ? 'Edit' : 'Save'}</button>
           </div>
-
-          <div className="col-3 d-flex flex-column gap-4">
-            <Checkbox.Group
-              defaultValue={['react']}
-              orientation="vertical"
-              label="Category"
-              spacing="xs"
-              size="xs"
-              onChange={setCategories}
-            >
-              <Checkbox value="react" label="React" />
-              <Checkbox value="svelte" label="Svelte" />
-              <Checkbox value="ng" label="Angular" />
-              <Checkbox value="vue" label="Vue" />
-            </Checkbox.Group>
-            <select className='form-control' name="status" id="status" value={status} onChange={(e) => setStatus(e.target.value)}>
-              <option value="PUBLISH">Publish</option>
-              <option value="DRAFT">Draft</option>
-              <option value="TRASH">Trash</option>
-            </select>
-            <div className='d-flex'>
-              <label htmlFor="author">Author: </label>
-              {/* <p >{post && post.author && post.author[0]?.username}</p> */}
-            </div>
-            <select className='form-control' name="author" id="author" onChange={(e) => setAuthor(e.target.value)}>
-              {authors?.map((item: any, index: any) => {
-                return (
-                  <option key={index} value={item._id}>{item.username}</option>
-                )
-              })}
-            </select>
-            <button className='btn btn-primary' onClick={publish}>Publish</button>
-          </div>
+          <RichText value={description} onChange={setDescription} onImageUpload={handleImageUpload} id="rte" />
+          <div className='my-4'></div>
+          <input type={"text"} value={metaTitle} onChange={(e) => setMetaTitle(e.target.value)} id="meta_title" placeholder='Meta Title' className='w-100 my-2 border border-1 rounded p-2' />
+          <textarea value={metaDescription} onChange={(e) => setMetaDescription(e.target.value)} id="meta_description" placeholder='Meta Description' className='w-100 my-2 border border-1 rounded p-2' />
         </div>
+
+        <div className="col-3 d-flex flex-column gap-4">
+          <Checkbox.Group
+            defaultValue={['react']}
+            orientation="vertical"
+            label="Category"
+            spacing="xs"
+            size="xs"
+            onChange={setCategories}
+          >
+            <Checkbox value="react" label="React" />
+            <Checkbox value="svelte" label="Svelte" />
+            <Checkbox value="ng" label="Angular" />
+            <Checkbox value="vue" label="Vue" />
+          </Checkbox.Group>
+          <select className='form-control' name="status" id="status" value={status} onChange={(e) => setStatus(e.target.value)}>
+            <option value="PUBLISH">Publish</option>
+            <option value="DRAFT">Draft</option>
+            <option value="TRASH">Trash</option>
+          </select>
+          <div className='d-flex'>
+            <label htmlFor="author">Author: </label>
+            {/* <p >{post && post.author && post.author?.username}</p> */}
+          </div>
+          <select className='form-control' name="author" id="author" onChange={(e) => setAuthor(e.target.value)}>
+            {authors?.map((item: any, index: any) => {
+              return (
+                <option key={index} value={item._id}>{item.username}</option>
+              )
+            })}
+          </select>
+          <button className='btn btn-primary' onClick={publish}>Publish</button>
+        </div>
+        {/* </div> */}
       </div >
     </Layout >
   )

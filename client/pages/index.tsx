@@ -48,7 +48,7 @@ const Home: NextPage = () => {
             </div>
           </div>
         </div>
-        <FloatingButton link={ResumeLink} text={"Download Resume"} bottom={"10px"} left={"10px"} />
+        <FloatingButton link={ResumeLink} text={"Download Resume"} bottom={"10px"} left={"10px"} className="text-white" />
       </Layout>
     </div>
   )

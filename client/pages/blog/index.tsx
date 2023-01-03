@@ -53,44 +53,41 @@ export default function Blog() {
             </Head>
             <Layout>
                 <div className="header-blog">
-                    <h2 className="text-center">My Blog</h2>
-                    <div className="d-flex flex-column justify-content-center align-items-center gap-2 text-center">
+                    <h2 className="text-3xl">My Blog</h2>
+                    <div className="flex flex-col justify-center items-center gap-2 text-center">
                         <input type="text" placeholder="Search for blog title here..." className="p-3 border-0 rounded search-blog-posts mt-4" style={{ width: `clamp(240px, 300px, 600px)` }} onChange={(e) => searchPost(e.target.value)} />
                     </div>
                 </div>
-                <div className="container">
-                    <div className="row">
-                        <div className="blog-posts-container mt-5 col-12">
-                            {filterPosts?.map((post: Post) => {
-                                return (
-                                    <div className="col-12 p-3" style={{ boxShadow: "6px 0px 16px #f4f4f4" }} key={post.id}>
-                                        <div className="d-flex flex-column gap-3">
-                                            <img src={post.featuredImg} className="card-img-top" alt={post.title} style={{ width: "auto", height: `clamp(200px, 240px, 400px)` }} />
-                                            <div className="card-body position-relative">
-                                                <h5 className="card-title">{post.title}</h5>
-                                                <div className="d-flex">
-                                                    <p className="card-text">{new Date(post.updatedDate).toLocaleDateString('en-IN')}</p> &nbsp;
-                                                    <p className="card-text">by</p> &nbsp;
-                                                    <p className="card-text">{post.author}</p>
-                                                </div>
-                                                <p className="card-text">{post.description}</p>
-                                                <Link href={`/blog/${post.slug}`}>
-                                                    <a className="btn-read-more">
-                                                        Read More
-                                                    </a>
-                                                </Link>
+                <div className="container mx-auto">
+                    {/* <div className="row"> */}
+                    <div className="blog-posts-container mt-5">
+                        {filterPosts?.map((post: Post) => {
+                            return (
+                                <div className="p-4" style={{ boxShadow: "6px 0px 16px #f4f4f4" }} key={post.id}>
+                                    <div className="flex flex-col gap-3">
+                                        <img src={post.featuredImg} className="card-img-top" alt={post.title} style={{ width: "auto", height: `clamp(200px, 240px, 400px)` }} />
+                                        <div className="relative">
+                                            <h5 className="card-title">{post.title}</h5>
+                                            <div className="flex">
+                                                <p className="card-text">{new Date(post.updatedDate).toLocaleDateString('en-IN')}</p> &nbsp;
+                                                <p className="card-text">by</p> &nbsp;
+                                                <p className="card-text">{post.author}</p>
                                             </div>
+                                            <p className="card-text h-16">{post.description}</p>
+                                            <Link href={`/blog/${post.slug}`}>
+                                                <a className="btn-read-more underline underline-offset-4">
+                                                    Read More
+                                                </a>
+                                            </Link>
                                         </div>
                                     </div>
-                                )
-                            })}
-                        </div>
-                        <div className="col-12 col-lg-4 mt-5 ml-auto border border-0 rounded" style={{ boxShadow: "6px 0px 16px #f4f4f4", width: `clamp(300px, 400px, 500px)` }}>
-
-                        </div>
+                                </div>
+                            )
+                        })}
                     </div>
+                    {/* </div> */}
                 </div>
-            </Layout >
+            </Layout>
         </React.Fragment>
     )
 }

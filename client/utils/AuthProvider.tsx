@@ -40,8 +40,8 @@ export default function AuthProvider({ children }: Props) {
 
 
     return (
-        <div className="container">
+        <React.Fragment>
             {!isAuthenticated && children}
-        </div>
+        </React.Fragment>
     )
 }

@@ -4,10 +4,11 @@ import Header from "../Header";
 import ScrollToTop from "../ScrollToTop";
 
 type Props = {
-    children?: React.ReactNode
+    children?: React.ReactNode,
+    background?: string
 };
 
-export default function Layout({ children }: Props) {
+export default function Layout({ children, background }: Props) {
     return (
         <React.Fragment>
             <Head>
@@ -16,7 +17,7 @@ export default function Layout({ children }: Props) {
                 <link rel="icon" href="/favicon.ico" />
             </Head>
             <Header />
-            <div style={{ marginTop: "4rem" }}>
+            <div className="flex flex-col" style={{ background: `${background}`, height: "100%" }}>
                 {children}
             </div>
             <ScrollToTop />
