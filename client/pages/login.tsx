@@ -17,9 +17,9 @@ export default function LoginForm() {
     return (
         <Layout>
             <AuthProvider>
-                <div className='container mx-auto my-auto'>
-                    <div className="block rounded-lg shadow-lg bg-white max-w-sm p-6 mx-auto">
-                        <p className='text-xl font-semibold'>Login</p>
+                <div className='container mx-auto mt-40 p-6'>
+                    <div className="block bg-white max-w-sm p-6 mx-auto dark:bg-slate-800 rounded-lg px-6 py-8 ring-1 ring-slate-900/5">
+                        <p className='inline bg-gradient-to-r from-indigo-200 via-sky-400 to-indigo-200 bg-clip-text font-display text-xl tracking-tight text-transparent'>Login</p>
                         <Formik
                             initialValues={{
                                 username: '',

@@ -69,11 +69,11 @@ export default function Blog() {
                                         <div className="relative">
                                             <h5 className="card-title">{post.title}</h5>
                                             <div className="flex">
-                                                <p className="card-text">{new Date(post.updatedDate).toLocaleDateString('en-IN')}</p> &nbsp;
-                                                <p className="card-text">by</p> &nbsp;
-                                                <p className="card-text">{post.author}</p>
+                                                <p className="post-updated">{new Date(post.updatedDate).toLocaleDateString('en-IN')}</p> &nbsp;
+                                                <p className="">by</p> &nbsp;
+                                                <p className="post-author">{post.author}</p>
                                             </div>
-                                            <p className="card-text h-16">{post.description}</p>
+                                            <p className="post-excerpt h-16">{post.description}</p>
                                             <Link href={`/blog/${post.slug}`}>
                                                 <a className="btn-read-more underline underline-offset-4">
                                                     Read More

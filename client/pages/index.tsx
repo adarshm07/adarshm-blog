@@ -8,23 +8,11 @@ import Layout from '../components/Layout';
 import GlitchText from '../components/GlitchText';
 import MultiColorText from '../components/MultiColorText';
 import FloatingButton from '../components/FloatingButton';
-import { apiDomain, ResumeLink } from '../config/mediaUrls';
+import { apiDomain, domain, ResumeLink } from '../config/mediaUrls';
+import BlogCard from '../components/BlogCard';
 
-const Home: NextPage = () => {
+const Home: NextPage = ({ posts }: any) => {
   const user = useSelector((state: any) => state.user);
-  const [posts, setPosts] = useState<[]>([]);
-
-  useEffect(() => {
-    const listAllPosts = async () => {
-      await axios.get(`${apiDomain}/posts/allposts`)
-        .then((res: any) => {
-          setPosts(res.data)
-        })
-        .catch((err: Error) => console.log(err));
-    }
-
-    listAllPosts()
-  }, [])
 
   return (
     <div className='open'>
@@ -48,10 +36,32 @@ const Home: NextPage = () => {
             </div>
           </div>
         </div>
+
+        {/* <div className='mx-auto max-w-2xl lg:max-w-5xl'>
+          <div className='mx-auto grid max-w-xl grid-cols-1 gap-y-20 lg:max-w-none lg:grid-cols-2'>
+            <div className="flex flex-col gap-16">
+              {posts?.map((item) => (
+                <BlogCard key={item.id} title={item.title} date={item.updatedDate} excerpt={item.description} url={`${domain}/blog/${item.slug}`} />
+              ))}
+            </div>
+          </div>
+        </div> */}
         <FloatingButton link={ResumeLink} text={"Download Resume"} bottom={"10px"} left={"10px"} className="text-white" />
       </Layout>
     </div>
   )
 }
+
+
+// export async function getServerSideProps(context: any) {
+//   const data = await fetch(`${apiDomain}/posts/allposts`)
+//   const posts = await data.json();
+//   return {
+
+//     props: {
+//       posts
+//     },
+//   }
+// }
 
 export default Home
