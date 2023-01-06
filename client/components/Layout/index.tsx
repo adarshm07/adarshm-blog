@@ -5,10 +5,11 @@ import ScrollToTop from "../ScrollToTop";
 
 type Props = {
     children?: React.ReactNode,
-    background?: string
+    background?: string,
+    classnames?: string
 };
 
-export default function Layout({ children, background }: Props) {
+export default function Layout({ children, background, classnames }: Props) {
     return (
         <React.Fragment>
             <Head>
@@ -17,10 +18,10 @@ export default function Layout({ children, background }: Props) {
                 <link rel="icon" href="/favicon.ico" />
             </Head>
             <Header />
-            <div className="flex flex-col" style={{ background: `${background}`, height: "100%" }}>
+            <div className={classnames} style={{ background: `${background}`, height: "100%" }}>
                 {children}
             </div>
             <ScrollToTop />
-        </React.Fragment>
+        </React.Fragment >
     )
 }

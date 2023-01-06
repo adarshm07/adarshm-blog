@@ -124,9 +124,8 @@ function EditPost() {
 
   return (
     <Layout>
-      <div className="container mt-20 py-4 mx-auto">
-        {/* <div className="row"> */}
-        <div>
+      <div className="container mx-auto mt-20 flex justify-center gap-12">
+        <div className='flex flex-col flex-1 w-4/6'>
           <input type={"text"} value={title} onChange={(e) => {
             setTitle(e.target.value)
             setSlug(e.target.value.split(' ').join('-').replace(/['/`~!#*$@_%+=.,^&(){}[\]|;:"<>?\\]/g, ""))
@@ -146,7 +145,7 @@ function EditPost() {
           <textarea value={metaDescription} onChange={(e) => setMetaDescription(e.target.value)} id="meta_description" placeholder='Meta Description' className='w-100 my-2 border border-1 rounded p-2' />
         </div>
 
-        <div className="col-3 d-flex flex-column gap-4">
+        <div className="flex flex-col gap-4 w-1/6">
           <Checkbox.Group
             defaultValue={['react']}
             orientation="vertical"
@@ -178,7 +177,6 @@ function EditPost() {
           </select>
           <button className='btn btn-primary' onClick={publish}>Publish</button>
         </div>
-        {/* </div> */}
       </div >
     </Layout >
   )

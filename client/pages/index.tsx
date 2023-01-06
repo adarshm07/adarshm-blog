@@ -2,8 +2,8 @@ import type { NextPage } from 'next'
 import Head from 'next/head'
 import styles from '../styles/Home.module.scss'
 import { useSelector } from "react-redux";
-import { useEffect, useState } from 'react';
-import axios from 'axios';
+// import { useEffect, useState } from 'react';
+// import axios from 'axios';
 import Layout from '../components/Layout';
 import GlitchText from '../components/GlitchText';
 import MultiColorText from '../components/MultiColorText';
@@ -22,12 +22,14 @@ const Home: NextPage = ({ posts }: any) => {
         <link rel="icon" href="/favicon.ico" />
       </Head>
 
-      <Layout>
-        <div className={styles.container} style={{ height: "74vh", display: "flex", justifyContent: "center", alignItems: "flex-end", paddingBottom: "64px" }}>
+      <Layout classnames='flex flex-col bg-[#f5fff8]'>
+        <div className="container mx-auto" style={{ height: "74vh", display: "flex", justifyContent: "center", alignItems: "flex-end", paddingBottom: "64px" }}>
+        {/* background: #f5fff8 url("/logo-icon.svg") no-repeat center center; */}
           <GlitchText title="Full Stack Developer" />
         </div>
+        {/* classnames='flex flex-col bg-[#f5fff8]' */}
 
-        <div className="container">
+        <div className="container bg-[#f5fff8] mx-auto">
           <div className={styles.gridSection}>
             <div></div>
             <div>
@@ -37,7 +39,7 @@ const Home: NextPage = ({ posts }: any) => {
           </div>
         </div>
 
-        {/* <div className='mx-auto max-w-2xl lg:max-w-5xl'>
+        <div className='mx-auto max-w-2xl lg:max-w-5xl'>
           <div className='mx-auto grid max-w-xl grid-cols-1 gap-y-20 lg:max-w-none lg:grid-cols-2'>
             <div className="flex flex-col gap-16">
               {posts?.map((item) => (
@@ -45,7 +47,7 @@ const Home: NextPage = ({ posts }: any) => {
               ))}
             </div>
           </div>
-        </div> */}
+        </div>
         <FloatingButton link={ResumeLink} text={"Download Resume"} bottom={"10px"} left={"10px"} className="text-white" />
       </Layout>
     </div>
@@ -53,15 +55,15 @@ const Home: NextPage = ({ posts }: any) => {
 }
 
 
-// export async function getServerSideProps(context: any) {
-//   const data = await fetch(`${apiDomain}/posts/allposts`)
-//   const posts = await data.json();
-//   return {
+export async function getServerSideProps(context: any) {
+  const data = await fetch(`${apiDomain}/posts/allposts`)
+  const posts = await data.json();
+  return {
 
-//     props: {
-//       posts
-//     },
-//   }
-// }
+    props: {
+      posts
+    },
+  }
+}
 
 export default Home

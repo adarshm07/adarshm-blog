@@ -8,7 +8,7 @@ export const getAllPosts = async (req, res) => {
     if (!allPosts.length) res.status(400).json("No Posts.");
     const arr = [];
     allPosts.forEach((item) => {
-      let featuredImg = item.description?.match(/(?<=<img src=").*?(?=")/gm);
+      // let featuredImg = item.description?.match(/(?<=<img src=").*?(?=")/gm);
       const data = {
         id: item._id,
         title: item.title,
@@ -17,7 +17,7 @@ export const getAllPosts = async (req, res) => {
         status: item.status,
         updatedDate: item.updatedDate,
         slug: item.slug,
-        featuredImg,
+        // featuredImg,
       };
       arr.push(data);
     });
