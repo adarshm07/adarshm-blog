@@ -24,7 +24,7 @@ const Home: NextPage = ({ posts }: any) => {
 
       <Layout classnames='flex flex-col bg-[#f5fff8]'>
         <div className="container mx-auto" style={{ height: "74vh", display: "flex", justifyContent: "center", alignItems: "flex-end", paddingBottom: "64px" }}>
-        {/* background: #f5fff8 url("/logo-icon.svg") no-repeat center center; */}
+          {/* background: #f5fff8 url("/logo-icon.svg") no-repeat center center; */}
           <GlitchText title="Full Stack Developer" />
         </div>
         {/* classnames='flex flex-col bg-[#f5fff8]' */}
@@ -42,7 +42,7 @@ const Home: NextPage = ({ posts }: any) => {
         <div className='mx-auto max-w-2xl lg:max-w-5xl'>
           <div className='mx-auto grid max-w-xl grid-cols-1 gap-y-20 lg:max-w-none lg:grid-cols-2'>
             <div className="flex flex-col gap-16">
-              {posts?.map((item) => (
+              {posts?.map((item: any) => (
                 <BlogCard key={item.id} title={item.title} date={item.updatedDate} excerpt={item.description} url={`${domain}/blog/${item.slug}`} />
               ))}
             </div>
