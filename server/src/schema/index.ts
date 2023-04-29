@@ -7,5 +7,11 @@ const Query = `
         post(id: ID): Post
       }
 `
-const typeDefs = [Query, User, Post]
+
+const Mutation = `
+      type Mutation {
+        createUser(name: String!, email: String!): User
+      }
+`
+const typeDefs = [Query, Mutation, User, Post]
 export default typeDefs

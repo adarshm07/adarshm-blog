@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "compile": "tsc",
-    "dev": "nodemon --watch src --exec 'npm run compile && node ./dist/index.js'",
+    "dev": "npm run compile && nodemon ./dist/index.js",
     "start": "npm run compile && node ./dist/index.js"
   },
   "keywords": [],

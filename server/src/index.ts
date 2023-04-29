@@ -13,11 +13,25 @@ dotenv.config();
 const app = express();
 
 import typeDefs from './schema/index.js';
+import User from './models/User.js';
 
 const resolvers = {
     Query: {
-        post: () => "posts",
+        user: async (parent: any, args: any) => {
+            console.log(args);
+            const user = await User.findOne({ email: args.email })
+            return user
+        },
+        post: () => "posts"
     },
+    Mutation: {
+        createUser: async (parent, args) => {
+            const { name, email } = args;
+            const user = new User({ name, email });
+            await user.save();
+            return user;
+        }
+    }
 };
 
 interface MyContext {
@@ -47,6 +61,7 @@ app.use('/', cors<cors.CorsRequest>(),
 const PORT = { port: process.env.PORT || 4000 }
 await new Promise<void>((resolve) => {
     httpServer.listen(PORT, resolve);
+    // connect with mongodb
     connect();
 });
 console.log(`🚀 Server ready at http://localhost:${PORT.port}/graphql`);
