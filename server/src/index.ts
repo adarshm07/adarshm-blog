@@ -13,26 +13,7 @@ dotenv.config();
 const app = express();
 
 import typeDefs from './schema/index.js';
-import User from './models/User.js';
-
-const resolvers = {
-    Query: {
-        user: async (parent: any, args: any) => {
-            console.log(args);
-            const user = await User.findOne({ email: args.email })
-            return user
-        },
-        post: () => "posts"
-    },
-    Mutation: {
-        createUser: async (parent, args) => {
-            const { name, email } = args;
-            const user = new User({ name, email });
-            await user.save();
-            return user;
-        }
-    }
-};
+import resolvers from './resolvers/index.js';
 
 interface MyContext {
     token?: string;

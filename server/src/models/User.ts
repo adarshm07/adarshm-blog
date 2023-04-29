@@ -7,7 +7,7 @@ const userSchema = new Schema({
     password: { type: String },
     createdAt: { type: Date, default: Date.now, immutable: true },
     updatedAt: { type: Date, default: Date.now },
-    role: { type: String },
+    role: { type: String, enum: ["ADMIN", "USER"], default: "USER" },
 });
 
 export default model("User", userSchema);

@@ -4,8 +4,7 @@ import mongoose from "mongoose"
 export default function connect() {
     mongoose.connect(process.env.DB_URL).then(() => {
         console.log("Connected to MongoDB")
-    }
-    ).catch((err) => {
+    }).catch((err) => {
         console.log("Error connecting to MongoDB", err)
     })
 }

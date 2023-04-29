@@ -4,13 +4,14 @@ import { typeDef as Post } from "./post.js";
 const Query = `
       type Query {
         user(id: ID, email: String): User
-        post(id: ID): Post
+        me(email: String): User
+        getAllUsers: [User]
       }
 `
 
 const Mutation = `
       type Mutation {
-        createUser(name: String!, email: String!): User
+        createUser(name: String!, email: String!,  password: String!, role: String): User
       }
 `
 const typeDefs = [Query, Mutation, User, Post]
