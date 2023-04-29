@@ -6,5 +6,6 @@ export const typeDef = `
         createdAt: String
         updatedAt: String
         role: String
+        isActive: Boolean
     }
 `

@@ -11,7 +11,7 @@ export default {
                 throw error;
             }
         },
-        user: async (_: any, args: any) => {
+        getUser: async (_: any, args: any) => {
             const user = await User.findOne(args)
             return user
         },
@@ -21,8 +21,7 @@ export default {
         }
     },
     Mutation: {
-        createUser: async (parent, args) => {
-            const { name, email } = args;
+        createUser: async (parent: any, args: any) => {
             const user = new User(args);
             await user.save();
             return user;
