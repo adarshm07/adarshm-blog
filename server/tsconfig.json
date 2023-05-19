@@ -3,12 +3,16 @@
     "rootDirs": ["src"],
     "outDir": "dist",
     "lib": ["es2020"],
-    "target": "es2022",
-    "module": "esnext",
-    "moduleResolution": "node",
+    "target": "esnext",
+    "module": "NodeNext",
+    "moduleResolution": "nodenext",
+    // "sourceMap": true,
     "esModuleInterop": true,
     "types": ["node"]
-  }
-  // "include": ["src/**/*.ts", "**/*.tsx"],
-  // "exclude": ["node_modules"]
+    // "declaration": true,
+    // "declarationDir": "types",
+    // "emitDeclarationOnly": true
+  },
+  "include": ["src/**/*.ts", "**/*.tsx"],
+  "exclude": ["node_modules"]
 }

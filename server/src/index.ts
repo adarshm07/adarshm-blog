@@ -6,14 +6,13 @@ import { ApolloServerPluginDrainHttpServer } from '@apollo/server/plugin/drainHt
 import express from 'express';
 import http from 'http';
 import dotenv from 'dotenv';
+import typeDefs from './schema/index.js';
+import resolvers from './resolvers/index.js';
 import connect from './services/db.js';
 
 dotenv.config();
 
 const app = express();
-
-import typeDefs from './schema/index.js';
-import resolvers from './resolvers/index.js';
 
 interface MyContext {
     token?: string;

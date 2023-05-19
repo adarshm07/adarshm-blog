@@ -12,7 +12,6 @@ const Query = `
       }
 `
 
-
 const Mutation = `
       type Mutation {
         createUser(name: String!, email: String!,  password: String!, role: String): User

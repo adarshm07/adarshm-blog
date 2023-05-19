@@ -4,9 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "compile": "tsc",
-    "dev": "npm run compile && nodemon ./dist/index.js",
-    "start": "npm run compile && node ./dist/index.js"
+    "build": "tsc",
+    "dev": "npm run build && nodemon ./dist/index.js",
+    "start": "npm run build && node ./dist/index.js"
   },
   "keywords": [],
   "author": "",
