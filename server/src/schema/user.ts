@@ -1,11 +1,11 @@
 export const typeDef = `
     type User {
-        name: String
-        email: String
+        name: String!
+        email: String!
         password: String
-        createdAt: String
+        createdAt: String!
         updatedAt: String
-        role: String
+        role: String!
         isActive: Boolean
     }
 `

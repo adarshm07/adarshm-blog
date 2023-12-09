@@ -1,4 +1,4 @@
-import UserResolvers from "./User.resolvers.js"
+import UserResolvers from "./User.resolvers"
 
 const resolvers = [UserResolvers];
 

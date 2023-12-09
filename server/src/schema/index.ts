@@ -1,5 +1,5 @@
-import { typeDef as User } from "./user.js";
-import { typeDef as Post } from "./post.js";
+import { typeDef as User } from "./user";
+import { typeDef as Post } from "./post";
 
 const Query = `
       type Query {

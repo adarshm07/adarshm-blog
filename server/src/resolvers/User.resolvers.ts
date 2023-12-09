@@ -1,5 +1,4 @@
-import User from "../models/User.js";
-
+import User from "../models/User"
 export default {
     Query: {
         me: async (root: any, args: any, context: any) => {

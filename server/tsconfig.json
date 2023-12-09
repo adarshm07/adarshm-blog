@@ -5,7 +5,7 @@
     "lib": ["es2020"],
     "target": "esnext",
     "module": "NodeNext",
-    "moduleResolution": "nodenext",
+    "moduleResolution": "node",
     // "sourceMap": true,
     "esModuleInterop": true,
     "types": ["node"]
