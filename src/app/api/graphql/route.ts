@@ -1,33 +1,23 @@
 import { startServerAndCreateNextHandler } from '@as-integrations/next';
 import { ApolloServer } from '@apollo/server';
-import { NextRequest } from 'next/server';
+import { makeExecutableSchema } from "@graphql-tools/schema"
+import { applyMiddleware } from "graphql-middleware"
 import dbConnect from '@/utils/db-connect';
 import resolvers from './resolvers';
 import typeDefs from './schema';
 
-// const resolvers = {
-//     Query: {
-//         hello: () => 'world',
-//     },
-// };
+const schema: any = makeExecutableSchema({ typeDefs, resolvers })
 
-// const typeDefs = gql`
-//   type Query {
-//     hello: String
-//   }
-// `;
+const schemaMiddleware: any = applyMiddleware(schema)
 
-const server = new ApolloServer({
-    resolvers,
-    typeDefs,
-});
+const server = new ApolloServer({ schema: schemaMiddleware });
 
-(async () => {
-    await dbConnect();
-})();
+(async () => await dbConnect())();
 
-const handler = startServerAndCreateNextHandler<NextRequest>(server, {
-    context: async req => ({ req }),
+const handler = startServerAndCreateNextHandler(server, {
+    context: async (req: any) => {
+        return req;
+    },
 });
 
 export { handler as GET, handler as POST };
