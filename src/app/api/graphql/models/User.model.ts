@@ -11,7 +11,6 @@ interface UserAttributes {
     isActive: boolean;
 }
 
-
 const UserSchema = new Schema<UserAttributes>({
     id: { type: String },
     name: { type: String },
@@ -21,8 +20,6 @@ const UserSchema = new Schema<UserAttributes>({
     updatedAt: { type: Date, default: Date.now },
     role: { type: String, enum: ["ADMIN", "USER"], default: "USER" },
     isActive: { type: Boolean, default: false }
-});
-
-// mongoose.models.User ?? mongoose.model('User', UserSchema);
+}, { timestamps: true });
 
 export const User = mongoose.models.User ?? mongoose.model('User', UserSchema);
