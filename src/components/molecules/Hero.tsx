@@ -1,5 +1,6 @@
 import Link from "next/link"
 import { FaArrowRight, FaArrowRightArrowLeft, FaDownload, FaFilePdf, FaReact } from "react-icons/fa6"
+import TechStack from "./TechStack"
 
 export default function Hero() {
     return (
@@ -19,8 +20,8 @@ export default function Hero() {
                         </h1>
                         <br />
                         <p className="mx-auto md:mx-0 max-w-[700px] text-gray-500 text-sm dark:text-gray-400 italic">
-                            I am a passionate web developer with a passion for creating visually appealing and user-friendly web applications. I am a quick learner and collaborate closely with clients to create efficient, user-friendly solutions that meet their needs.
-                            <br /> <br />
+                            {/* I am a passionate web developer with a passion for creating visually appealing and user-friendly web applications. I am a quick learner and collaborate closely with clients to create efficient, user-friendly solutions that meet their needs. */}
+                            {/* <br /> <br /> */}
                             I am excited to contribute my skills to the web development industry and look forward to working with you to create a seamless and enjoyable user experience.
                         </p>
                         <div className="mt-8">
@@ -40,6 +41,10 @@ export default function Hero() {
                     </div>
                     <div className="md:w-1/2"></div>
                 </div>
+
+                {/* <div className="mt-4">
+                    <TechStack />
+                </div> */}
             </div>
         </section>
     )
