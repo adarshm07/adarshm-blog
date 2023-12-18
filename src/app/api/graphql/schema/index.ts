@@ -1,5 +1,6 @@
 import { typeDef as User } from "./User";
 import { typeDef as Post } from "./Post";
+import { typeDef as Category } from "./Category";
 
 const Query = `
       type Query {
@@ -8,12 +9,11 @@ const Query = `
         getAllUsers: [UserResponse]
         getPost(id: ID, slug:String): Post
         getAllPosts: [Post]
-        
       }
 `
 
 const Mutation = `
-      type Mutation {
+      type Mutation { 
         createUser(name: String!, email: String!,  password: String!, role: String): UserResponse
         deleteUser(id: ID, email: String): UserResponse
         createPost(title: String!, content: String!, author: ID!): Post
