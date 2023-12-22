@@ -18,7 +18,7 @@ const UserSchema = new Schema<UserAttributes>({
     password: { type: String },
     createdAt: { type: Date, default: Date.now, immutable: true },
     updatedAt: { type: Date, default: Date.now },
-    role: { type: String, enum: ["ADMIN", "USER"], default: "USER" },
+    role: { type: String, enum: ["ADMIN", "USER", "MODERATOR", "CONTENT-WRITER"], default: "USER" },
     isActive: { type: Boolean, default: false }
 }, { timestamps: true });
 

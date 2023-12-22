@@ -24,6 +24,16 @@ export async function handleSubmit(values: LoginType): Promise<void> {
     })
 
     const data = await res.json();
-    // console.log(data);
+    console.log(data);
+
+    await fetch("https://dev-hh68fy1m.us.auth0.com/userinfo", {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${data['access_token']}`
+        }
+    })
+        .then(response => response.json())
+        .then(result => console.log(result['access_token']))
+        .catch(error => console.log('error', error));
     return data;
 }

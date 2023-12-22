@@ -1,7 +1,7 @@
 "use client"
 import { HeaderMenu } from "@/assets/data/NavigationMenu";
 import { HeaderMenuType, HeaderType } from "@/types/HeaderTypes";
-import DarkModeToggle from "@/components/atoms/darkModeToggle";
+import DarkModeToggle from "@/components/atoms/DarkModeToggle";
 
 export default function Header({ logo }: HeaderType) {
     return (
