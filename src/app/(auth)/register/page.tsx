@@ -1,6 +1,4 @@
 "use client"
-import { Box, Button, Checkbox, Group, PasswordInput, TextInput } from '@mantine/core';
-import { useForm } from '@mantine/form';
 
 type FormValues = {
     name: string;
@@ -18,19 +16,19 @@ type RegisterType = {
 }
 
 export default function Register() {
-    const form = useForm<FormValues>({
-        initialValues: {
-            name: '',
-            email: '',
-            password: '',
-            username: '',
-            termsOfService: false,
-        },
+    // const form = useForm<FormValues>({
+    //     initialValues: {
+    //         name: '',
+    //         email: '',
+    //         password: '',
+    //         username: '',
+    //         termsOfService: false,
+    //     },
 
-        validate: {
-            email: (value) => (/^\S+@\S+$/.test(value) ? null : 'Invalid email'),
-        },
-    });
+    //     validate: {
+    //         email: (value) => (/^\S+@\S+$/.test(value) ? null : 'Invalid email'),
+    //     },
+    // });
 
     const handleSubmit = async (values: RegisterType) => {
         const formValues = JSON.stringify({
@@ -58,7 +56,7 @@ export default function Register() {
     return (
         <div>
             <h1>Register</h1>
-            <Box maw={340} mx="auto">
+            {/* <Box maw={340} mx="auto">
                 <form onSubmit={form.onSubmit((values) => handleSubmit(values))}>
                     <TextInput
                         withAsterisk
@@ -98,7 +96,7 @@ export default function Register() {
                         <Button type="submit">Submit</Button>
                     </Group>
                 </form>
-            </Box>
+            </Box> */}
         </div>
     )
 }

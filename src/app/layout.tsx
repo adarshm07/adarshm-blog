@@ -2,8 +2,6 @@ import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
 import './globals.css'
 import { UserProvider } from '@auth0/nextjs-auth0/client';
-import '@mantine/core/styles.css';
-import { MantineProvider } from '@mantine/core';
 
 const inter = Inter({ subsets: ['latin'] })
 
@@ -23,9 +21,7 @@ export default function RootLayout({
       </head>
       <UserProvider>
         <body className={inter.className}>
-          <MantineProvider>
             {children}
-          </MantineProvider>
         </body>
       </UserProvider>
     </html>

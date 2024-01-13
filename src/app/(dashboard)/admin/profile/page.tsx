@@ -3,6 +3,8 @@ import { getSession } from '@auth0/nextjs-auth0';
 export default async function Profile() {
   const { user } = await getSession();
 
+  console.log(user);
+
   return (
     user && (
       <div>
