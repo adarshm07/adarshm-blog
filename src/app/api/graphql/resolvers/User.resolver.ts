@@ -18,8 +18,9 @@ export default {
         getAllUsers: async (root: any, args: any, context: any) => {
             try {
                 const users = await User.find();
-                if (!users) throw new Error("No users found")
+                if (!users) throw new Error("No users found");
                 return users;
+
             } catch (error) {
                 throw new Error("Error.");
             }

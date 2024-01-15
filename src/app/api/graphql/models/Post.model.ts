@@ -1,6 +1,7 @@
-import { Schema } from "mongoose";
+import { Schema, Types } from "mongoose";
 
 const PostSchema = new Schema({
+    id: { type: Types.ObjectId },
     title: { type: String, required: true },
     content: { type: String, required: true },
     slug: { type: String, required: true },

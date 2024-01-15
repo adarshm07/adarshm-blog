@@ -1,7 +1,7 @@
-import mongoose, { Schema } from "mongoose";
+import mongoose, { Schema, Types } from "mongoose";
 
 interface UserAttributes {
-    id: string;
+    _id: { type: Types.ObjectId },
     name: string;
     email: string;
     password: string;
@@ -12,7 +12,7 @@ interface UserAttributes {
 }
 
 const UserSchema = new Schema<UserAttributes>({
-    id: { type: String },
+    _id: { type: Types.ObjectId },
     name: { type: String },
     email: { type: String },
     password: { type: String },
