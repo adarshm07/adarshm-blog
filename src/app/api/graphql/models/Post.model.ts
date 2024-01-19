@@ -1,13 +1,24 @@
-import { Schema, Types } from "mongoose";
+import mongoose, { Schema, Types } from "mongoose";
+
+interface PostAttributes {
+    // _id: { type: Types.ObjectId };
+    title: string;
+    content: string;
+    slug: string;
+    // category: Types.ObjectId;
+    author: {
+        type: Types.ObjectId,
+        ref: 'User'
+    };
+}
 
 const PostSchema = new Schema({
-    id: { type: Types.ObjectId },
+    // _id: { type: Types.ObjectId },
     title: { type: String, required: true },
     content: { type: String, required: true },
     slug: { type: String, required: true },
-    category: { type: Schema.Types.ObjectId, ref: "Category" },
-    featuredImage: { type: String, required: true },
-    author: { type: Schema.Types.ObjectId, ref: "User" },
+    author: { type: Types.ObjectId, ref: 'User' }
+    // category: { type: Schema.Types.ObjectId, ref: "Category" }
 }, { timestamps: true });
 
 export const Post = mongoose.models.Post ?? mongoose.model("Post", PostSchema);

@@ -6,19 +6,19 @@ export const typeDef = gql`
         name: String!
         email: String!
         password: String
-        createdAt: String!
-        updatedAt: String
         role: String!
         isActive: Boolean!
+        createdAt: String
+        updatedAt: String
     }
     
     type UserResponse {
         _id: ID
         name: String
         email: String
-        createdAt: String
-        updatedAt: String
         role: String
         isActive: Boolean
+        createdAt: String
+        updatedAt: String
     }
 `

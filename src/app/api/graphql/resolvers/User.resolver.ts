@@ -11,11 +11,11 @@ export default {
         //         throw error;
         //     }
         // },
-        // getUser: async (_: any, args: any) => {
-        //     const user = await User.findOne(args)
-        //     return user
-        // },
-        getAllUsers: async (root: any, args: any, context: any) => {
+        getUser: async (_root: any, args: any) => {
+            const user = await User.findOne(args)
+            return user
+        },
+        getAllUsers: async (_root: any, _args: any, _context: any) => {
             try {
                 const users = await User.find();
                 if (!users) throw new Error("No users found");
@@ -27,7 +27,7 @@ export default {
         }
     },
     Mutation: {
-        createUser: async (parent: any, args: any) => {
+        createUser: async (_parent: any, args: any) => {
             try {
                 const userExists: any = await User.findOne({ email: args.email })
                 if (userExists) throw new Error("User already exists.")

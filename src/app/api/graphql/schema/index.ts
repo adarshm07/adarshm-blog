@@ -16,7 +16,7 @@ const Mutation = `
       type Mutation { 
         createUser(name: String!, email: String!,  password: String!, role: String): UserResponse
         deleteUser(id: ID, email: String): UserResponse
-        createPost(title: String!, content: String!, author: ID!): Post
+        createPost(title: String!, content: String!, author: ID, slug: String!): Post
         deletePost(id: ID, slug:String): Post
       }
 `
