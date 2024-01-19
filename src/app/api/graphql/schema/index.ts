@@ -15,9 +15,9 @@ const Query = `
 const Mutation = `
       type Mutation { 
         createUser(name: String!, email: String!,  password: String!, role: String): UserResponse
-        deleteUser(id: ID, email: String): UserResponse
+        deleteUser(_id: ID, email: String): UserResponse
         createPost(title: String!, content: String!, author: ID, slug: String!): Post
-        deletePost(id: ID, slug:String): Post
+        deletePost(_id: ID, slug:String): Post
       }
 `
 const typeDefs = [Query, Mutation, User, Post]
