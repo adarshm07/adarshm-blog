@@ -1,5 +1,5 @@
-import { baseUrl } from 'app/sitemap'
-import { getBlogPosts } from 'app/blog/utils'
+import { baseUrl } from '@/app/sitemap'
+import { getBlogPosts } from '@/app/blog/utils'
 
 export async function GET() {
   let allBlogs = await getBlogPosts()
@@ -18,8 +18,8 @@ export async function GET() {
           <link>${baseUrl}/blog/${post.slug}</link>
           <description>${post.metadata.summary || ''}</description>
           <pubDate>${new Date(
-            post.metadata.publishedAt
-          ).toUTCString()}</pubDate>
+          post.metadata.publishedAt
+        ).toUTCString()}</pubDate>
         </item>`
     )
     .join('\n')
