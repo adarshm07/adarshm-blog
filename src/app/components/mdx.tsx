@@ -1,10 +1,8 @@
 import Link from 'next/link'
 import Image from 'next/image'
-import { MDXRemote } from 'next-mdx-remote/rsc'
+import { MDXRemote, MDXRemoteProps } from 'next-mdx-remote/rsc'
 import { highlight } from 'sugar-high'
 import React from 'react'
-import { UrlObject } from 'url'
-import { PlaceholderValue, OnLoadingComplete } from 'next/dist/shared/lib/get-img-props'
 
 function Table({ data }: { data: any }) {
   let headers = data.headers.map((header: string | number | bigint | boolean | React.ReactElement<any, string | React.JSXElementConstructor<any>> | Iterable<React.ReactNode> | React.ReactPortal | Promise<React.AwaitedReactNode> | null | undefined, index: React.Key | null | undefined) => (
@@ -28,28 +26,31 @@ function Table({ data }: { data: any }) {
   )
 }
 
-function CustomLink(props: (React.JSX.IntrinsicAttributes & Omit<React.AnchorHTMLAttributes<HTMLAnchorElement>, keyof { href: string | UrlObject; as?: string | UrlObject; replace?: boolean; scroll?: boolean; shallow?: boolean; passHref?: boolean; prefetch?: boolean; locale?: string | false; legacyBehavior?: boolean; onMouseEnter?: React.MouseEventHandler<HTMLAnchorElement>; onTouchStart?: React.TouchEventHandler<HTMLAnchorElement>; onClick?: React.MouseEventHandler<HTMLAnchorElement> }> & { href: string | UrlObject; as?: string | UrlObject; replace?: boolean; scroll?: boolean; shallow?: boolean; passHref?: boolean; prefetch?: boolean; locale?: string | false; legacyBehavior?: boolean; onMouseEnter?: React.MouseEventHandler<HTMLAnchorElement>; onTouchStart?: React.TouchEventHandler<HTMLAnchorElement>; onClick?: React.MouseEventHandler<HTMLAnchorElement> } & { children?: React.ReactNode } & React.RefAttributes<HTMLAnchorElement>) | (React.JSX.IntrinsicAttributes & React.ClassAttributes<HTMLAnchorElement> & React.AnchorHTMLAttributes<HTMLAnchorElement>)) {
-  let href: any = props.href
+type CustomLinkProps = {
+  href: string;
+  children: React.ReactNode;
+  [x: string]: any;
+}
 
+function CustomLink({ href, children, ...props }: CustomLinkProps) {
   if (href.startsWith('/')) {
     return (
       <Link href={href} {...props}>
-        {props.children}
+        {children}
       </Link>
     )
   }
 
   if (href.startsWith('#')) {
-    // @ts-ignore
     return <a {...props} />
   }
 
-  // @ts-ignore
   return <a target="_blank" rel="noopener noreferrer" {...props} />
 }
 
-function RoundedImage(props: any) {
-  return <Image alt={props.alt} className="rounded-lg" {...props} />
+function RoundedImage({ alt, ...props }: { alt: string, [x: string]: any }) {
+  // @ts-ignore
+  return <Image alt={alt} className="rounded-lg" {...props} />
 }
 
 function Code({ children, ...props }: { children: any, [x: string]: any }) {
@@ -69,7 +70,8 @@ function slugify(str: { toString: () => string }) {
 }
 
 function createHeading(level: number) {
-  const Heading = ({ children }: { children: any }) => {
+  // @ts-ignore
+  const Heading = ({ children }) => {
     let slug = slugify(children)
     return React.createElement(
       `h${level}`,
@@ -103,10 +105,12 @@ let components = {
   Table,
 }
 
-export function CustomMDX(props: { components: any }) {
+export function CustomMDX(props: React.JSX.IntrinsicAttributes & MDXRemoteProps) {
   return (
-    // @ts-ignore
     <MDXRemote
-      components={{ ...components, ...(props.components || {}) }} />
+      {...props}
+      // @ts-ignore
+      components={{ ...components, ...(props.components || {}) }}
+    />
   )
 }
