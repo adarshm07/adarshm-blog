@@ -1,0 +1,69 @@
+---
+title: "How to Create Your First Micro-Frontend Using NextJS"
+publishedAt: "2024-09-22"
+summary: "Learn how to build your first micro-frontend architecture using NextJS, exploring the benefits of modular development and strategies for seamless integration in modern web applications."
+---
+
+This tutorial focuses on creating a micro-frontend architecture using NextJS and its built-in features. If you're looking to implement micro-frontends with different technologies, this post may not be directly applicable, but it can still provide valuable insights and ideas.
+
+## Introduction to Micro-Frontends
+
+Micro-frontends are an architectural style where independently deliverable frontend applications are composed into a larger, cohesive application. This approach allows for more modular development, easier maintenance, and the ability to use different technologies for different parts of your application.
+
+## Choosing the Right NextJS Version
+
+NextJS offers two routing systems: the traditional Pages Router and the newer App Router. For micro-frontend implementations, you have flexibility in your choice:
+
+- You can use either the Pages Router or the App Router.
+- It's possible to mix and match, creating combinations like app-app, page-page, or page-app for different parts of your micro-frontend architecture.
+
+I've personally experimented with all these combinations, and each has its own advantages depending on your specific use case.
+
+## Step-by-Step Guide to Creating a Micro-Frontend in NextJS
+
+Let's walk through an example of creating a micro-frontend for an e-commerce platform. We'll assume we have a main site at `example-shopping.com` and want to add an admin section as a separate micro-frontend at `example-shopping.com/admin`.
+
+### Step 1: Configure the Admin Micro-Frontend
+
+Let's set up the configuration for our micro-frontend architecture:
+
+1. Main Site (example-shopping.com)
+2. Admin Micro-Frontend (example-shopping.com/admin)
+
+First, let's set up the configuration for the Main site micro-frontend. Open the `next.config.js` file in your main project:
+
+```ts
+/\*_ @type {import('next').NextConfig} _/;
+const nextConfig = {
+  async rewrites() {
+    return [
+      {
+        source: "/admin",
+        destination: "http://localhost:3001",
+      },
+      {
+        source: "/admin/:path*",
+        destination: "http://localhost:3001/:path*",
+      },
+    ];
+  },
+};
+```
+
+**What is rewrites?**
+As per NextJS, Rewrites are,
+
+Rewrites are a powerful feature in NextJS that allow you to map incoming request paths to different destination paths. They act as a URL proxy, masking the actual destination and creating the illusion that the user hasn't navigated away from their current location on the site. This is in contrast to redirects, which visibly change the URL and take the user to a new page.
+
+By using rewrites, we can seamlessly integrate our admin micro-frontend into the main application, providing a unified experience for users while maintaining separation at the development level.
+
+Now, we need to update the admin project, open your next.config.js
+
+```ts
+/\*_ @type {import('next').NextConfig} _/;
+const nextConfig = {
+  assetPrefix: "/admin",
+};
+```
+
+Your micro-frontend is ready now!
