@@ -5,8 +5,8 @@
   "main": "build/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node build/indexjs",
-    "dev": "nodemon src/indexts",
+    "start": "node build/index.js",
+    "dev": "nodemon src/index.js",
     "dev:build": "tsc --watch",
     "clean": "rimraf dist",
     "prebuild": "npm run clean",
