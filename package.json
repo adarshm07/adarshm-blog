@@ -2,7 +2,7 @@
   "name": "codeium-proxy-server",
   "version": "1.0.0",
   "description": "TypeScript proxy server for intercepting Codeium API calls from Windsurf",
-  "main": "dist/server.js",
+  "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
