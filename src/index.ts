@@ -1,9 +1,10 @@
-const express = require('express');
-const { createProxyMiddleware } = require('http-proxy-middleware');
-const cors = require('cors');
+import express, { Request, Response, NextFunction } from 'express';
+import { createProxyMiddleware, Options } from 'http-proxy-middleware';
+import cors from 'cors';
+import { IncomingMessage, ServerResponse } from 'http';
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT: number = parseInt(process.env.PORT || '3001', 10);
 
 // Enable CORS for all routes
 app.use(cors({
@@ -17,7 +18,7 @@ app.use(cors({
 app.use(express.json());
 
 // Log incoming requests
-app.use((req, res, next) => {
+app.use((req: Request, res: Response, next: NextFunction) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
   console.log('Headers:', JSON.stringify(req.headers, null, 2));
   if (req.body && Object.keys(req.body).length > 0) {
@@ -27,7 +28,7 @@ app.use((req, res, next) => {
 });
 
 // Proxy configuration
-const proxyOptions = {
+const proxyOptions: Options = {
   target: 'https://api.codeium.com',
   changeOrigin: true,
   secure: true,
@@ -35,13 +36,14 @@ const proxyOptions = {
   logLevel: 'debug',
   
   // Handle headers
-  onProxyReq: (proxyReq, req, res) => {
-    console.log(`Proxying ${req.method} ${req.url} to https://api.codeium.com${req.url}`);
+  onProxyReq: (proxyReq, req: IncomingMessage, res: ServerResponse) => {
+    const request = req as Request;
+    console.log(`Proxying ${request.method} ${request.url} to https://api.codeium.com${request.url}`);
     
     // Preserve original headers
-    Object.keys(req.headers).forEach(key => {
-      if (key.toLowerCase() !== 'host') {
-        proxyReq.setHeader(key, req.headers[key]);
+    Object.keys(request.headers).forEach(key => {
+      if (key.toLowerCase() !== 'host' && request.headers[key]) {
+        proxyReq.setHeader(key, request.headers[key] as string);
       }
     });
     
@@ -49,8 +51,8 @@ const proxyOptions = {
     proxyReq.setHeader('host', 'api.codeium.com');
     
     // If there's a body, make sure it's properly forwarded
-    if (req.body && Object.keys(req.body).length > 0) {
-      const bodyData = JSON.stringify(req.body);
+    if ((request as any).body && Object.keys((request as any).body).length > 0) {
+      const bodyData = JSON.stringify((request as any).body);
       proxyReq.setHeader('Content-Type', 'application/json');
       proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
       proxyReq.write(bodyData);
@@ -58,20 +60,24 @@ const proxyOptions = {
   },
   
   // Handle response
-  onProxyRes: (proxyRes, req, res) => {
+  onProxyRes: (proxyRes: IncomingMessage, req: IncomingMessage, res: ServerResponse) => {
+    const request = req as Request;
     console.log(`Response from api.codeium.com: ${proxyRes.statusCode}`);
     
     // Add CORS headers to response
-    proxyRes.headers['Access-Control-Allow-Origin'] = '*';
-    proxyRes.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH';
-    proxyRes.headers['Access-Control-Allow-Headers'] = '*';
-    proxyRes.headers['Access-Control-Allow-Credentials'] = 'true';
+    if (proxyRes.headers) {
+      proxyRes.headers['Access-Control-Allow-Origin'] = '*';
+      proxyRes.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH';
+      proxyRes.headers['Access-Control-Allow-Headers'] = '*';
+      proxyRes.headers['Access-Control-Allow-Credentials'] = 'true';
+    }
   },
   
   // Handle errors
-  onError: (err, req, res) => {
+  onError: (err: Error, req: IncomingMessage, res: ServerResponse) => {
+    const response = res as Response;
     console.error('Proxy error:', err);
-    res.status(500).json({
+    response.status(500).json({
       error: 'Proxy error',
       message: err.message,
       timestamp: new Date().toISOString()
@@ -86,7 +92,7 @@ const apiProxy = createProxyMiddleware(proxyOptions);
 app.use('/', apiProxy);
 
 // Health check endpoint (accessible before proxy catches all routes)
-app.get('/health', (req, res) => {
+app.get('/health', (req: Request, res: Response) => {
   res.json({
     status: 'OK',
     timestamp: new Date().toISOString(),
