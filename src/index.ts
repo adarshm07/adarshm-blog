@@ -31,7 +31,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 // Proxy configuration
 const proxyOptions: Options = {
-  target: "https://api.codeium.com",
+  target: "https://server.codeium.com",
   changeOrigin: true,
   secure: false,
   followRedirects: true,
@@ -44,7 +44,7 @@ const proxyOptions: Options = {
   onProxyReq: (proxyReq, req: IncomingMessage, res: ServerResponse) => {
     const request = req as Request;
     console.log(
-      `Proxying ${request.method} ${request.url} to https://api.codeium.com${request.url}`,
+      `Proxying ${request.method} ${request.url} to https://server.codeium.com${request.url}`,
     );
 
     // Preserve original headers
