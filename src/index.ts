@@ -111,7 +111,7 @@ app.get("/health", (req: Request, res: Response) => {
   res.json({
     status: "OK",
     timestamp: new Date().toISOString(),
-    proxy_target: "https://api.codeium.com",
+    proxy_target: "https://server.codeium.com",
   });
 });
 
