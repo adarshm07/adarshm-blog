@@ -29,96 +29,106 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// Proxy configuration
-const proxyOptions: Options = {
-  target: "https://server.codeium.com",
-  changeOrigin: true,
-  secure: false,
-  followRedirects: true,
-  logLevel: "debug",
-  // agent: new require("https").Agent({
-  //   rejectUnauthorized: false,
-  // }),
+// Determine proxy target dynamically
+const resolveTarget = (req: Request): string => {
+  const { hostname, path } = req;
 
-  // Handle headers
-  onProxyReq: (proxyReq, req: IncomingMessage, res: ServerResponse) => {
-    const request = req as Request;
-    console.log(
-      `Proxying ${request.method} ${request.url} to https://server.codeium.com${request.url}`,
-    );
+  const defaultTarget = "https://server.codeium.com";
 
-    // Preserve original headers
-    Object.keys(request.headers).forEach((key) => {
-      if (key.toLowerCase() !== "host" && request.headers[key]) {
-        proxyReq.setHeader(key, request.headers[key] as string);
-      }
-    });
+  const targetMap: { [key: string]: string } = {
+    "/unleash": "https://unleash.codeium.com",
+    "/inference": "https://inference.codeium.com",
+    "/server": "https://server.codeium.com",
+    "/codeiumdata": "https://codeiumdata.com",
+  };
 
-    // Set proper host header for the target
-    proxyReq.setHeader("host", "api.codeium.com");
-
-    // If there's a body, make sure it's properly forwarded
-    if (
-      (request as any).body &&
-      Object.keys((request as any).body).length > 0
-    ) {
-      const bodyData = JSON.stringify((request as any).body);
-      proxyReq.setHeader("Content-Type", "application/json");
-      proxyReq.setHeader("Content-Length", Buffer.byteLength(bodyData));
-      proxyReq.write(bodyData);
+  for (const prefix in targetMap) {
+    if (req.url.startsWith(prefix)) {
+      return targetMap[prefix]!;
     }
-  },
+  }
 
-  // Handle response
-  onProxyRes: (
-    proxyRes: IncomingMessage,
-    req: IncomingMessage,
-    res: ServerResponse,
-  ) => {
-    const request = req as Request;
-    console.log(`Response from api.codeium.com: ${proxyRes.statusCode}`);
+  // Handle *.codeiumdata.com dynamically based on Host header
+  if (req.headers.host && req.headers.host.endsWith(".codeiumdata.com")) {
+    return `https://${req.headers.host}`;
+  }
 
-    // Add CORS headers to response
-    if (proxyRes.headers) {
-      proxyRes.headers["Access-Control-Allow-Origin"] = "*";
-      proxyRes.headers["Access-Control-Allow-Methods"] =
-        "GET, POST, PUT, DELETE, OPTIONS, PATCH";
-      proxyRes.headers["Access-Control-Allow-Headers"] = "*";
-      proxyRes.headers["Access-Control-Allow-Credentials"] = "true";
-    }
-  },
-
-  // Handle errors
-  onError: (err: Error, req: IncomingMessage, res: ServerResponse) => {
-    const response = res as Response;
-    console.error("Proxy error:", err);
-    response.status(500).json({
-      error: "Proxy error",
-      message: err.message,
-      timestamp: new Date().toISOString(),
-    });
-  },
+  return defaultTarget;
 };
 
-// Create proxy middleware
-const apiProxy = createProxyMiddleware(proxyOptions);
+// Proxy handler
+app.use(
+  "/",
+  (req, res, next) => {
+    const dynamicTarget = resolveTarget(req);
+    console.log(`🔀 Routing to: ${dynamicTarget}${req.url}`);
 
-// Route all requests to the proxy
-app.use("/", apiProxy);
+    return createProxyMiddleware({
+      target: dynamicTarget,
+      changeOrigin: true,
+      secure: false,
+      followRedirects: true,
+      logLevel: "debug",
 
-// Health check endpoint (accessible before proxy catches all routes)
+      onProxyReq: (proxyReq, req, res) => {
+        const request = req as Request;
+        Object.keys(request.headers).forEach((key) => {
+          if (key.toLowerCase() !== "host" && request.headers[key]) {
+            proxyReq.setHeader(key, request.headers[key] as string);
+          }
+        });
+
+        proxyReq.setHeader("host", new URL(dynamicTarget).hostname);
+
+        if ((request as any).body && Object.keys((request as any).body).length > 0) {
+          const bodyData = JSON.stringify((request as any).body);
+          proxyReq.setHeader("Content-Type", "application/json");
+          proxyReq.setHeader("Content-Length", Buffer.byteLength(bodyData));
+          proxyReq.write(bodyData);
+        }
+      },
+
+      onProxyRes: (proxyRes, req, res) => {
+        console.log(`✅ Response from ${resolveTarget(req)}: ${proxyRes.statusCode}`);
+        if (proxyRes.headers) {
+          proxyRes.headers["Access-Control-Allow-Origin"] = "*";
+          proxyRes.headers["Access-Control-Allow-Methods"] =
+            "GET, POST, PUT, DELETE, OPTIONS, PATCH";
+          proxyRes.headers["Access-Control-Allow-Headers"] = "*";
+          proxyRes.headers["Access-Control-Allow-Credentials"] = "true";
+        }
+      },
+
+      onError: (err, req, res) => {
+        const response = res as Response;
+        console.error("❌ Proxy error:", err);
+        response.status(500).json({
+          error: "Proxy error",
+          message: err.message,
+          timestamp: new Date().toISOString(),
+        });
+      },
+    })(req, res, next);
+  },
+);
+
+// Health check
 app.get("/health", (req: Request, res: Response) => {
   res.json({
     status: "OK",
     timestamp: new Date().toISOString(),
-    proxy_target: "https://server.codeium.com",
+    proxy_targets: [
+      "https://server.codeium.com",
+      "https://unleash.codeium.com",
+      "https://inference.codeium.com",
+      "https://codeiumdata.com",
+      "*.codeiumdata.com",
+    ],
   });
 });
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`🚀 Codeium API Proxy Server running on port ${PORT}`);
-  console.log(`📡 Proxying all requests to: https://api.codeium.com`);
-  console.log(`🔗 Configure Windsurf to use: http://localhost:${PORT}`);
-  console.log(`💚 Health check available at: http://localhost:${PORT}/health`);
+  console.log(`🚀 Codeium Multi-Target Proxy Server running on port ${PORT}`);
+  console.log(`🔗 Configure your app to use: http://localhost:${PORT}`);
 });
