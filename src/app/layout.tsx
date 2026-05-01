@@ -3,8 +3,6 @@ import type { Metadata } from 'next'
 import { GeistSans } from 'geist/font/sans'
 import { GeistMono } from 'geist/font/mono'
 import { Navbar } from './components/nav'
-// import { Analytics } from '@vercel/analytics/react'
-// import { SpeedInsights } from '@vercel/speed-insights/next'
 import Footer from './components/footer'
 import { baseUrl } from './sitemap'
 
@@ -14,10 +12,10 @@ export const metadata: Metadata = {
     default: 'adarshm.com',
     template: '%s | adarshm.com',
   },
-  description: 'adarshm.com blog',
+  description: 'Adarsh M. — JavaScript developer writing about the web.',
   openGraph: {
     title: 'adarshm.com',
-    description: 'adarshm.com blog',
+    description: 'Adarsh M. — JavaScript developer writing about the web.',
     url: baseUrl,
     siteName: 'adarshm.com',
     locale: 'en_US',
@@ -36,10 +34,6 @@ export const metadata: Metadata = {
   },
 }
 
-type ClassValue = string | { [key: string]: boolean } | undefined | null
-
-const cx = (...classes: ClassValue[]) => classes.filter(Boolean).join(' ')
-
 export default function RootLayout({
   children,
 }: {
@@ -48,19 +42,13 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={cx(
-        'text-black bg-white dark:text-white dark:bg-black',
-        GeistSans.variable,
-        GeistMono.variable
-      )}
+      className={`${GeistSans.variable} ${GeistMono.variable} text-black bg-white dark:text-white dark:bg-[#0a0a0a]`}
     >
-      <body className="antialiased max-w-xl mx-4 mt-8 lg:mx-auto">
+      <body className="antialiased max-w-2xl mx-4 mt-8 lg:mx-auto">
         <main className="flex-auto min-w-0 mt-6 flex flex-col px-2 md:px-0">
           <Navbar />
           {children}
           <Footer />
-          {/* <Analytics /> */}
-          {/* <SpeedInsights /> */}
         </main>
       </body>
     </html>

@@ -1,13 +1,6 @@
-/* @import 'tailwindcss'; */
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
-::selection {
-  background-color: #47a3f3;
-  color: #fefefe;
-}
-
+/* sugar-high syntax colors — light */
 :root {
   --sh-class: #2d5e9d;
   --sh-identifier: #354150;
@@ -23,12 +16,26 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --sh-class: #4c97f8;
-    --sh-identifier: white;
+    --sh-identifier: #e2e8f0;
     --sh-keyword: #f47067;
     --sh-string: #0fa295;
+    --sh-sign: #7d8590;
+    --sh-comment: #6e7681;
   }
   html {
     color-scheme: dark;
+  }
+}
+
+::selection {
+  background-color: #dcfce7;
+  color: #14532d;
+}
+
+@media (prefers-color-scheme: dark) {
+  ::selection {
+    background-color: #14532d;
+    color: #dcfce7;
   }
 }
 
@@ -36,9 +43,10 @@ html {
   min-width: 360px;
 }
 
+/* ── Prose ───────────────────────────────────────────────── */
+
 .prose .anchor {
   @apply absolute invisible no-underline;
-
   margin-left: -1em;
   padding-right: 0.5em;
   width: 80%;
@@ -50,31 +58,67 @@ html {
   @apply visible;
 }
 
-.prose a {
-  @apply underline transition-all decoration-neutral-400 dark:decoration-neutral-600 underline-offset-2 decoration-[0.1em];
-}
-
-.prose .anchor:after {
-  @apply text-neutral-300 dark:text-neutral-700;
-  content: "#";
-}
-
 .prose *:hover > .anchor {
   @apply visible;
 }
 
+.prose .anchor:after {
+  content: "#";
+  color: #d1d5db;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose .anchor:after {
+    color: #374151;
+  }
+}
+
+.prose a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  text-decoration-color: #d1d5db;
+  transition: text-decoration-color 0.15s;
+}
+
+.prose a:hover {
+  text-decoration-color: #16a34a;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose a {
+    text-decoration-color: #374151;
+  }
+  .prose a:hover {
+    text-decoration-color: #22c55e;
+  }
+}
+
 .prose pre {
-  @apply bg-neutral-50 dark:bg-neutral-900 rounded-lg overflow-x-auto border border-neutral-200 dark:border-neutral-900 py-2 px-3 text-sm;
+  @apply rounded-xl overflow-x-auto py-4 px-5 text-sm my-6;
+  background-color: #0d1117;
+  border: 1px solid #21262d;
+  line-height: 1.7;
 }
 
 .prose code {
-  @apply px-1 py-0.5 rounded-lg;
+  @apply px-1.5 py-0.5 rounded-md text-sm;
+  background-color: #f3f4f6;
+  color: #111827;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose code {
+    background-color: #1f2937;
+    color: #e5e7eb;
+  }
 }
 
 .prose pre code {
-  @apply p-0;
-  border: initial;
-  line-height: 1.5;
+  @apply p-0 text-sm;
+  background-color: transparent;
+  color: #e6edf3;
+  border: none;
 }
 
 .prose code span {
@@ -82,58 +126,117 @@ html {
 }
 
 .prose img {
-  /* Don't apply styles to next/image */
-  @apply m-0;
+  @apply m-0 rounded-xl;
 }
 
 .prose p {
-  @apply my-4 text-neutral-800 dark:text-neutral-200;
+  @apply my-5 leading-relaxed;
+  color: #374151;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose p {
+    color: #d1d5db;
+  }
 }
 
 .prose h1 {
-  @apply text-4xl font-medium tracking-tight mt-6 mb-2;
+  @apply text-3xl font-semibold tracking-tight mt-10 mb-4;
+  color: #111827;
 }
 
 .prose h2 {
-  @apply text-xl font-medium tracking-tight mt-6 mb-2;
+  @apply text-2xl font-semibold tracking-tight mt-10 mb-3;
+  color: #111827;
 }
 
 .prose h3 {
-  @apply text-xl font-medium tracking-tight mt-6 mb-2;
+  @apply text-xl font-semibold tracking-tight mt-8 mb-3;
+  color: #111827;
 }
 
 .prose h4 {
-  @apply text-lg font-medium tracking-tight mt-6 mb-2;
+  @apply text-lg font-semibold tracking-tight mt-6 mb-2;
+  color: #111827;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose h1,
+  .prose h2,
+  .prose h3,
+  .prose h4 {
+    color: #f9fafb;
+  }
 }
 
 .prose strong {
-  @apply font-medium;
+  @apply font-semibold;
+  color: #111827;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose strong {
+    color: #f3f4f6;
+  }
 }
 
 .prose ul {
-  @apply list-disc pl-6;
+  @apply list-disc pl-6 my-4 space-y-1;
 }
 
 .prose ol {
-  @apply list-decimal pl-6;
+  @apply list-decimal pl-6 my-4 space-y-1;
+}
+
+.prose li {
+  color: #374151;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose li {
+    color: #d1d5db;
+  }
+}
+
+.prose blockquote {
+  @apply border-l-4 pl-4 my-6 italic;
+  border-color: #16a34a;
+  color: #6b7280;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose blockquote {
+    color: #9ca3af;
+  }
+}
+
+.prose hr {
+  @apply my-8;
+  border-color: #f3f4f6;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose hr {
+    border-color: #1f2937;
+  }
 }
 
 .prose > :first-child {
-  /* Override removing top margin, causing layout shift */
   margin-top: 1.25em !important;
   margin-bottom: 1.25em !important;
 }
+
+/* ── Utilities ───────────────────────────────────────────── */
 
 pre::-webkit-scrollbar {
   display: none;
 }
 
 pre {
-  -ms-overflow-style: none; /* IE and Edge */
-  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
-/* Remove Safari input shadow on mobile */
 input[type="text"],
 input[type="email"] {
   -webkit-appearance: none;

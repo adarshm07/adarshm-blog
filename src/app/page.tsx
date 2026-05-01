@@ -2,15 +2,21 @@ import { BlogPosts } from '@/app/components/posts'
 
 export default function Page() {
   return (
-    <section>
-      <h1 className="mb-4 text-2xl font-semibold tracking-tighter">
-        Hi, Welcome to my blog!
-      </h1>
-      <h2 className="mb-8 text-3xl font-semibold tracking-tighter">
-        I am Adarsh M. &nbsp; A JavaScript developer. Kerala, India.
-      </h2>
-      <div className="my-8">
-        <h3 className="mb-8 text-2xl font-semibold tracking-tighter border-b border-green-600 w-fit">Blog</h3>
+    <section className="space-y-12">
+      <div>
+        <h1 className="mb-2 text-2xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-50">
+          Hi, I&apos;m{' '}
+          <span className="text-green-600 dark:text-green-500">Adarsh M.</span>
+        </h1>
+        <p className="text-neutral-500 dark:text-neutral-400">
+          JavaScript developer &middot; Kerala, India
+        </p>
+      </div>
+
+      <div>
+        <h2 className="mb-4 text-xs font-medium uppercase tracking-widest text-neutral-400 dark:text-neutral-500">
+          Writing
+        </h2>
         <BlogPosts />
       </div>
     </section>

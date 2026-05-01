@@ -4,26 +4,20 @@ import { formatDate, getBlogPosts } from '@/app/blog/utils'
 import { baseUrl } from '@/app/sitemap'
 
 export async function generateStaticParams() {
-  let posts = getBlogPosts()
-
-  return posts.map((post: { slug: any }) => ({
-    slug: post.slug,
-  }))
+  return getBlogPosts().map((post) => ({ slug: post.slug }))
 }
 
-export function generateMetadata({ params }: { params: any }) {
-  let post = getBlogPosts().find((post: { slug: any }) => post.slug === params.slug)
-  if (!post) {
-    return
-  }
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ slug: string }>
+}) {
+  const { slug } = await params
+  const post = getBlogPosts().find((p) => p.slug === slug)
+  if (!post) return
 
-  let {
-    title,
-    publishedAt: publishedTime,
-    summary: description,
-    image,
-  } = post.metadata
-  let ogImage = image
+  const { title, publishedAt, summary: description, image } = post.metadata
+  const ogImage = image
     ? image
     : `${baseUrl}/og?title=${encodeURIComponent(title)}`
 
@@ -34,13 +28,9 @@ export function generateMetadata({ params }: { params: any }) {
       title,
       description,
       type: 'article',
-      publishedTime,
+      publishedTime: publishedAt,
       url: `${baseUrl}/blog/${post.slug}`,
-      images: [
-        {
-          url: ogImage,
-        },
-      ],
+      images: [{ url: ogImage }],
     },
     twitter: {
       card: 'summary_large_image',
@@ -51,12 +41,15 @@ export function generateMetadata({ params }: { params: any }) {
   }
 }
 
-export default function Blog({ params }: { params: any }) {
-  let post = getBlogPosts().find((post: { slug: any }) => post.slug === params.slug)
+export default async function Blog({
+  params,
+}: {
+  params: Promise<{ slug: string }>
+}) {
+  const { slug } = await params
+  const post = getBlogPosts().find((p) => p.slug === slug)
 
-  if (!post) {
-    notFound()
-  }
+  if (!post) notFound()
 
   return (
     <section>
@@ -77,21 +70,22 @@ export default function Blog({ params }: { params: any }) {
             url: `${baseUrl}/blog/${post.slug}`,
             author: {
               '@type': 'Person',
-              name: 'My Portfolio',
+              name: 'Adarsh M.',
             },
           }),
         }}
       />
-      <h1 className="title font-semibold text-2xl tracking-tighter">
-        {post.metadata.title}
-      </h1>
-      <div className="flex justify-between items-center mt-2 mb-8 text-sm">
-        <p className="text-sm text-neutral-600 dark:text-neutral-400">
+
+      <div className="mb-10 pb-8 border-b border-neutral-100 dark:border-neutral-800">
+        <h1 className="title font-semibold text-2xl tracking-tight text-neutral-900 dark:text-neutral-50 mb-3">
+          {post.metadata.title}
+        </h1>
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">
           {formatDate(post.metadata.publishedAt)}
         </p>
       </div>
+
       <article className="prose">
-        {/* @ts-ignore */}
         <CustomMDX source={post.content} />
       </article>
     </section>

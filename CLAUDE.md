@@ -13,9 +13,19 @@ yarn lint     # Run Next.js ESLint
 
 No test suite is configured in this project.
 
+## Stack
+
+- **Next.js 16** (App Router, Turbopack)
+- **React 19**
+- **Tailwind CSS 4** — CSS-first config, no `tailwind.config.ts`
+- **next-mdx-remote 6** — RSC MDX rendering
+- **sugar-high** — code syntax highlighting
+- **Geist** fonts (sans + mono)
+- **TypeScript** (strict mode)
+
 ## Architecture
 
-This is a personal blog for Adarsh M built with Next.js 14 App Router, TypeScript, and Tailwind CSS. Blog content is authored in MDX and rendered via `next-mdx-remote/rsc`.
+This is a personal blog for Adarsh M. Blog content is authored in MDX and rendered via `next-mdx-remote/rsc`.
 
 ### Content pipeline
 
@@ -42,8 +52,8 @@ image: "/optional-og-image.png"   # optional; falls back to auto-generated OG im
 - **Headings (h1–h6)** — auto-generate slugified `id` attributes and anchor links
 - **`a`** — internal paths use Next.js `<Link>`, `#` anchors render plain `<a>`, external links get `target="_blank" rel="noopener noreferrer"`
 - **`code`** — syntax-highlighted with `sugar-high`
-- **`Image`** — renders Next.js `<Image>` with `rounded-lg`
-- **`Table`** — accepts a `{ headers, rows }` data prop
+- **`Image`** — renders Next.js `<Image>` with `rounded-xl`
+- **`Table`** — accepts a `{ headers: string[], rows: string[][] }` data prop
 
 ### Special routes
 
@@ -55,12 +65,35 @@ image: "/optional-og-image.png"   # optional; falls back to auto-generated OG im
 
 `baseUrl` (`https://adarshm.com`) is defined once in `src/app/sitemap.ts` and imported wherever an absolute URL is needed.
 
+### Tailwind CSS 4 conventions
+
+- Config is CSS-first: there is no `tailwind.config.ts`. Theme overrides live in `src/app/global.css` inside an `@theme {}` block if needed.
+- `global.css` opens with `@import "tailwindcss"` (replaces the three old `@tailwind` directives).
+- PostCSS uses `@tailwindcss/postcss` (not the legacy `tailwindcss` plugin).
+- Dark mode is media-query based (`prefers-color-scheme`). Prose dark-mode styles in `global.css` use explicit `@media (prefers-color-scheme: dark)` blocks instead of `@apply dark:*` to avoid Tailwind 4 `@apply` variant limitations.
+
+### Next.js 16 async params
+
+Dynamic routes must treat `params` as a `Promise`. Always destructure after awaiting:
+
+```tsx
+export default async function Page({
+  params,
+}: {
+  params: Promise<{ slug: string }>
+}) {
+  const { slug } = await params
+  ...
+}
+```
+
 ### Styling conventions
 
-- Tailwind CSS with dark mode support via the `dark:` variant
-- Body is constrained to `max-w-xl`, centered with `mx-auto`
-- Fonts: `GeistSans` and `GeistMono` via the `geist` package, applied as CSS variables on `<html>`
+- Layout: `max-w-2xl` centered with `lg:mx-auto`
+- Fonts: `GeistSans.variable` and `GeistMono.variable` applied to `<html>`
+- Accent color: green-600 / green-500 (dark mode)
 - Path alias `@/*` maps to `./src/*`
+- Navbar (`src/app/components/nav.tsx`) is a `'use client'` component — it uses `usePathname()` for the active-link highlight.
 
 ### Adding nav links
 
