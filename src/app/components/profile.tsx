@@ -1,7 +1,7 @@
 import Image from 'next/image'
 import { getGithubProfile } from '@/app/lib/github'
 
-const LINKEDIN_URL = 'https://www.linkedin.com/in/adarshm/'
+const LINKEDIN_URL = 'https://www.linkedin.com/in/adarshm07/'
 
 function GithubIcon() {
   return (
