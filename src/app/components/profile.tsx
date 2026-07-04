@@ -31,79 +31,63 @@ export async function Profile() {
   const profile = await getGithubProfile()
 
   const name = profile?.name ?? 'Adarsh M'
-  const bio = profile?.bio ?? '⚡ Learning JS'
-  const location = profile?.location ?? 'Kerala, India'
   const avatarUrl = profile?.avatar_url ?? null
-  const publicRepos = profile?.public_repos ?? 61
-  const followers = profile?.followers ?? 8
   const twitterUsername = profile?.twitter_username ?? 'adarshm07'
   const githubUrl = profile?.html_url ?? 'https://github.com/adarshm07'
 
   return (
-    <div className="flex flex-col sm:flex-row items-start gap-5">
+    <div className="flex flex-col sm:flex-row sm:items-center gap-5">
       {avatarUrl && (
         <Image
           src={avatarUrl}
           alt={name}
-          width={80}
-          height={80}
+          width={64}
+          height={64}
           className="rounded-full ring-2 ring-neutral-100 dark:ring-neutral-800 shrink-0"
           priority
         />
       )}
 
       <div className="flex-1 min-w-0">
-        <h1 className="text-xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-50">
+        <h1 className="text-2xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-50">
           {name}
         </h1>
-        <p className="mt-0.5 text-sm text-neutral-500 dark:text-neutral-400">
-          {bio}
-        </p>
-        <p className="mt-0.5 text-sm text-neutral-400 dark:text-neutral-500">
-          {location}
+        <p className="mt-1.5 text-sm leading-relaxed text-neutral-500 dark:text-neutral-400">
+          Software engineer based in Kerala, India. I build for the web and
+          write here about JavaScript, frontend architecture, and things I
+          pick up along the way.
         </p>
 
-        <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
-          <div className="flex items-center gap-4 text-xs text-neutral-400 dark:text-neutral-500">
-            <span>
-              <strong className="text-neutral-700 dark:text-neutral-300">{publicRepos}</strong> repos
-            </span>
-            <span>
-              <strong className="text-neutral-700 dark:text-neutral-300">{followers}</strong> followers
-            </span>
-          </div>
-
-          <div className="flex items-center gap-3">
+        <div className="mt-3 flex items-center gap-3">
+          <a
+            href={githubUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="GitHub"
+            className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 transition-colors"
+          >
+            <GithubIcon />
+          </a>
+          {twitterUsername && (
             <a
-              href={githubUrl}
+              href={`https://x.com/${twitterUsername}`}
               target="_blank"
               rel="noopener noreferrer"
-              aria-label="GitHub"
+              aria-label="X / Twitter"
               className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 transition-colors"
             >
-              <GithubIcon />
+              <TwitterIcon />
             </a>
-            {twitterUsername && (
-              <a
-                href={`https://x.com/${twitterUsername}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="X / Twitter"
-                className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 transition-colors"
-              >
-                <TwitterIcon />
-              </a>
-            )}
-            <a
-              href={LINKEDIN_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="LinkedIn"
-              className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 transition-colors"
-            >
-              <LinkedInIcon />
-            </a>
-          </div>
+          )}
+          <a
+            href={LINKEDIN_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="LinkedIn"
+            className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 transition-colors"
+          >
+            <LinkedInIcon />
+          </a>
         </div>
       </div>
     </div>
