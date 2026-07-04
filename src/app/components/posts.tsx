@@ -24,7 +24,7 @@ export function BlogPosts({
           href={`/blog/${post.slug}`}
           className="group block py-4 -mx-3 px-3 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-900/50 transition-colors"
         >
-          <div className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-4">
+          <div className="flex flex-col gap-1">
             <span className="text-sm text-neutral-400 dark:text-neutral-500 tabular-nums shrink-0">
               {formatDate(post.metadata.publishedAt, false)}
               <span className="mx-1.5">·</span>
