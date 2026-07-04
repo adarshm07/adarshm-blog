@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { formatDate, getBlogPosts } from '@/app/blog/utils'
+import { formatDate, getBlogPosts, getReadingTime } from '@/app/blog/utils'
 
 export function BlogPosts({
   limit,
@@ -27,6 +27,8 @@ export function BlogPosts({
           <div className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-4">
             <span className="text-sm text-neutral-400 dark:text-neutral-500 tabular-nums shrink-0">
               {formatDate(post.metadata.publishedAt, false)}
+              <span className="mx-1.5">·</span>
+              {getReadingTime(post.content)} min read
             </span>
             <span className="font-medium text-neutral-800 dark:text-neutral-200 group-hover:text-green-600 dark:group-hover:text-green-400 transition-colors">
               {post.metadata.title}

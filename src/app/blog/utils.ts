@@ -53,6 +53,38 @@ export function getBlogPosts() {
   return getMDXData(path.join(process.cwd(), 'src', 'app', 'blog', 'posts'))
 }
 
+export function slugify(str: string) {
+  return str
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/&/g, '-and-')
+    .replace(/[^\w-]+/g, '')
+    .replace(/--+/g, '-')
+}
+
+export type Heading = { level: number; text: string; slug: string }
+
+export function getHeadings(content: string): Heading[] {
+  const headingRegex = /^(#{2,3})\s+(.*)$/gm
+  const headings: Heading[] = []
+  let match: RegExpExecArray | null
+
+  while ((match = headingRegex.exec(content)) !== null) {
+    const text = match[2].trim()
+    headings.push({ level: match[1].length, text, slug: slugify(text) })
+  }
+
+  return headings
+}
+
+const WORDS_PER_MINUTE = 200
+
+export function getReadingTime(content: string) {
+  const words = content.trim().split(/\s+/).filter(Boolean).length
+  return Math.max(1, Math.ceil(words / WORDS_PER_MINUTE))
+}
+
 export function formatDate(date: string, includeRelative = false) {
   let currentDate = new Date()
   if (!date.includes('T')) {

@@ -3,6 +3,7 @@ import Image from 'next/image'
 import { MDXRemote, MDXRemoteProps } from 'next-mdx-remote/rsc'
 import { highlight } from 'sugar-high'
 import React from 'react'
+import { slugify } from '@/app/blog/utils'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
   return (
@@ -59,16 +60,6 @@ function RoundedImage({
 function Code({ children, ...props }: { children: string }) {
   const codeHTML = highlight(children)
   return <code dangerouslySetInnerHTML={{ __html: codeHTML }} {...props} />
-}
-
-function slugify(str: string) {
-  return str
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, '-')
-    .replace(/&/g, '-and-')
-    .replace(/[^\w-]+/g, '')
-    .replace(/--+/g, '-')
 }
 
 function createHeading(level: number) {

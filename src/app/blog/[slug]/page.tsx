@@ -1,6 +1,13 @@
 import { notFound } from 'next/navigation'
 import { CustomMDX } from '@/app/components/mdx'
-import { formatDate, getBlogPosts } from '@/app/blog/utils'
+import { ReadingProgress } from '@/app/components/reading-progress'
+import { TableOfContents } from '@/app/components/toc'
+import {
+  formatDate,
+  getBlogPosts,
+  getHeadings,
+  getReadingTime,
+} from '@/app/blog/utils'
 import { baseUrl } from '@/app/sitemap'
 
 export async function generateStaticParams() {
@@ -51,8 +58,13 @@ export default async function Blog({
 
   if (!post) notFound()
 
+  const headings = getHeadings(post.content)
+
   return (
     <section>
+      <ReadingProgress />
+      <TableOfContents headings={headings} />
+
       <script
         type="application/ld+json"
         suppressHydrationWarning
@@ -82,6 +94,8 @@ export default async function Blog({
         </h1>
         <p className="text-sm text-neutral-500 dark:text-neutral-400">
           {formatDate(post.metadata.publishedAt)}
+          <span className="mx-1.5">·</span>
+          {getReadingTime(post.content)} min read
         </p>
       </div>
 
