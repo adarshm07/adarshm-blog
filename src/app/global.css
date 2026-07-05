@@ -237,6 +237,38 @@ html {
   margin-bottom: 1.25em !important;
 }
 
+.prose table {
+  @apply my-6 text-sm;
+}
+
+.prose th,
+.prose td {
+  @apply border px-3 py-2 text-left;
+  border-color: #e5e7eb;
+}
+
+.prose th {
+  @apply font-semibold;
+  color: #111827;
+}
+
+.prose td {
+  color: #374151;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose th,
+  .prose td {
+    border-color: #1f2937;
+  }
+  .prose th {
+    color: #f9fafb;
+  }
+  .prose td {
+    color: #d1d5db;
+  }
+}
+
 /* ── Utilities ───────────────────────────────────────────── */
 
 pre::-webkit-scrollbar {

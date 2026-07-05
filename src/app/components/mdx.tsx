@@ -3,6 +3,7 @@ import Image from 'next/image'
 import { MDXRemote, MDXRemoteProps } from 'next-mdx-remote/rsc'
 import { highlight } from 'sugar-high'
 import React from 'react'
+import { SortVisualizer } from '@/app/components/sort-visualizer'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
   return (
@@ -100,6 +101,7 @@ const components = {
   a: CustomLink,
   code: Code,
   Table,
+  SortVisualizer,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {
