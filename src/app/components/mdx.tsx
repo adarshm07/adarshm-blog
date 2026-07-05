@@ -4,6 +4,7 @@ import { MDXRemote, MDXRemoteProps } from 'next-mdx-remote/rsc'
 import { highlight } from 'sugar-high'
 import React from 'react'
 import { SortVisualizer } from '@/app/components/sort-visualizer'
+import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
   return (
@@ -62,6 +63,25 @@ function Code({ children, ...props }: { children: string }) {
   return <code dangerouslySetInnerHTML={{ __html: codeHTML }} {...props} />
 }
 
+function Pre({
+  children,
+  ...props
+}: React.HTMLAttributes<HTMLPreElement>) {
+  let code = ''
+  if (React.isValidElement(children)) {
+    const childProps = children.props as { children?: unknown }
+    if (typeof childProps.children === 'string') {
+      code = childProps.children
+    }
+  }
+  return (
+    <div className="group relative">
+      <CopyButton code={code} />
+      <pre {...props}>{children}</pre>
+    </div>
+  )
+}
+
 function slugify(str: string) {
   return str
     .toLowerCase()
@@ -100,6 +120,7 @@ const components = {
   Image: RoundedImage,
   a: CustomLink,
   code: Code,
+  pre: Pre,
   Table,
   SortVisualizer,
 }

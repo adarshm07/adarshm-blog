@@ -10,11 +10,14 @@
   },
   "dependencies": {
     "geist": "^1.7.0",
-    "next": "16.2.4",
+    "next": "16.2.10",
     "next-mdx-remote": "^6.0.0",
     "react": "^19",
     "react-dom": "^19",
     "sugar-high": "^1.1.0"
+  },
+  "resolutions": {
+    "postcss": "^8.5.16"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.4",

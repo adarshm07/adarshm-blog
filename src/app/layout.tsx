@@ -13,6 +13,21 @@ export const metadata: Metadata = {
     template: '%s | adarshm.com',
   },
   description: 'Adarsh M. — JavaScript developer writing about the web.',
+  keywords: [
+    'Adarsh M',
+    'software engineer',
+    'JavaScript',
+    'web development',
+    'data structures',
+    'algorithms',
+    'system design',
+    'blog',
+  ],
+  authors: [{ name: 'Adarsh M.', url: baseUrl }],
+  creator: 'Adarsh M.',
+  alternates: {
+    canonical: './',
+  },
   openGraph: {
     title: 'adarshm.com',
     description: 'Adarsh M. — JavaScript developer writing about the web.',
@@ -20,6 +35,21 @@ export const metadata: Metadata = {
     siteName: 'adarshm.com',
     locale: 'en_US',
     type: 'website',
+    images: [
+      {
+        url: `/og?title=${encodeURIComponent('adarshm.com')}`,
+        width: 1200,
+        height: 630,
+        alt: 'adarshm.com',
+      },
+    ],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'adarshm.com',
+    description: 'Adarsh M. — JavaScript developer writing about the web.',
+    creator: '@adarshm07',
+    images: [`/og?title=${encodeURIComponent('adarshm.com')}`],
   },
   robots: {
     index: true,
