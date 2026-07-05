@@ -2,10 +2,42 @@ import { Suspense } from 'react'
 import Link from 'next/link'
 import { BlogPosts } from '@/app/components/posts'
 import { Profile } from '@/app/components/profile'
+import { baseUrl } from '@/app/sitemap'
 
 export default function Page() {
   return (
     <section className="space-y-14">
+      <script
+        type="application/ld+json"
+        suppressHydrationWarning
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify({
+            '@context': 'https://schema.org',
+            '@graph': [
+              {
+                '@type': 'WebSite',
+                name: 'adarshm.com',
+                url: baseUrl,
+                description:
+                  'Adarsh M. — JavaScript developer writing about the web.',
+                author: { '@id': `${baseUrl}/#person` },
+              },
+              {
+                '@type': 'Person',
+                '@id': `${baseUrl}/#person`,
+                name: 'Adarsh M.',
+                url: baseUrl,
+                jobTitle: 'Software Engineer',
+                sameAs: [
+                  'https://github.com/adarshm07',
+                  'https://x.com/adarshm07',
+                  'https://www.linkedin.com/in/adarshm07/',
+                ],
+              },
+            ],
+          }),
+        }}
+      />
       <Suspense fallback={<ProfileSkeleton />}>
         <Profile />
       </Suspense>
