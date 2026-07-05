@@ -43,6 +43,17 @@ html {
   min-width: 360px;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+.prose h2,
+.prose h3 {
+  scroll-margin-top: 2rem;
+}
+
 /* ── Prose ───────────────────────────────────────────────── */
 
 .prose .anchor {

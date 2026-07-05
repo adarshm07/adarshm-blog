@@ -1,5 +1,7 @@
 import { notFound } from 'next/navigation'
 import { CustomMDX } from '@/app/components/mdx'
+import { ReadingProgress } from '@/app/components/reading-progress'
+import { TableOfContents } from '@/app/components/toc'
 import { formatDate, getBlogPosts } from '@/app/blog/utils'
 import { baseUrl } from '@/app/sitemap'
 
@@ -53,6 +55,8 @@ export default async function Blog({
 
   return (
     <section>
+      <ReadingProgress />
+      <TableOfContents />
       <script
         type="application/ld+json"
         suppressHydrationWarning
