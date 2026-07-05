@@ -2,7 +2,6 @@ import { Suspense } from 'react'
 import Link from 'next/link'
 import { BlogPosts } from '@/app/components/posts'
 import { Profile } from '@/app/components/profile'
-import { Projects } from '@/app/components/projects'
 
 export default function Page() {
   return (
@@ -25,10 +24,6 @@ export default function Page() {
         </div>
         <BlogPosts limit={5} />
       </div>
-
-      <Suspense fallback={null}>
-        <Projects />
-      </Suspense>
     </section>
   )
 }

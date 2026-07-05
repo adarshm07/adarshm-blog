@@ -53,8 +53,8 @@ export async function Profile() {
           {name}
         </h1>
         <p className="mt-1.5 text-sm leading-relaxed text-neutral-500 dark:text-neutral-400">
-          Software engineer based in Kerala, India. I build for the web and
-          write here about JavaScript, frontend architecture, and things I
+          Software engineer based in Kerala, India. I write here as I learn —
+          data structures & algorithms, system design, and other things I
           pick up along the way.
         </p>
 
