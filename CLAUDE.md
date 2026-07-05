@@ -43,6 +43,7 @@ title: "Post Title"
 publishedAt: "YYYY-MM-DD"
 summary: "Brief description shown in meta tags and RSS"
 image: "/optional-og-image.png"   # optional; falls back to auto-generated OG image
+tags: "DSA, System Design"        # optional; comma-separated, powers the /blog topic filter
 ---
 ```
 

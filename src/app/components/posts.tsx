@@ -4,11 +4,14 @@ import { formatDate, getBlogPosts } from '@/app/blog/utils'
 export function BlogPosts({
   limit,
   showSummary = false,
+  tag,
 }: {
   limit?: number
   showSummary?: boolean
+  tag?: string
 } = {}) {
   const allBlogs = getBlogPosts()
+    .filter((post) => !tag || post.metadata.tags?.includes(tag))
     .sort(
       (a, b) =>
         new Date(b.metadata.publishedAt).getTime() -
@@ -36,6 +39,18 @@ export function BlogPosts({
             <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400 line-clamp-2">
               {post.metadata.summary}
             </p>
+          )}
+          {showSummary && post.metadata.tags && post.metadata.tags.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {post.metadata.tags.map((t) => (
+                <span
+                  key={t}
+                  className="text-xs text-neutral-400 dark:text-neutral-500"
+                >
+                  #{t}
+                </span>
+              ))}
+            </div>
           )}
         </Link>
       ))}
