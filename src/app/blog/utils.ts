@@ -70,6 +70,35 @@ export function getAllTags() {
   return Array.from(tags).sort()
 }
 
+export function getReadingTime(content: string) {
+  let words = content.trim().split(/\s+/).length
+  return Math.max(1, Math.round(words / 200))
+}
+
+export function getRelatedPosts(slug: string, limit = 3) {
+  let posts = getBlogPosts()
+  let current = posts.find((post) => post.slug === slug)
+  if (!current?.metadata.tags?.length) return []
+
+  return posts
+    .filter((post) => post.slug !== slug)
+    .map((post) => ({
+      post,
+      overlap: post.metadata.tags?.filter((tag) =>
+        current!.metadata.tags!.includes(tag)
+      ).length ?? 0,
+    }))
+    .filter(({ overlap }) => overlap > 0)
+    .sort(
+      (a, b) =>
+        b.overlap - a.overlap ||
+        new Date(b.post.metadata.publishedAt).getTime() -
+          new Date(a.post.metadata.publishedAt).getTime()
+    )
+    .slice(0, limit)
+    .map(({ post }) => post)
+}
+
 export function formatDate(date: string, includeRelative = false) {
   let currentDate = new Date()
   if (!date.includes('T')) {
