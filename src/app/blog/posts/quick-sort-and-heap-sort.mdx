@@ -1,0 +1,236 @@
+---
+title: "Quick Sort and Heap Sort: The In-Place O(n log n) Sorts"
+publishedAt: "2026-07-06"
+summary: "A visual walkthrough of quick sort and heap sort — how partitioning and heaps achieve O(n log n) without merge sort's extra memory, with animated demos and code in Java and JavaScript."
+tags: "DSA"
+---
+
+In the [previous post](/blog/sorting-algorithms-explained) we worked through
+bubble, selection, insertion, and merge sort. Merge sort was the only one to
+hit O(n log n), but it paid for that speed with O(n) auxiliary space. This
+post covers the two classic algorithms that get to O(n log n) **without**
+the extra array: **quick sort** and **heap sort**.
+
+As before, each visualization is interactive — hit **Play** to watch the
+sort step by step, or **Shuffle** to try a different starting order.
+
+## Quick Sort
+
+Quick sort is divide-and-conquer like merge sort, but it does the work
+*before* recursing instead of after. Pick an element as the **pivot**,
+then **partition** the array so everything smaller than the pivot ends up on
+its left and everything larger on its right. After partitioning, the pivot is
+in its final sorted position — then recurse into the two halves on either
+side of it.
+
+The implementation below uses the **Lomuto partition scheme** with the last
+element as the pivot: walk a pointer `j` across the range, and every time
+`arr[j]` is smaller than the pivot, swap it into the "smaller" region at the
+front tracked by `i`.
+
+<SortVisualizer algorithm="quick" />
+
+- **Time complexity:** O(n log n) average, O(n²) worst case (already-sorted input with a last-element pivot degrades to one-sided partitions)
+- **Space complexity:** O(log n) for the recursion stack — partitioning itself is in place
+- **Stable:** no (partition swaps can reorder equal elements)
+
+```java
+public static void quickSort(int[] arr, int low, int high) {
+    if (low >= high) return;
+    int p = partition(arr, low, high);
+    quickSort(arr, low, p - 1);
+    quickSort(arr, p + 1, high);
+}
+
+private static int partition(int[] arr, int low, int high) {
+    int pivot = arr[high];
+    int i = low;
+    for (int j = low; j < high; j++) {
+        if (arr[j] < pivot) {
+            int temp = arr[i];
+            arr[i] = arr[j];
+            arr[j] = temp;
+            i++;
+        }
+    }
+    int temp = arr[i];
+    arr[i] = arr[high];
+    arr[high] = temp;
+    return i;
+}
+```
+
+```javascript
+function quickSort(arr, low = 0, high = arr.length - 1) {
+  if (low >= high) return arr;
+  const p = partition(arr, low, high);
+  quickSort(arr, low, p - 1);
+  quickSort(arr, p + 1, high);
+  return arr;
+}
+
+function partition(arr, low, high) {
+  const pivot = arr[high];
+  let i = low;
+  for (let j = low; j < high; j++) {
+    if (arr[j] < pivot) {
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+      i++;
+    }
+  }
+  [arr[i], arr[high]] = [arr[high], arr[i]];
+  return i;
+}
+```
+
+### Why the pivot choice matters
+
+The O(n²) worst case isn't a theoretical curiosity — it shows up whenever
+the pivot keeps landing at an extreme. With a last-element pivot, feeding
+quick sort an **already-sorted array** makes every partition split into
+"everything" and "nothing", so the recursion depth becomes n instead of
+log n. Common fixes:
+
+- **Random pivot** — swap a random element into the pivot slot before partitioning; the worst case still exists but no fixed input triggers it reliably
+- **Median-of-three** — use the median of the first, middle, and last elements, which handles sorted and reverse-sorted inputs well
+- **Introsort** — start with quick sort, and switch to heap sort if the recursion gets suspiciously deep; this is what C++'s `std::sort` does to guarantee O(n log n)
+
+Despite the worst case, quick sort is usually the fastest comparison sort in
+practice: partitioning scans memory sequentially (cache-friendly) and the
+constant factors are small.
+
+## Heap Sort
+
+Heap sort turns the array itself into a **max-heap** — a complete binary
+tree, stored right inside the array, where every parent is greater than or
+equal to its children. For the element at index `i`, its children live at
+`2i + 1` and `2i + 2`. That layout means no pointers and no extra memory.
+
+The algorithm runs in two phases:
+
+1. **Heapify:** walk backwards from the last parent node, sifting each
+   element down until the whole array satisfies the heap property. The
+   maximum is now at index 0.
+2. **Extract:** swap the root (the maximum) with the last element of the
+   heap, shrink the heap by one, and sift the new root down to restore the
+   heap property. Repeat until the heap is empty — the array fills with
+   sorted values from the back.
+
+<SortVisualizer algorithm="heap" />
+
+- **Time complexity:** O(n log n) in all cases — building the heap is O(n), and each of the n extractions costs O(log n)
+- **Space complexity:** O(1) — fully in place, no recursion needed
+- **Stable:** no (the root-to-back swaps jump over equal elements)
+
+```java
+public static void heapSort(int[] arr) {
+    int n = arr.length;
+    for (int i = n / 2 - 1; i >= 0; i--) {
+        siftDown(arr, i, n);
+    }
+    for (int end = n - 1; end > 0; end--) {
+        int temp = arr[0];
+        arr[0] = arr[end];
+        arr[end] = temp;
+        siftDown(arr, 0, end);
+    }
+}
+
+private static void siftDown(int[] arr, int i, int size) {
+    while (true) {
+        int largest = i;
+        int left = 2 * i + 1;
+        int right = 2 * i + 2;
+        if (left < size && arr[left] > arr[largest]) largest = left;
+        if (right < size && arr[right] > arr[largest]) largest = right;
+        if (largest == i) return;
+        int temp = arr[i];
+        arr[i] = arr[largest];
+        arr[largest] = temp;
+        i = largest;
+    }
+}
+```
+
+```javascript
+function heapSort(arr) {
+  const n = arr.length;
+  for (let i = Math.floor(n / 2) - 1; i >= 0; i--) {
+    siftDown(arr, i, n);
+  }
+  for (let end = n - 1; end > 0; end--) {
+    [arr[0], arr[end]] = [arr[end], arr[0]];
+    siftDown(arr, 0, end);
+  }
+  return arr;
+}
+
+function siftDown(arr, i, size) {
+  while (true) {
+    let largest = i;
+    const left = 2 * i + 1;
+    const right = 2 * i + 2;
+    if (left < size && arr[left] > arr[largest]) largest = left;
+    if (right < size && arr[right] > arr[largest]) largest = right;
+    if (largest === i) return;
+    [arr[i], arr[largest]] = [arr[largest], arr[i]];
+    i = largest;
+  }
+}
+```
+
+Heap sort's guaranteed O(n log n) and O(1) space look unbeatable on paper,
+but its memory access pattern is the catch: sifting down jumps between
+index `i` and `2i + 1`, which scatters reads across the array and misses
+the CPU cache far more than quick sort's sequential scans. That's why it's
+usually the fallback (as in introsort) rather than the default.
+
+## Comparison
+
+<table>
+  <thead>
+    <tr>
+      <th>Algorithm</th>
+      <th>Best</th>
+      <th>Average</th>
+      <th>Worst</th>
+      <th>Space</th>
+      <th>Stable</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Quick Sort</td>
+      <td>O(n log n)</td>
+      <td>O(n log n)</td>
+      <td>O(n²)</td>
+      <td>O(log n)</td>
+      <td>No</td>
+    </tr>
+    <tr>
+      <td>Heap Sort</td>
+      <td>O(n log n)</td>
+      <td>O(n log n)</td>
+      <td>O(n log n)</td>
+      <td>O(1)</td>
+      <td>No</td>
+    </tr>
+    <tr>
+      <td>Merge Sort</td>
+      <td>O(n log n)</td>
+      <td>O(n log n)</td>
+      <td>O(n log n)</td>
+      <td>O(n)</td>
+      <td>Yes</td>
+    </tr>
+  </tbody>
+</table>
+
+Each of the three fast sorts gives something up: merge sort spends memory to
+stay stable, quick sort risks a rare O(n²) to be fastest on average, and
+heap sort accepts slower constants for guaranteed bounds with zero extra
+space. Real standard libraries hedge accordingly — Java sorts primitives
+with a tuned quick sort variant, sorts objects with Timsort (merge-based,
+because stability is part of the contract), and C++'s introsort blends all
+three: quick sort's speed, heap sort's guarantee, and insertion sort for
+tiny ranges.
