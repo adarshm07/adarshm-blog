@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 type Step = { array: number[]; active: number[]; sorted: number[] }
-type Algorithm = 'bubble' | 'selection' | 'insertion' | 'merge'
+type Algorithm = 'bubble' | 'selection' | 'insertion' | 'merge' | 'quick' | 'heap'
 
 const DEFAULT_ARRAY = [5, 3, 8, 4, 2, 7, 1, 6]
 
@@ -115,11 +115,88 @@ function mergeSortSteps(input: number[]): Step[] {
   return steps
 }
 
+function quickSortSteps(input: number[]): Step[] {
+  const a = [...input]
+  const steps: Step[] = [{ array: [...a], active: [], sorted: [] }]
+  const placed: number[] = []
+
+  function partition(lo: number, hi: number) {
+    const pivot = a[hi]
+    let i = lo
+    for (let j = lo; j < hi; j++) {
+      steps.push({ array: [...a], active: [j, hi], sorted: [...placed] })
+      if (a[j] < pivot) {
+        if (i !== j) {
+          ;[a[i], a[j]] = [a[j], a[i]]
+          steps.push({ array: [...a], active: [i, j], sorted: [...placed] })
+        }
+        i++
+      }
+    }
+    ;[a[i], a[hi]] = [a[hi], a[i]]
+    placed.push(i)
+    steps.push({ array: [...a], active: [i], sorted: [...placed] })
+    return i
+  }
+
+  function sort(lo: number, hi: number) {
+    if (lo > hi) return
+    if (lo === hi) {
+      placed.push(lo)
+      steps.push({ array: [...a], active: [], sorted: [...placed] })
+      return
+    }
+    const p = partition(lo, hi)
+    sort(lo, p - 1)
+    sort(p + 1, hi)
+  }
+
+  sort(0, a.length - 1)
+  steps.push({ array: [...a], active: [], sorted: range(0, a.length - 1) })
+  return steps
+}
+
+function heapSortSteps(input: number[]): Step[] {
+  const a = [...input]
+  const n = a.length
+  const steps: Step[] = [{ array: [...a], active: [], sorted: [] }]
+  const placed: number[] = []
+
+  function siftDown(start: number, size: number) {
+    let i = start
+    while (true) {
+      let largest = i
+      const left = 2 * i + 1
+      const right = 2 * i + 2
+      if (left < size && a[left] > a[largest]) largest = left
+      if (right < size && a[right] > a[largest]) largest = right
+      if (largest === i) return
+      steps.push({ array: [...a], active: [i, largest], sorted: [...placed] })
+      ;[a[i], a[largest]] = [a[largest], a[i]]
+      steps.push({ array: [...a], active: [i, largest], sorted: [...placed] })
+      i = largest
+    }
+  }
+
+  for (let i = Math.floor(n / 2) - 1; i >= 0; i--) siftDown(i, n)
+  for (let end = n - 1; end > 0; end--) {
+    steps.push({ array: [...a], active: [0, end], sorted: [...placed] })
+    ;[a[0], a[end]] = [a[end], a[0]]
+    placed.push(end)
+    steps.push({ array: [...a], active: [0], sorted: [...placed] })
+    siftDown(0, end)
+  }
+  steps.push({ array: [...a], active: [], sorted: range(0, n - 1) })
+  return steps
+}
+
 const stepGenerators: Record<Algorithm, (arr: number[]) => Step[]> = {
   bubble: bubbleSortSteps,
   selection: selectionSortSteps,
   insertion: insertionSortSteps,
   merge: mergeSortSteps,
+  quick: quickSortSteps,
+  heap: heapSortSteps,
 }
 
 function shuffledArray() {
