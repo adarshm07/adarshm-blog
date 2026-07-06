@@ -1,0 +1,200 @@
+---
+title: "Debounce vs Throttle: Taming Event Storms in JavaScript"
+publishedAt: "2026-07-06"
+summary: "An interactive guide to debouncing and throttling — when to use each, how to implement them from scratch, and the edge cases that bite in production."
+tags: "JavaScript"
+---
+
+Some events fire *relentlessly*. A user typing produces an event per
+keystroke; scrolling and resizing can fire dozens of times per second;
+`mousemove` fires on every pixel. If each of those events triggers an API
+call, a re-render, or a layout calculation, you've built a performance
+problem out of enthusiasm.
+
+**Debounce** and **throttle** are the two standard fixes, and they're
+frequently confused because both "slow things down". The difference is
+easier to *feel* than to read — try it below.
+
+## Feel the difference
+
+Click the button in quick bursts, pause, then burst again, and watch which
+calls survive on each lane:
+
+<SignalTimeline />
+
+Two patterns emerge:
+
+- **Debounce** stays silent through the whole burst and fires **once,
+  after you stop**. Every new event resets its timer, so continuous
+  activity postpones it forever.
+- **Throttle** fires **immediately**, then at a steady maximum rate no
+  matter how fast you click. It guarantees regular updates *during* the
+  activity.
+
+The one-line summary: debounce answers *"they're done — go"*, throttle
+answers *"give me updates, but not more than every X ms"*.
+
+## Implementing debounce
+
+The mechanism is a timer that every call resets:
+
+```javascript
+function debounce(fn, delay) {
+  let timer = null;
+  return function (...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      fn.apply(this, args);
+    }, delay);
+  };
+}
+
+const search = debounce((query) => {
+  fetch(`/api/search?q=${encodeURIComponent(query)}`);
+}, 300);
+
+input.addEventListener("input", (e) => search(e.target.value));
+```
+
+Details that matter in real code:
+
+- **`fn.apply(this, args)`** preserves both the receiver and the latest
+  arguments — the version that fires uses the *final* keystroke's value,
+  which is exactly what you want for a search box.
+- The returned function closes over `timer`, so **each debounced function
+  is independent**. Create it once and reuse it — recreating it on every
+  render (a classic React mistake) resets the state and breaks the
+  behavior.
+
+## Implementing throttle
+
+The simplest robust version fires on the **leading edge** (instantly) and
+also schedules a **trailing** call so the final event in a burst isn't
+lost:
+
+```javascript
+function throttle(fn, interval) {
+  let last = 0;
+  let timer = null;
+  return function (...args) {
+    const now = Date.now();
+    const remaining = interval - (now - last);
+    if (remaining <= 0) {
+      last = now;
+      fn.apply(this, args);
+    } else if (timer === null) {
+      timer = setTimeout(() => {
+        last = Date.now();
+        timer = null;
+        fn.apply(this, args);
+      }, remaining);
+    }
+  };
+}
+
+const onScroll = throttle(() => {
+  updateProgressBar(window.scrollY);
+}, 100);
+
+window.addEventListener("scroll", onScroll, { passive: true });
+```
+
+Why the trailing call matters: with a *leading-only* throttle, if the last
+scroll event lands mid-interval it's simply dropped — your progress bar
+freezes slightly short of where the user actually stopped. The trailing
+timer catches that final state.
+
+## Which one, when
+
+<table>
+  <thead>
+    <tr>
+      <th>Scenario</th>
+      <th>Use</th>
+      <th>Why</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Search-as-you-type</td>
+      <td>Debounce ~300 ms</td>
+      <td>Only the final query matters</td>
+    </tr>
+    <tr>
+      <td>Window resize layout</td>
+      <td>Debounce ~150 ms</td>
+      <td>Recompute once, after resizing ends</td>
+    </tr>
+    <tr>
+      <td>Autosave a draft</td>
+      <td>Debounce ~1000 ms</td>
+      <td>Save after a pause in typing</td>
+    </tr>
+    <tr>
+      <td>Scroll position UI</td>
+      <td>Throttle ~100 ms</td>
+      <td>Needs continuous updates while scrolling</td>
+    </tr>
+    <tr>
+      <td>Live price / telemetry stream</td>
+      <td>Throttle ~250 ms</td>
+      <td>Steady UI updates, bounded render cost</td>
+    </tr>
+    <tr>
+      <td>Button double-click protection</td>
+      <td>Throttle (leading only)</td>
+      <td>First click acts, repeats are ignored</td>
+    </tr>
+  </tbody>
+</table>
+
+The litmus test: **does anything need to happen *while* the events are
+still streaming?** Yes → throttle. No, only the end state matters →
+debounce.
+
+## Production edge cases
+
+**Cancellation.** If a debounced save is pending when the user navigates
+away or a component unmounts, the callback fires against a dead UI.
+Real-world utilities (like lodash's) expose `.cancel()` and `.flush()`;
+add them to the homemade version by keeping a handle on the timer:
+
+```javascript
+function debounce(fn, delay) {
+  let timer = null;
+  const debounced = function (...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), delay);
+  };
+  debounced.cancel = () => clearTimeout(timer);
+  return debounced;
+}
+```
+
+**React needs a stable reference.** Hooks re-run on every render, so wrap
+the debounced function in `useMemo` (and cancel it in an effect cleanup):
+
+```javascript
+const search = useMemo(() => debounce(runSearch, 300), []);
+useEffect(() => () => search.cancel(), [search]);
+```
+
+**Debounce can starve.** A user who never pauses — continuous scrolling,
+dragging, or an unbroken typing stream — postpones a debounced callback
+indefinitely. If you need a guarantee that *something* happens at least
+every N ms even during constant activity, that guarantee is throttle's
+whole job; some implementations offer a `maxWait` option that blends the
+two.
+
+**Don't debounce the event listener itself out of existence.** For scroll
+performance specifically, `{ passive: true }` on the listener and CSS
+`content-visibility` often buy more than aggressive throttling — rate
+limiting your handler doesn't help if the work inside it is the real
+problem.
+
+## Wrap-up
+
+Both utilities are ten lines of closure over a timer — the value is
+knowing which shape of silence you want: debounce waits for the storm to
+end, throttle dances in it at a fixed tempo. If the difference ever gets
+fuzzy again, come back and mash the button.

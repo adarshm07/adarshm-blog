@@ -1,0 +1,187 @@
+---
+title: "Closures in JavaScript: Private State, Loops, and Stale Values"
+publishedAt: "2026-07-06"
+summary: "What a closure actually is, how the scope chain makes it work, and the three places closures matter most — private state, the classic loop bug, and React hooks."
+tags: "JavaScript"
+---
+
+Closures have a reputation as an interview gotcha, but they're better
+understood as the feature you've been using all along: **every** function
+in JavaScript is a closure. If you've written an event handler that reads
+a variable from the surrounding code, you've used one. The definition in
+one line:
+
+> A closure is a function bundled together with the variables that were in
+> scope where it was **defined** — and it keeps them alive for as long as
+> the function exists.
+
+The crucial word is *defined*, not *called*. Where a function runs doesn't
+matter; what it can see was fixed the moment it was created.
+
+## The scope chain
+
+When code reads a variable, the engine looks in the current function's
+scope; if it's not there, it walks **outward** to the enclosing scope, and
+so on up to global. A closure is what happens when a function survives
+longer than the scope it was born in — the chain stays attached:
+
+<ScopeChainDiagram />
+
+```javascript
+function makeCounter() {
+  let count = 0;
+  return function increment() {
+    count++;
+    return count;
+  };
+}
+
+const counter = makeCounter(); // makeCounter has now returned…
+counter(); // 1
+counter(); // 2 …but count lives on, reachable only through counter
+```
+
+Normally a function's local variables die when it returns. Here,
+`increment` still references `count`, so the engine keeps that scope
+alive. Two things follow that surprise people:
+
+- **Closures capture variables, not values.** `increment` doesn't hold a
+  copy of `0` — it holds a live link to the `count` variable, which is why
+  the number keeps climbing.
+- **Each call to `makeCounter` creates a fresh scope.** A second
+  `makeCounter()` yields an independent counter; the two share code but
+  not state.
+
+## Private state and the module pattern
+
+Notice what `makeCounter` achieved: `count` is **genuinely inaccessible**
+from outside — no property, no reflection, no way in except the functions
+that closed over it. Long before `class` and `#private` fields, this was
+JavaScript's encapsulation story, and it still powers a huge amount of
+real code:
+
+```javascript
+function createWallet(initial) {
+  let balance = initial;          // private
+  const history = [];             // private
+
+  return {
+    deposit(amount) {
+      if (amount <= 0) throw new Error("invalid amount");
+      balance += amount;
+      history.push({ type: "deposit", amount });
+    },
+    getBalance() {
+      return balance;
+    },
+    getHistory() {
+      return [...history];        // hand out a copy, not the original
+    },
+  };
+}
+
+const wallet = createWallet(100);
+wallet.deposit(50);
+wallet.getBalance();  // 150
+wallet.balance;       // undefined — there is no such property
+```
+
+This is the **module pattern**: a function scope acting as a privacy
+boundary, returning a public API. ES modules do the same thing at file
+granularity — top-level variables you don't export are closed over by the
+functions you do. Utility makers like `once`, `memoize`, and the
+`debounce` from [the debounce/throttle post](/blog/debounce-vs-throttle)
+are all this pattern in miniature: a returned function carrying private
+state (`called`, `cache`, `timer`) nobody else can touch.
+
+## The classic loop bug
+
+The most famous closure question in existence:
+
+```javascript
+for (var i = 0; i < 3; i++) {
+  setTimeout(() => console.log(i), 100);
+}
+// logs: 3, 3, 3
+```
+
+Why: `var` is function-scoped, so all three arrow functions close over
+**the same `i`**. By the time the timers fire (after the loop), that one
+shared variable is `3`. The callbacks captured the variable, not its value
+at creation time.
+
+The modern fix is almost anticlimactic:
+
+```javascript
+for (let i = 0; i < 3; i++) {
+  setTimeout(() => console.log(i), 100);
+}
+// logs: 0, 1, 2
+```
+
+`let` in a `for` loop creates a **new binding per iteration** — the spec
+literally copies the value into a fresh variable each time around — so
+each callback closes over its own `i`. (The pre-ES6 workaround, wrapping
+the body in an immediately-invoked function to force a new scope, is worth
+recognizing in old code even if you never write it again.)
+
+## Stale closures in React
+
+The same capture-at-definition rule is behind the most common React hooks
+bug. Every render creates new functions, and each closes over **that
+render's** values:
+
+```javascript
+function Timer() {
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setCount(count + 1); // closes over count from the FIRST render: 0
+    }, 1000);
+    return () => clearInterval(id);
+  }, []); // ran once → the interval callback is frozen in time
+
+  return <span>{count}</span>;
+}
+// displays 1 and stops: every tick computes 0 + 1
+```
+
+The interval was created once, so its callback forever sees `count = 0` —
+a **stale closure**. The fixes are all ways of not reading stale captured
+state: the functional update `setCount(c => c + 1)` (asks React for the
+current value instead of closing over one), adding `count` to the
+dependency array (recreates the interval each change), or stashing
+mutable values in a `useRef`. Once you see the effect callback as *a
+closure over one specific render*, the whole class of bugs stops being
+mysterious.
+
+## Closures and memory
+
+Since a closure keeps its outer scope alive, it also keeps that scope's
+memory alive. Usually that's a few variables and exactly what you want.
+It bites when a long-lived callback closes over something enormous:
+
+```javascript
+function attach(bigData) {
+  window.addEventListener("resize", () => {
+    console.log("rows:", bigData.rows.length); // bigData can never be freed
+  });
+}
+```
+
+The listener lives as long as the page, so `bigData` does too. The
+remedies are ordinary hygiene: remove listeners you no longer need,
+extract just the fields you use (`const rowCount = bigData.rows.length`)
+so the closure captures a number instead of the dataset, and be deliberate
+about what long-lived callbacks reference.
+
+## Wrap-up
+
+One rule generates everything in this post: **a function permanently sees
+the variables — not the values — of the place it was defined.** Read
+`makeCounter` with that rule and you get private state; read the `var`
+loop and you predict `3, 3, 3`; read a `useEffect` and you can spot the
+stale capture before it ships. For a language feature that fits in a
+sentence, it does a remarkable amount of the heavy lifting in everyday
+JavaScript.

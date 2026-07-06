@@ -1,0 +1,202 @@
+---
+title: "Building an LRU Cache From Scratch"
+publishedAt: "2026-07-06"
+summary: "Why the classic interview question is really a lesson in composing data structures — with an animated walkthrough and two working implementations."
+tags: "DSA, System Design"
+---
+
+A cache with unlimited memory is easy. The interesting question is what to
+**evict** when it fills up, and the answer that dominates practice is LRU —
+**Least Recently Used**: throw away the entry that's gone unused the
+longest, betting that recent past predicts near future. That bet (temporal
+locality) holds remarkably often, which is why LRU and its variants sit
+inside CPUs, databases, CDNs, and Redis.
+
+The classic engineering puzzle: build one where **both** `get` and `put`
+are O(1). Neither a hash map nor a list can do it alone — the trick is
+composing them.
+
+## What it has to do
+
+- `get(key)` — return the value and mark the entry as *just used*.
+- `put(key, value)` — insert or update, mark as just used, and if the
+  cache exceeds capacity, evict the least recently used entry.
+
+Watch the recency order at work — note how `get("a")` rescues "a" from
+eviction and dooms "b" instead:
+
+<LRUVisualizer />
+
+## Why two data structures
+
+Work through the requirements:
+
+- O(1) lookup by key → **hash map**. But a hash map has no notion of
+  order, so it can't tell you who's least recent.
+- Track recency order with O(1) reordering → **doubly-linked list**. Most
+  recent at the head, victim at the tail. Moving a node to the head or
+  removing the tail is pointer surgery, O(1) — but *finding* a node in a
+  list is O(n).
+
+Each structure covers the other's weakness, so use both: the map's values
+are **pointers to list nodes**. Lookup via the map, reorder via the list.
+
+- `get`: map lookup → unlink the node → relink at head.
+- `put`: same, plus if over capacity, unlink the tail node *and delete its
+  key from the map* (that's why nodes store their key — a step nearly
+  everyone forgets the first time).
+
+## The explicit implementation
+
+```javascript
+class Node {
+  constructor(key, value) {
+    this.key = key;
+    this.value = value;
+    this.prev = null;
+    this.next = null;
+  }
+}
+
+class LRUCache {
+  constructor(capacity) {
+    this.capacity = capacity;
+    this.map = new Map();
+    // Sentinel head/tail avoid null checks in every unlink
+    this.head = new Node(null, null);
+    this.tail = new Node(null, null);
+    this.head.next = this.tail;
+    this.tail.prev = this.head;
+  }
+
+  #unlink(node) {
+    node.prev.next = node.next;
+    node.next.prev = node.prev;
+  }
+
+  #linkAtHead(node) {
+    node.next = this.head.next;
+    node.prev = this.head;
+    this.head.next.prev = node;
+    this.head.next = node;
+  }
+
+  get(key) {
+    const node = this.map.get(key);
+    if (!node) return undefined;
+    this.#unlink(node);
+    this.#linkAtHead(node);
+    return node.value;
+  }
+
+  put(key, value) {
+    const existing = this.map.get(key);
+    if (existing) {
+      existing.value = value;
+      this.#unlink(existing);
+      this.#linkAtHead(existing);
+      return;
+    }
+    if (this.map.size >= this.capacity) {
+      const victim = this.tail.prev;       // least recently used
+      this.#unlink(victim);
+      this.map.delete(victim.key);         // the step people forget
+    }
+    const node = new Node(key, value);
+    this.#linkAtHead(node);
+    this.map.set(key, node);
+  }
+}
+```
+
+The **sentinel nodes** are the difference between clean and painful: with
+permanent dummy head/tail nodes, `#unlink` and `#linkAtHead` never touch
+`null`, so there are no edge cases for empty lists or single entries.
+
+## The JavaScript shortcut
+
+JavaScript's `Map` remembers **insertion order**, and re-inserting a key
+moves it to the end. That's… exactly a recency list:
+
+```javascript
+class LRUCache {
+  constructor(capacity) {
+    this.capacity = capacity;
+    this.map = new Map();
+  }
+
+  get(key) {
+    if (!this.map.has(key)) return undefined;
+    const value = this.map.get(key);
+    this.map.delete(key);
+    this.map.set(key, value); // re-insert → now most recent
+    return value;
+  }
+
+  put(key, value) {
+    this.map.delete(key);
+    this.map.set(key, value);
+    if (this.map.size > this.capacity) {
+      const oldest = this.map.keys().next().value; // first inserted
+      this.map.delete(oldest);
+    }
+  }
+}
+```
+
+Fifteen lines, genuinely O(1). In an interview, lead with this to show you
+know the language, then build the explicit version to show you know the
+data structures — the pointer version is what you'd write in a language
+whose maps don't keep order, and it's the one that generalizes.
+
+## LRU in the wild
+
+- **Redis** ships `allkeys-lru` as a standard eviction policy — notably as
+  *approximated* LRU: it samples a few random keys and evicts the least
+  recent of the sample, trading exactness for zero list-maintenance
+  overhead on every access.
+- **Databases** keep hot disk pages in LRU-ish buffer pools; operating
+  systems do the same with page caches (usually CLOCK, a cheap LRU
+  approximation).
+- **Memoization with a budget** — an unbounded memo cache is a memory
+  leak wearing a performance hat; `lru_cache(maxsize=…)` in Python is the
+  honest version.
+
+One known weakness: a **large scan** — something iterating once over more
+keys than the cache holds — flushes out the genuinely hot set with entries
+that will never be touched again. Variants like **LRU-K** and segmented
+LRU (hot/cold generations) exist mostly to survive scans.
+
+## Complexity
+
+<table>
+  <thead>
+    <tr>
+      <th>Operation</th>
+      <th>Time</th>
+      <th>Mechanism</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>get</td>
+      <td>O(1)</td>
+      <td>map lookup + relink at head</td>
+    </tr>
+    <tr>
+      <td>put</td>
+      <td>O(1)</td>
+      <td>map insert + relink; evict tail if full</td>
+    </tr>
+    <tr>
+      <td>Space</td>
+      <td>O(capacity)</td>
+      <td>one map entry + one list node per item</td>
+    </tr>
+  </tbody>
+</table>
+
+The broader lesson outlasts the puzzle: when no single structure meets all
+your constraints, **compose two and let each carry what the other can't**.
+That pattern shows up all over real systems — the LRU cache is just its
+cleanest teaching example.

@@ -1,0 +1,219 @@
+---
+title: "Rate Limiting Algorithms: Token Bucket, Windows, and Their Trade-offs"
+publishedAt: "2026-07-06"
+summary: "How APIs decide who gets throttled — token bucket, fixed and sliding windows, animated demos of each, and what changes when the limiter goes distributed."
+tags: "System Design"
+---
+
+Every public API eventually meets a client that calls it in a tight loop —
+a buggy retry storm, a scraper, or just an enthusiastic integration. A
+**rate limiter** is the bouncer at the door: it decides, per client, which
+requests get in and which get `429 Too Many Requests`. The interesting
+part is that "5 requests per second" turns out to be ambiguous, and each
+way of making it precise is a different algorithm with different failure
+modes.
+
+## Token bucket
+
+The industry default. Picture a bucket holding up to `capacity` tokens,
+refilled at a steady `rate`. Each request takes a token; no token, no
+entry.
+
+<RateLimiterVisualizer scenario="token-bucket" />
+
+The elegant property: it enforces an **average** rate while permitting
+**bursts** up to the bucket size. A client that's been quiet accumulates
+tokens and may legitimately fire 5 requests at once — usually exactly what
+you want, since real traffic is bursty (a page load fires several API
+calls together).
+
+Implementation is a few lines, and it doesn't even need a timer — refill
+lazily, computed from the elapsed time on each request:
+
+```javascript
+class TokenBucket {
+  constructor(capacity, refillPerSecond) {
+    this.capacity = capacity;
+    this.refillPerSecond = refillPerSecond;
+    this.tokens = capacity;
+    this.lastRefill = Date.now();
+  }
+
+  allow() {
+    const now = Date.now();
+    const elapsed = (now - this.lastRefill) / 1000;
+    this.tokens = Math.min(
+      this.capacity,
+      this.tokens + elapsed * this.refillPerSecond
+    );
+    this.lastRefill = now;
+    if (this.tokens >= 1) {
+      this.tokens -= 1;
+      return true;
+    }
+    return false;
+  }
+}
+```
+
+State per client: **two numbers**. That frugality is a big reason AWS,
+Stripe, and most API gateways describe their limits in token-bucket terms.
+
+(Its sibling, the **leaky bucket**, flips the metaphor: requests queue in
+the bucket and drain at a perfectly constant rate. Choose it when the
+*downstream* needs smooth, even flow; choose token bucket when clients
+deserve their bursts.)
+
+## Fixed window
+
+The version everyone invents first: count requests per calendar window —
+per minute, per hour — and reset the counter at each boundary. One counter
+per client, trivially easy. It has a famous flaw. Watch the boundary:
+
+<RateLimiterVisualizer scenario="fixed-window" />
+
+A client that bursts at the **end of one window and the start of the
+next** gets up to **2× the intended limit** in a fraction of the window
+length. If the limit exists to protect capacity, the protection fails
+exactly when it's needed — under aggressive traffic.
+
+## Sliding window
+
+Fix the boundary problem by measuring the **trailing** interval instead of
+calendar-aligned ones.
+
+**Sliding window log** — keep a timestamp per request, drop those older
+than the window, count the rest:
+
+```javascript
+class SlidingWindowLog {
+  constructor(limit, windowMs) {
+    this.limit = limit;
+    this.windowMs = windowMs;
+    this.timestamps = [];
+  }
+
+  allow() {
+    const now = Date.now();
+    const cutoff = now - this.windowMs;
+    while (this.timestamps.length && this.timestamps[0] <= cutoff) {
+      this.timestamps.shift();
+    }
+    if (this.timestamps.length < this.limit) {
+      this.timestamps.push(now);
+      return true;
+    }
+    return false;
+  }
+}
+```
+
+Perfectly accurate, but it stores one timestamp per request per client —
+memory grows with the limit, which hurts at scale.
+
+**Sliding window counter** — the pragmatic middle ground: keep just the
+current and previous fixed-window counts, and estimate the trailing window
+by weighting the previous count by its remaining overlap:
+
+```text
+estimate = current + previous × (overlap fraction of previous window)
+```
+
+Two counters per client, no timestamp log, and the boundary-burst
+loophole is closed (approximately — it assumes requests spread evenly
+across the previous window, an error bounded well under the 2× of fixed
+windows). This is the algorithm behind Cloudflare-style rate limiting.
+
+## Choosing
+
+<table>
+  <thead>
+    <tr>
+      <th>Algorithm</th>
+      <th>Bursts</th>
+      <th>Accuracy</th>
+      <th>State per client</th>
+      <th>Weakness</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Token bucket</td>
+      <td>Allowed (by design)</td>
+      <td>Average rate</td>
+      <td>2 numbers</td>
+      <td>Burst size needs tuning</td>
+    </tr>
+    <tr>
+      <td>Leaky bucket</td>
+      <td>Smoothed away</td>
+      <td>Exact output rate</td>
+      <td>Queue</td>
+      <td>Adds queueing latency</td>
+    </tr>
+    <tr>
+      <td>Fixed window</td>
+      <td>2× at boundaries</td>
+      <td>Poor at edges</td>
+      <td>1 counter</td>
+      <td>The boundary burst</td>
+    </tr>
+    <tr>
+      <td>Sliding log</td>
+      <td>Strictly capped</td>
+      <td>Exact</td>
+      <td>O(limit) timestamps</td>
+      <td>Memory</td>
+    </tr>
+    <tr>
+      <td>Sliding counter</td>
+      <td>Approximately capped</td>
+      <td>~Exact</td>
+      <td>2 counters</td>
+      <td>Slight approximation</td>
+    </tr>
+  </tbody>
+</table>
+
+Default to **token bucket** for client-facing API limits, and **sliding
+window counter** when the limit is a hard promise (billing tiers, abuse
+thresholds).
+
+## Going distributed
+
+One server is the easy case. With twenty instances behind a load
+balancer, a per-instance limiter quietly multiplies every limit by twenty
+— so the state has to live somewhere shared, usually **Redis**.
+
+That introduces the classic read-modify-write race: two instances read
+`count = 4`, both decide 5 ≤ limit, both increment — the limit leaks. The
+fix is making the check-and-update **atomic** on the Redis side, either
+with a Lua script or by structuring the update so a plain atomic op
+suffices:
+
+```lua
+-- fixed/sliding window counter, atomically
+local count = redis.call("INCR", KEYS[1])
+if count == 1 then
+  redis.call("PEXPIRE", KEYS[1], ARGV[1]) -- window length
+end
+return count -- caller compares against the limit
+```
+
+Remaining realities of distributed limiting: every request now pays a
+Redis round trip (often mitigated by letting each instance keep a small
+local token allowance and syncing in the background), and if Redis goes
+down you must pick a posture — **fail open** (let traffic through,
+protect availability) or **fail closed** (reject, protect the backend).
+For most public APIs, fail open is the right default; for a payments
+endpoint, maybe not.
+
+## Be polite about it
+
+A rejection is part of your API's interface. Return **429**, include
+**`Retry-After`** (seconds until it makes sense to try again), and
+ideally the de facto standard headers —
+`X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset` — so
+well-behaved clients can pace themselves instead of hammering you to find
+the edge. The best rate limiter is one clients rarely hit, because you
+told them where the line is.
