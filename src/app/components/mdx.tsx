@@ -5,6 +5,19 @@ import { highlight } from 'sugar-high'
 import React from 'react'
 import { SortVisualizer } from '@/app/components/sort-visualizer'
 import { EventLoopVisualizer } from '@/app/components/event-loop-visualizer'
+import {
+  BinarySearchVisualizer,
+  BSTVisualizer,
+} from '@/app/components/binary-search-visualizer'
+import { SignalTimeline } from '@/app/components/signal-timeline'
+import { HashMapVisualizer } from '@/app/components/hashmap-visualizer'
+import { LRUVisualizer } from '@/app/components/lru-visualizer'
+import { RateLimiterVisualizer } from '@/app/components/rate-limiter-visualizer'
+import { MessageFlowVisualizer } from '@/app/components/message-flow-visualizer'
+import {
+  PromiseStateDiagram,
+  ScopeChainDiagram,
+} from '@/app/components/diagrams'
 import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
@@ -125,6 +138,15 @@ const components = {
   Table,
   SortVisualizer,
   EventLoopVisualizer,
+  BinarySearchVisualizer,
+  BSTVisualizer,
+  SignalTimeline,
+  HashMapVisualizer,
+  LRUVisualizer,
+  RateLimiterVisualizer,
+  MessageFlowVisualizer,
+  PromiseStateDiagram,
+  ScopeChainDiagram,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {

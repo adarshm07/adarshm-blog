@@ -1,0 +1,196 @@
+---
+title: "WebSockets vs SSE vs Polling: Choosing a Real-Time Strategy"
+publishedAt: "2026-07-06"
+summary: "Four ways to get server data to the browser without a refresh — animated message flows for each, and a decision guide drawn from building live-data UIs."
+tags: "System Design"
+---
+
+HTTP has a built-in asymmetry: the client speaks first, always. That's
+fine until you build a chat app, a live dashboard, or a market-data feed —
+anything where the *server* learns something and needs to tell the browser
+*now*. Working on a live stock-price UI is where this hit home for me:
+the difference between these four techniques isn't academic, it's the
+difference between a ticker that breathes and one that stutters.
+
+Each animation below plays the actual message flow. Watch what travels
+over the wire — and what's wasted.
+
+## Short polling
+
+The brute-force answer: ask on a timer.
+
+<MessageFlowVisualizer scenario="short-polling" />
+
+```javascript
+setInterval(async () => {
+  const res = await fetch("/api/updates?since=" + lastSeen);
+  if (res.status === 200) render(await res.json());
+}, 3000);
+```
+
+Two dials, both bad: poll rarely and data sits stale on the server for up
+to a full interval; poll often and you're paying full HTTP round trips —
+headers, auth, connection management — mostly to hear "nothing yet",
+multiplied by every open tab. Still, it's stateless, cache-friendly,
+trivially load-balanced, and survives any proxy. For data that changes
+every few minutes (a build status page), it's honestly fine.
+
+## Long polling
+
+Same request — but the server **holds it open** until there's something to
+say.
+
+<MessageFlowVisualizer scenario="long-polling" />
+
+The client re-polls immediately after each response, so a request is
+always parked at the server, ready to complete the instant data exists.
+Latency drops to near zero and the wasted round trips disappear —
+in exchange the server now holds one open connection per client (be
+mindful of thread-per-request servers), and you keep a bit of protocol
+glue: timeouts around 30s to survive proxies, plus a `since` cursor so
+nothing is lost between polls. Long polling remains the standard
+*fallback* when fancier transports are blocked by corporate middleboxes.
+
+## Server-Sent Events
+
+If what you need is a **one-way feed** — server to client — SSE is the
+underrated sweet spot: a single HTTP response that never ends, carrying a
+stream of events.
+
+<MessageFlowVisualizer scenario="sse" />
+
+The browser API is almost embarrassingly small, and reconnection is
+built in:
+
+```javascript
+const stream = new EventSource("/api/prices");
+
+stream.addEventListener("tick", (e) => {
+  render(JSON.parse(e.data));
+});
+// auto-reconnects on drop, resuming via the Last-Event-ID header
+```
+
+The server just writes `text/event-stream` chunks:
+
+```text
+event: tick
+id: 1842
+data: {"symbol":"AAPL","price":227.4}
+
+```
+
+Because it *is* HTTP, it keeps everything HTTP gives you — normal auth,
+compression, HTTP/2 multiplexing, plain load balancers. Limits: strictly
+one-way (client→server goes over ordinary requests), text only, and on
+old HTTP/1.1 setups browsers capped concurrent SSE connections per domain
+(HTTP/2 lifted this). Notably, SSE had a renaissance as the transport
+behind LLM token streaming — that typing effect is `text/event-stream`.
+
+## WebSockets
+
+For genuinely **two-way** traffic, WebSocket upgrades the connection out
+of HTTP entirely into a persistent, full-duplex message channel.
+
+<MessageFlowVisualizer scenario="websocket" />
+
+```javascript
+const ws = new WebSocket("wss://feed.example.com/market");
+
+ws.addEventListener("open", () => {
+  ws.send(JSON.stringify({ type: "subscribe", symbols: ["AAPL", "TSLA"] }));
+});
+
+ws.addEventListener("message", (e) => {
+  render(JSON.parse(e.data));
+});
+```
+
+After the `101 Switching Protocols` handshake, each message costs a few
+bytes of framing instead of a full HTTP exchange — which is why every
+serious trading feed, multiplayer game, and collaborative editor uses it.
+The price is that you've left HTTP's ecosystem, and its conveniences are
+now **your** code:
+
+- **Reconnection** — with exponential backoff *and jitter*, or a server
+  restart makes ten thousand clients reconnect in the same second (a
+  thundering herd you inflict on yourself).
+- **Heartbeats** — ping/pong to detect connections that died silently
+  (mobile networks specialize in these); without them you'll render
+  prices from a socket that's been dead for a minute.
+- **Resubscription state** — the server forgot your subscriptions;
+  on reconnect the client must replay them, and ideally reconcile a
+  snapshot to cover the gap.
+- **Infrastructure** — sticky or connection-aware load balancing, proxies
+  configured to not buffer or kill idle upgrades.
+
+## Choosing
+
+<table>
+  <thead>
+    <tr>
+      <th></th>
+      <th>Short poll</th>
+      <th>Long poll</th>
+      <th>SSE</th>
+      <th>WebSocket</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Latency</td>
+      <td>Up to interval</td>
+      <td>~Instant</td>
+      <td>~Instant</td>
+      <td>~Instant</td>
+    </tr>
+    <tr>
+      <td>Direction</td>
+      <td>Pull</td>
+      <td>Pull (held)</td>
+      <td>Server → client</td>
+      <td>Both ways</td>
+    </tr>
+    <tr>
+      <td>Overhead per update</td>
+      <td>Full request</td>
+      <td>Full request</td>
+      <td>Tiny chunk</td>
+      <td>Tiny frame</td>
+    </tr>
+    <tr>
+      <td>Auto-reconnect</td>
+      <td>n/a</td>
+      <td>DIY</td>
+      <td>Built in</td>
+      <td>DIY</td>
+    </tr>
+    <tr>
+      <td>Infra friction</td>
+      <td>None</td>
+      <td>Low</td>
+      <td>Low</td>
+      <td>Highest</td>
+    </tr>
+  </tbody>
+</table>
+
+A serviceable decision path:
+
+1. Updates every few minutes, simplicity wins → **short polling**.
+2. Server→client push only — notifications, dashboards, feeds, progress,
+   token streams → **SSE**, and it's probably the right answer more often
+   than it gets picked.
+3. Frequent traffic in *both* directions — chat, games, collaborative
+   cursors, order placement against a live book → **WebSocket**, budgeted
+   for the reconnect/heartbeat machinery above.
+4. Whatever you pick, keep **long polling** in your back pocket as the
+   fallback for hostile networks — that's exactly what libraries like
+   Socket.IO automate.
+
+One last habit from the trenches: even with a perfect transport, don't
+re-render on every message — a busy feed will emit updates faster than
+60fps means anything. Batch or throttle at the UI boundary (the
+[debounce vs throttle post](/blog/debounce-vs-throttle) covers exactly
+this). The transport delivers the data; the UI still has to earn the
+smoothness.

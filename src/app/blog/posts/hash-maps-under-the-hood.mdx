@@ -1,0 +1,191 @@
+---
+title: "Hash Maps Under the Hood: Why O(1) Comes With an Asterisk"
+publishedAt: "2026-07-06"
+summary: "How hash maps actually work — hashing, buckets, collisions, and resizing — with an animated walkthrough and a from-scratch implementation."
+tags: "DSA"
+---
+
+Hash maps are the most-used data structure in day-to-day programming —
+every JavaScript object, every Python dict, every `Map` and `HashMap` —
+and most of us happily treat them as magic O(1) boxes. This post opens the
+box: how a key finds its slot, what happens when two keys want the same
+slot, and why the map occasionally stops everything to rebuild itself.
+
+## The core idea
+
+A hash map is just an **array with a party trick**. Arrays give O(1)
+access *by index*; a hash map converts an arbitrary key into an index:
+
+1. Run the key through a **hash function** → a large integer.
+2. Take it **modulo the array length** → a valid index (the "bucket").
+3. Store or look up the entry at that bucket.
+
+```javascript
+const index = hash(key) % buckets.length;
+```
+
+Every design question in a hash map falls out of the two ways this can go
+wrong: the hash function might cluster keys, and two different keys can
+land in the same bucket.
+
+Watch the whole lifecycle — inserts, a collision, a lookup, and a resize:
+
+<HashMapVisualizer />
+
+## Hash functions
+
+A good hash function is **deterministic** (same key → same hash, always),
+**fast**, and **spreads keys uniformly** across the integer range. For
+strings, a classic and surprisingly effective choice is the polynomial
+rolling hash — this is essentially Java's `String.hashCode()`:
+
+```javascript
+function hashString(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = (h * 31 + str.charCodeAt(i)) | 0; // | 0 keeps it a 32-bit int
+  }
+  return h >>> 0; // force non-negative
+}
+```
+
+Why 31? A small odd prime avoids common factors with typical table sizes
+(so the modulo spreads well), and multiplication by 31 optimizes to a
+shift-and-subtract. The details vary by language, but the shape — mix
+every piece of the key into an accumulating integer — is universal.
+
+The cardinal sin is a hash that ignores part of the key or maps many keys
+to few values. Hash everything to `42` and your map still *works* — it
+just silently becomes a linked list with extra steps.
+
+## Collisions
+
+With 8 buckets and more than a handful of keys, two keys **will** share a
+bucket (the birthday paradox guarantees it long before the table is
+full). Two standard strategies:
+
+- **Separate chaining** — each bucket holds a small list of entries.
+  Colliding entries append to the list; lookups walk it comparing actual
+  keys. Simple, tolerant of high load. This is what the animation above
+  shows, and what Java's `HashMap` does.
+- **Open addressing** — no lists; a colliding entry probes for the next
+  free slot (linear probing checks `i+1, i+2, …`). Better cache locality
+  and no pointer overhead, but deletions get tricky and performance
+  degrades sharply as the table fills. Python's dict and Rust's HashMap
+  take this route.
+
+Either way, the lookup must **compare full keys**, not just hashes — equal
+hashes don't imply equal keys. That's why "hash and equality must agree"
+is a law: two keys that are equal must produce the same hash, or the map
+will file them in different buckets and lose one.
+
+## Load factor and resizing
+
+The **load factor** is entries ÷ buckets. As it climbs, chains lengthen
+and O(1) quietly erodes toward O(n). So when it crosses a threshold
+(typically **0.75**), the map:
+
+1. Allocates a table **twice the size**.
+2. **Rehashes every entry** into the new table (the modulo changed, so
+   almost everything moves — as the animation's resize step shows).
+
+That rebuild is O(n), which sounds like it breaks the O(1) promise. It
+doesn't, thanks to **amortization**: doubling means a resize at n entries
+was preceded by resizes at n/2, n/4, … — total work across all resizes is
+O(n) for n inserts, i.e. O(1) per insert *on average*. Same argument as a
+dynamic array's `push`.
+
+Two practical consequences:
+
+- If you know you're inserting a million entries, **pre-size the map** and
+  skip every intermediate rebuild (`new HashMap<>(1_400_000)` in Java —
+  capacity ÷ 0.75).
+- An individual insert can occasionally be slow. In latency-critical
+  paths, that rare O(n) spike is real and measurable.
+
+## A from-scratch implementation
+
+Chaining, resizing, and honest key comparison in ~40 lines:
+
+```javascript
+class SimpleHashMap {
+  constructor() {
+    this.buckets = new Array(8).fill(null).map(() => []);
+    this.size = 0;
+  }
+
+  #indexFor(key) {
+    return hashString(key) % this.buckets.length;
+  }
+
+  set(key, value) {
+    const bucket = this.buckets[this.#indexFor(key)];
+    for (const entry of bucket) {
+      if (entry[0] === key) {
+        entry[1] = value; // update existing key
+        return;
+      }
+    }
+    bucket.push([key, value]);
+    this.size++;
+    if (this.size / this.buckets.length > 0.75) this.#resize();
+  }
+
+  get(key) {
+    const bucket = this.buckets[this.#indexFor(key)];
+    for (const [k, v] of bucket) {
+      if (k === key) return v;
+    }
+    return undefined;
+  }
+
+  #resize() {
+    const old = this.buckets.flat();
+    this.buckets = new Array(this.buckets.length * 2)
+      .fill(null)
+      .map(() => []);
+    for (const [k, v] of old) {
+      this.buckets[this.#indexFor(k)].push([k, v]);
+    }
+  }
+}
+```
+
+Real implementations add plenty on top — Java treeifies any chain longer
+than 8 into a red-black tree (turning the worst case into O(log n)), and
+most runtimes seed the hash randomly per process so attackers can't
+precompute thousands of colliding keys and turn your request parser into
+an O(n²) denial of service (a real attack — "hash flooding").
+
+## Complexity
+
+<table>
+  <thead>
+    <tr>
+      <th>Operation</th>
+      <th>Average</th>
+      <th>Worst case</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>get / set / delete</td>
+      <td>O(1)</td>
+      <td>O(n) — degenerate collisions</td>
+    </tr>
+    <tr>
+      <td>Insert triggering resize</td>
+      <td>O(1) amortized</td>
+      <td>O(n) for that one insert</td>
+    </tr>
+    <tr>
+      <td>Ordered iteration</td>
+      <td colSpan="2">Not supported — use a tree (see the BST post) or sort the keys</td>
+    </tr>
+  </tbody>
+</table>
+
+That's the asterisk on O(1): *assuming a decent hash function and a
+bounded load factor*. Both assumptions are maintained by machinery running
+quietly under every `map.get()` you've ever written — hopefully it's now
+machinery you could rebuild yourself.

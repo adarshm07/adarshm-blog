@@ -1,0 +1,198 @@
+---
+title: "JavaScript Promises in Depth: Chaining, Errors, and Combinators"
+publishedAt: "2026-07-06"
+summary: "The rules that make promises predictable — state transitions, how .then chains really resolve, error propagation, and when to reach for all, allSettled, race, or any."
+tags: "JavaScript"
+---
+
+Promises are the foundation everything async in JavaScript is built on —
+`fetch`, `async/await`, dynamic `import()`. Most of us use them daily
+while carrying a slightly fuzzy model of how they behave, and the fuzz
+shows up as unhandled rejections, accidental sequential code, and `.then`
+chains that silently swallow values. This post nails down the actual
+rules. (For *when* promise callbacks run — microtasks and the event loop —
+see [the event loop post](/blog/javascript-event-loop); this one is about
+*what* they do.)
+
+## Three states, one transition
+
+<PromiseStateDiagram />
+
+A promise is a state machine with exactly one move: from **pending** to
+either **fulfilled** (with a value) or **rejected** (with a reason). That
+transition happens **once**. Settle a promise twice and the second call is
+silently ignored:
+
+```javascript
+const p = new Promise((resolve, reject) => {
+  resolve("first");
+  resolve("second"); // ignored
+  reject("nope");    // also ignored
+});
+```
+
+This one-shot guarantee is the entire value proposition: a promise is a
+container you can hand to five different consumers, attach callbacks
+before *or after* it settles, and everyone observes the same immutable
+outcome. Compare that to a raw callback, which you just have to trust gets
+called exactly once.
+
+## The chaining rules
+
+`.then` doesn't just attach a callback — it **returns a new promise**,
+whose fate is decided by what your callback does. There are only three
+cases, and they're worth memorizing:
+
+1. **Return a plain value** → the new promise fulfills with that value.
+2. **Return a promise** → the new promise *adopts* it: waits for it and
+   mirrors its outcome. This is why chains flatten instead of nesting.
+3. **Throw** → the new promise rejects with the thrown error.
+
+```javascript
+fetch("/api/user")
+  .then((res) => {
+    if (!res.ok) throw new Error(`HTTP ${res.status}`); // rule 3
+    return res.json();                                  // rule 2 (a promise)
+  })
+  .then((user) => user.name)                            // rule 1 (a value)
+  .then((name) => console.log(name))
+  .catch((err) => console.error("somewhere above failed:", err));
+```
+
+Two practical corollaries:
+
+- **Forgetting `return` breaks the chain.** If a callback runs
+  `savePromise` but doesn't return it, the next `.then` fires immediately
+  with `undefined`, and errors from the orphaned promise escape the
+  chain's `.catch` entirely. This is probably the most common promise bug
+  in existence.
+- **Nesting is a smell.** Any time you write `.then(x => f(x).then(...))`
+  you almost certainly wanted to return `f(x)` and chain at the top
+  level.
+
+## How errors travel
+
+A rejection **skips forward** past every fulfillment handler until it
+meets a rejection handler — exactly like a thrown exception unwinding
+past stack frames until a `catch`. And `.catch(fn)` is literally
+`.then(undefined, fn)`.
+
+One subtlety worth knowing: `.then(onFulfilled, onRejected)` and
+`.then(onFulfilled).catch(onRejected)` are **not** the same. The
+two-argument form can't catch errors thrown by its *own* `onFulfilled`;
+the chained `.catch` can, because it sits downstream of it.
+
+After a `.catch`, the chain is **recovered** — whatever the catch handler
+returns becomes a normal fulfillment for the next link. That's a feature
+(fallback values) and a footgun (accidentally continuing a pipeline that
+should have stopped). Re-throw if you only meant to log:
+
+```javascript
+.catch((err) => {
+  reportError(err);
+  throw err; // keep the chain rejected
+})
+```
+
+If nothing in the chain ever handles a rejection, the runtime raises
+`unhandledrejection` (browsers) or, in Node, crashes the process by
+default — promises make it loud when you drop errors on the floor.
+
+## The combinators
+
+Four static methods coordinate multiple promises, differing along two
+axes: do you need *all* results or just *one*, and what should a failure
+do?
+
+<table>
+  <thead>
+    <tr>
+      <th>Combinator</th>
+      <th>Resolves with</th>
+      <th>Rejects when</th>
+      <th>Use for</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Promise.all</td>
+      <td>Array of all values (order preserved)</td>
+      <td>Any one rejects (fail fast)</td>
+      <td>Parallel work where every piece is required</td>
+    </tr>
+    <tr>
+      <td>Promise.allSettled</td>
+      <td>Array of {'{ status, value | reason }'}</td>
+      <td>Never</td>
+      <td>Batch jobs where partial success is fine</td>
+    </tr>
+    <tr>
+      <td>Promise.race</td>
+      <td>First to settle — fulfilled or rejected</td>
+      <td>First settler rejected</td>
+      <td>Timeouts, "whichever responds first"</td>
+    </tr>
+    <tr>
+      <td>Promise.any</td>
+      <td>First to fulfill</td>
+      <td>All reject (AggregateError)</td>
+      <td>Redundant sources, fastest mirror wins</td>
+    </tr>
+  </tbody>
+</table>
+
+The pattern that shows up constantly — independent requests should run
+**in parallel**, and `await` makes it deceptively easy not to:
+
+```javascript
+// Sequential by accident: ~600ms if each takes 200ms
+const user = await fetchUser();
+const posts = await fetchPosts();
+const tags = await fetchTags();
+
+// Parallel on purpose: ~200ms
+const [user2, posts2, tags2] = await Promise.all([
+  fetchUser(),
+  fetchPosts(),
+  fetchTags(),
+]);
+```
+
+Each bare `await` parks the function until that promise settles, so three
+independent fetches quietly serialize. The same trap wears a second
+costume as `await` inside a loop — when iterations don't depend on each
+other, build an array of promises and `Promise.all` it.
+
+And `race` gives you timeouts in four lines:
+
+```javascript
+function withTimeout(promise, ms) {
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms)
+  );
+  return Promise.race([promise, timeout]);
+}
+```
+
+(One honest caveat: losing promises aren't cancelled — the slow fetch
+keeps running, you just stop waiting for it. Actual cancellation needs
+`AbortController`.)
+
+## Odds and ends worth knowing
+
+- **`Promise.resolve(x)` is idempotent** — if `x` is already a promise it
+  returns it as-is, which makes it the standard way to normalize
+  "value-or-promise" inputs.
+- **The executor runs synchronously** — `new Promise(fn)` calls `fn`
+  immediately; only the `.then` callbacks are deferred (to the microtask
+  queue).
+- **`.finally` passes through** — it sees no value and returns the chain's
+  outcome unchanged; perfect for hiding spinners regardless of result.
+- **`async` functions are promise factories** — `return x` fulfills,
+  `throw` rejects, and callers compose them with the same combinators.
+
+The mental model that ties it together: a promise chain is a **pipeline of
+one-shot containers**, each link deciding the next one's fate by value,
+promise, or throw — with rejections riding an express lane to the nearest
+catch. Every confusing chain becomes legible once you trace it link by
+link with those three rules.

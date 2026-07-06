@@ -1,0 +1,204 @@
+---
+title: "Binary Search and BSTs: Halving Your Way to O(log n)"
+publishedAt: "2026-07-06"
+summary: "How binary search eliminates half the problem with every comparison, and how binary search trees turn the same idea into a data structure — with interactive animations."
+tags: "DSA"
+---
+
+Every fast lookup structure in computer science is built on one idea:
+**throw away half the problem with a single comparison**. Do that
+repeatedly and a million elements take just 20 comparisons, a billion take
+30. This post covers the idea in its two most common forms — **binary
+search** over a sorted array, and the **binary search tree** that turns the
+same principle into a living data structure.
+
+## Binary search
+
+The setup: a **sorted** array and a target value. Keep two pointers, `lo`
+and `hi`, marking the range where the target could still be. Compare the
+middle element against the target, and either you've found it, or you know
+which half to discard.
+
+<BinarySearchVisualizer />
+
+```java
+public static int binarySearch(int[] arr, int target) {
+    int lo = 0, hi = arr.length - 1;
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (arr[mid] == target) return mid;
+        if (arr[mid] < target) lo = mid + 1;
+        else hi = mid - 1;
+    }
+    return -1; // not found
+}
+```
+
+```javascript
+function binarySearch(arr, target) {
+  let lo = 0;
+  let hi = arr.length - 1;
+  while (lo <= hi) {
+    const mid = lo + Math.floor((hi - lo) / 2);
+    if (arr[mid] === target) return mid;
+    if (arr[mid] < target) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return -1;
+}
+```
+
+- **Time complexity:** O(log n) — the range halves every iteration
+- **Space complexity:** O(1) iterative, O(log n) if written recursively
+- **Requirement:** the array must already be sorted — sorting first costs O(n log n), so binary search pays off when you search the same data repeatedly
+
+### The off-by-one minefield
+
+Binary search is famously easy to get subtly wrong — a 1962 algorithm whose
+first published bug-free version took years. The classic traps:
+
+- **`lo <= hi`, not `lo < hi`** — with `<` you never examine the final
+  candidate when the range shrinks to one element.
+- **`mid = lo + (hi - lo) / 2`, not `(lo + hi) / 2`** — the naive version
+  overflows in fixed-width languages when `lo + hi` exceeds the integer
+  max. (In JavaScript numbers this isn't an overflow issue, but the habit
+  is worth keeping for every other language.)
+- **Always move past `mid`** — `lo = mid + 1` and `hi = mid - 1`. Setting
+  `lo = mid` invites an infinite loop when the range is two elements wide.
+
+### Beyond "is it there?"
+
+The same skeleton answers richer questions. **Lower bound** — the first
+index whose value is ≥ the target — is the version standard libraries
+actually ship, because it handles duplicates and insertion points:
+
+```javascript
+function lowerBound(arr, target) {
+  let lo = 0;
+  let hi = arr.length; // note: one past the end
+  while (lo < hi) {
+    const mid = lo + Math.floor((hi - lo) / 2);
+    if (arr[mid] < target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo; // first index with arr[i] >= target
+}
+```
+
+And binary search doesn't need an array at all — it works on any
+**monotonic condition**: "the first version where the test fails"
+(`git bisect`), "the largest capacity that still overflows", "the first
+timestamp after midnight". If the answer space is sorted, you can halve it.
+
+## Binary search trees
+
+A sorted array searches fast but inserts slowly — adding one element means
+shifting everything after it, O(n). The **binary search tree** fixes that:
+each node keeps everything smaller in its left subtree and everything
+larger in its right subtree, so search *and* insert both follow one
+root-to-leaf path.
+
+<BSTVisualizer />
+
+```javascript
+class Node {
+  constructor(value) {
+    this.value = value;
+    this.left = null;
+    this.right = null;
+  }
+}
+
+class BST {
+  constructor() {
+    this.root = null;
+  }
+
+  search(value) {
+    let node = this.root;
+    while (node !== null) {
+      if (value === node.value) return true;
+      node = value < node.value ? node.left : node.right;
+    }
+    return false;
+  }
+
+  insert(value) {
+    const fresh = new Node(value);
+    if (this.root === null) {
+      this.root = fresh;
+      return;
+    }
+    let node = this.root;
+    while (true) {
+      if (value < node.value) {
+        if (node.left === null) return void (node.left = fresh);
+        node = node.left;
+      } else {
+        if (node.right === null) return void (node.right = fresh);
+        node = node.right;
+      }
+    }
+  }
+}
+```
+
+One bonus that arrays can't match: an **in-order traversal** (left, node,
+right) visits every value in sorted order, which makes range queries — "all
+values between 10 and 50" — natural.
+
+### The catch: balance
+
+A BST is only O(log n) when it's roughly **balanced**. Insert already-sorted
+data — 1, 2, 3, 4, 5 — and every node goes right: the "tree" degenerates
+into a linked list, and every operation becomes O(n). This isn't a rare
+edge case; feeding sorted data into a naive BST is one of the easiest ways
+to accidentally build the slowest possible structure.
+
+Production trees fix this by rebalancing on the fly — **AVL trees** and
+**red-black trees** perform local rotations on insert/delete to cap the
+height at O(log n) no matter the input order. That's what sits behind
+Java's `TreeMap` and C++'s `std::map`. The rotations deserve their own
+post, but the takeaway is: when you reach for a tree in practice, you're
+almost always reaching for a *self-balancing* one.
+
+## Comparison
+
+<table>
+  <thead>
+    <tr>
+      <th>Structure</th>
+      <th>Search</th>
+      <th>Insert</th>
+      <th>Delete</th>
+      <th>Sorted iteration</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Sorted array</td>
+      <td>O(log n)</td>
+      <td>O(n)</td>
+      <td>O(n)</td>
+      <td>Free</td>
+    </tr>
+    <tr>
+      <td>Unbalanced BST</td>
+      <td>O(log n) avg, O(n) worst</td>
+      <td>O(log n) avg, O(n) worst</td>
+      <td>O(log n) avg, O(n) worst</td>
+      <td>O(n) in-order</td>
+    </tr>
+    <tr>
+      <td>Balanced BST (AVL/red-black)</td>
+      <td>O(log n)</td>
+      <td>O(log n)</td>
+      <td>O(log n)</td>
+      <td>O(n) in-order</td>
+    </tr>
+  </tbody>
+</table>
+
+Sorted array when the data rarely changes, balanced BST when it changes
+constantly and you still need order. And when you don't need order at all,
+a hash map beats both — that's the next post in this series.
