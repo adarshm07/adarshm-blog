@@ -1,0 +1,184 @@
+---
+title: "The JavaScript Event Loop: How Async Actually Works"
+publishedAt: "2026-07-06"
+summary: "A visual, step-by-step guide to the event loop — call stack, task queue, microtasks, and async/await — with interactive animations you can play through."
+tags: "JavaScript"
+---
+
+JavaScript runs on a **single thread** — one call stack, one thing happening
+at a time. And yet it fetches data, waits on timers, and reacts to clicks
+without ever freezing. The machinery that makes that possible is the
+**event loop**, and once you can picture it, a whole class of "why does this
+log in that order?" mysteries disappears.
+
+This post walks through the moving parts with interactive animations — hit
+**Play** on each one, or step through with **Next**.
+
+## The moving parts
+
+Four pieces work together every time your code runs:
+
+- **Call stack** — where functions execute. Every call pushes a frame,
+  every return pops one. JavaScript only ever runs what's on top of this
+  stack.
+- **Web APIs** — the browser (or Node's) side of the house: timers, network
+  requests, the DOM. When you call `setTimeout` or `fetch`, the *waiting*
+  happens here, off the thread, not in your JavaScript.
+- **Task queue** (also called the macrotask or callback queue) — where
+  finished Web API work drops its callback: an expired timer, an arrived
+  network response, a click handler ready to fire.
+- **Microtask queue** — a separate, higher-priority queue for promise
+  callbacks (`.then`, `.catch`, `.finally`), `queueMicrotask`, and the
+  continuation after every `await`.
+
+The **event loop** itself is almost embarrassingly simple: whenever the call
+stack is empty, drain **all** microtasks, then run **one** task from the
+task queue, then repeat. That one rule — *all* microtasks, *one* task —
+explains nearly every ordering puzzle in JavaScript.
+
+## The classic puzzle: setTimeout vs Promise
+
+Here's the snippet that shows up in every JavaScript interview:
+
+```javascript
+console.log("start");
+
+setTimeout(() => {
+  console.log("timeout");
+}, 0);
+
+Promise.resolve().then(() => {
+  console.log("promise");
+});
+
+console.log("end");
+```
+
+Before scrolling further — what order do the four logs appear in? The timer
+is `0` milliseconds, and the `setTimeout` line comes *before* the promise
+line, so `timeout` before `promise`... right? Watch what actually happens:
+
+<EventLoopVisualizer scenario="timeout-vs-promise" />
+
+The output is `start`, `end`, `promise`, `timeout`, because:
+
+1. Synchronous code always finishes first — the whole script is itself a
+   task, and nothing else can run until the stack is empty.
+2. A `0` ms timer doesn't mean "run now", it means "put my callback in the
+   task queue as soon as possible". It still has to wait its turn.
+3. When the stack empties, microtasks beat tasks — the promise callback cuts
+   in line ahead of the timer callback, no matter which was scheduled first.
+
+## Microtasks vs tasks: who goes where
+
+The split matters because the two queues have different priorities, so it's
+worth knowing which APIs feed which queue:
+
+<table>
+  <thead>
+    <tr>
+      <th>Task queue (one per loop turn)</th>
+      <th>Microtask queue (drained fully)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>setTimeout / setInterval callbacks</td>
+      <td>.then / .catch / .finally callbacks</td>
+    </tr>
+    <tr>
+      <td>DOM events (click, scroll, input)</td>
+      <td>Continuation after every await</td>
+    </tr>
+    <tr>
+      <td>Network / I/O callbacks</td>
+      <td>queueMicrotask(fn)</td>
+    </tr>
+    <tr>
+      <td>setImmediate (Node)</td>
+      <td>process.nextTick (Node, even earlier)</td>
+    </tr>
+  </tbody>
+</table>
+
+The "drained fully" part has a sharp edge: because the loop empties the
+entire microtask queue before moving on — including microtasks queued *by*
+microtasks — a promise callback that keeps scheduling another one will
+**starve** the task queue forever:
+
+```javascript
+function loop() {
+  Promise.resolve().then(loop); // freezes the page: timers, clicks,
+}                               // and rendering never get a turn
+loop();
+```
+
+Swap the `.then` for a `setTimeout` and the same pattern is harmless — each
+iteration becomes a task, and the browser gets to render and handle input
+between tasks.
+
+## async/await is the event loop in disguise
+
+`async`/`await` doesn't add any new machinery — it's promise callbacks with
+better ergonomics. The key mental model: an async function runs
+**synchronously until the first `await`**, then suspends, and its
+continuation is scheduled as a microtask when the awaited promise settles.
+
+```javascript
+async function loadUser() {
+  console.log("loading");
+  const user = await Promise.resolve("Ada");
+  console.log("hello", user);
+}
+
+console.log("A");
+loadUser();
+console.log("B");
+```
+
+<EventLoopVisualizer scenario="async-await" />
+
+The order is `A`, `loading`, `B`, `hello Ada`. The surprise for most people
+is `loading` before `B`: calling an async function is *not* deferred — the
+body runs immediately, on the caller's stack, right up to the `await`. Only
+the code *after* the `await` waits for a microtask turn. Every `await` in a
+function is a potential "someone else's code runs here" gap, which is worth
+remembering when you're reasoning about shared state.
+
+## Things that bite in practice
+
+**A 0 ms timer is a request, not a guarantee.** The delay is a *minimum*.
+The callback can't run until the stack is clear and every earlier task and
+microtask has finished. Browsers also clamp nested timers (typically to
+~4 ms after a few levels deep), and background tabs get throttled far more
+aggressively.
+
+**Blocking the stack blocks everything.** There's no preemption: a
+long-running synchronous loop holds the one thread, so clicks queue up
+unhandled and rendering stalls — the classic frozen page.
+
+```javascript
+button.addEventListener("click", () => {
+  const end = Date.now() + 3000;
+  while (Date.now() < end) {} // page is dead for 3 seconds
+});
+```
+
+For genuinely heavy computation, the options are chunking the work across
+tasks (`setTimeout`, or `scheduler.yield()` in newer browsers) so the loop
+can breathe between slices, or moving it off the thread entirely with a
+Web Worker.
+
+**Rendering happens between tasks.** The browser can repaint after a task
+finishes (and its microtasks drain), but never in the middle of one. If you
+update the DOM twice in the same synchronous block, the user only ever sees
+the final state — the intermediate frame never had a chance to paint.
+
+## Wrap-up
+
+The whole model fits in one sentence: *run the stack dry, drain every
+microtask, take one task, repeat*. From that single rule you can derive why
+`promise` beats `timeout`, why an async function starts synchronously, why
+recursive microtasks freeze a page while recursive timers don't, and why a
+busy loop kills rendering. Next time an ordering puzzle shows up in a code
+review or an interview, don't memorize the answer — replay the queues.

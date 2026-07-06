@@ -4,6 +4,7 @@ import { MDXRemote, MDXRemoteProps } from 'next-mdx-remote/rsc'
 import { highlight } from 'sugar-high'
 import React from 'react'
 import { SortVisualizer } from '@/app/components/sort-visualizer'
+import { EventLoopVisualizer } from '@/app/components/event-loop-visualizer'
 import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
@@ -123,6 +124,7 @@ const components = {
   pre: Pre,
   Table,
   SortVisualizer,
+  EventLoopVisualizer,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {
