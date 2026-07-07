@@ -1,0 +1,189 @@
+---
+title: "Prototypes and Inheritance: How JavaScript Objects Really Work"
+publishedAt: "2026-07-07"
+summary: "The prototype chain is the engine behind every JavaScript object and the class keyword is sugar on top of it — here's how the whole thing actually works."
+tags: "JavaScript"
+---
+
+JavaScript has `class` now, so it's tempting to think it works like Java or
+C++. It doesn't. Underneath the familiar syntax, JavaScript has exactly one
+inheritance mechanism — the **prototype chain** — and `class` is a thin
+layer of sugar over it. Understanding the chain explains inheritance,
+method sharing, why `class` is *not* what it looks like, and a whole
+category of subtle bugs.
+
+## Every object has a hidden link
+
+When you read a property off an object, the engine checks the object
+itself. If it's not there, it follows a hidden internal link — called
+`[[Prototype]]` — to another object and checks *that*, and so on up a
+chain until it either finds the property or reaches `null`.
+
+<PrototypeChainDiagram />
+
+That's the entire mechanism. There is no copying, no "inherited members"
+baked into the object at creation — just a live pointer to another object
+and a lookup that walks it. You can see the link directly:
+
+```javascript
+const arr = [1, 2, 3];
+Object.getPrototypeOf(arr) === Array.prototype;        // true
+Object.getPrototypeOf(Array.prototype) === Object.prototype; // true
+Object.getPrototypeOf(Object.prototype);               // null — top of chain
+```
+
+That's why `arr.map()` works even though you never defined `map` on `arr`:
+the lookup misses on the array, then finds `map` on `Array.prototype`. One
+`map` function is shared by every array in the program — the prototype is
+how JavaScript avoids copying methods onto millions of instances.
+
+## Building the chain by hand
+
+Before `class`, you wired this up manually with constructor functions.
+It's worth seeing once, because it's exactly what `class` does for you:
+
+```javascript
+function Animal(name) {
+  this.name = name;          // per-instance data
+}
+
+Animal.prototype.eat = function () {   // shared method
+  console.log(`${this.name} is eating`);
+};
+
+const cat = new Animal("Felix");
+cat.eat(); // "Felix is eating"
+```
+
+The `new` keyword is what links things together. `new Animal("Felix")`:
+
+1. creates a fresh empty object,
+2. sets its `[[Prototype]]` to `Animal.prototype`,
+3. runs `Animal` with `this` bound to the new object,
+4. returns the object.
+
+So `name` lives **on the instance** (each cat has its own), while `eat`
+lives **on the prototype** (shared by all cats). That split — per-instance
+state, shared behavior — is the whole point.
+
+## The class keyword
+
+Here's the same thing in modern syntax. It produces an *identical*
+prototype structure:
+
+```javascript
+class Animal {
+  constructor(name) {
+    this.name = name;
+  }
+  eat() {                    // goes on Animal.prototype, not the instance
+    console.log(`${this.name} is eating`);
+  }
+}
+
+class Dog extends Animal {
+  constructor(name) {
+    super(name);             // calls Animal's constructor
+  }
+  bark() {
+    console.log(`${this.name} says woof`);
+  }
+}
+
+const rex = new Dog("Rex");
+rex.bark(); // found on Dog.prototype
+rex.eat();  // not on Dog.prototype → found on Animal.prototype
+```
+
+`extends` sets `Dog.prototype`'s prototype to `Animal.prototype`, building
+the multi-level chain from the diagram. `super(name)` calls the parent
+constructor. Methods still land on the prototypes, not the instances — so
+`class` didn't change the model at all, it just gave it readable syntax and
+enforced a few good practices (you can't call a class without `new`, method
+definitions are non-enumerable).
+
+## Property shadowing
+
+Because lookup stops at the **first** match walking up, a property on the
+instance hides one further up the chain:
+
+```javascript
+class Animal {
+  speak() { return "generic sound"; }
+}
+class Dog extends Animal {
+  speak() { return "woof"; }   // shadows Animal's speak
+}
+
+new Dog().speak(); // "woof" — found on Dog.prototype first
+```
+
+This is method overriding, and it falls out of the lookup rule for free —
+there's no special "override" machinery. `super.speak()` is how a child
+reaches past its own shadow to the parent's version.
+
+## Where it bites
+
+**Shared mutable state on the prototype.** Only put *methods* on
+prototypes, never mutable objects or arrays. A reference type on the
+prototype is shared across *every* instance:
+
+```javascript
+function Team() {}
+Team.prototype.members = []; // ⚠️ one array for ALL teams
+
+const a = new Team();
+const b = new Team();
+a.members.push("Ada");
+b.members; // ["Ada"] — b sees a's push! Same array.
+```
+
+The fix is to initialize per-instance state in the constructor
+(`this.members = []`), so each instance gets its own.
+
+**Walking inherited properties.** A `for...in` loop visits inherited
+enumerable properties too, not just the object's own. Guard with
+`Object.hasOwn(obj, key)` (or iterate `Object.keys(obj)`, which is
+own-only) when you mean just this object's properties.
+
+**`Object.create(null)`** makes an object with *no* prototype — handy for
+a pure dictionary with no inherited `toString`/`constructor` keys to
+collide with your data.
+
+## How to link objects, at a glance
+
+<table>
+  <thead>
+    <tr>
+      <th>Approach</th>
+      <th>What it does</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>class / extends</td>
+      <td>Modern, readable way to set up constructor + prototype chain</td>
+    </tr>
+    <tr>
+      <td>new Fn()</td>
+      <td>Links the instance to Fn.prototype and runs Fn as constructor</td>
+    </tr>
+    <tr>
+      <td>Object.create(proto)</td>
+      <td>Creates an object with [[Prototype]] set to proto directly</td>
+    </tr>
+    <tr>
+      <td>Object.getPrototypeOf(obj)</td>
+      <td>Reads the chain link (prefer over the legacy __proto__)</td>
+    </tr>
+  </tbody>
+</table>
+
+## Wrap-up
+
+Strip away the syntax and JavaScript inheritance is one idea: **objects
+link to other objects, and property lookup walks the links until it finds a
+match or hits null.** `class`, `new`, and `extends` are all just
+convenient ways to arrange those links. Keep per-instance state in the
+constructor and shared behavior on the prototype, and the model works with
+you instead of surprising you.

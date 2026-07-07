@@ -1,0 +1,181 @@
+---
+title: "Type Coercion and Equality: Making Sense of == in JavaScript"
+publishedAt: "2026-07-07"
+summary: "Why [] == ![] is true and other coercion puzzles — the actual rules behind == , truthiness, and the handful of habits that keep them from biting."
+tags: "JavaScript"
+---
+
+JavaScript's type coercion is the butt of a thousand jokes — `[] == ![]` is
+`true`, `"" == 0` is `true`, `null == undefined` is `true` but
+`null == 0` is `false`. These look like chaos, but they're not random:
+they follow a documented algorithm. You don't need to *memorize* the weird
+cases if you understand the rules that generate them — and you mostly need
+to know which habits sidestep them entirely.
+
+## Two kinds of equality
+
+JavaScript has two equality operators, and the difference is coercion:
+
+- **`===`** (strict) — no coercion. Different types → always `false`.
+- **`==`** (loose) — coerces operands toward a common type, *then*
+  compares.
+
+```javascript
+1 === "1"; // false — number vs string, no coercion
+1 == "1";  // true  — "1" coerced to 1, then compared
+```
+
+`===` is the boring, predictable one, and that's exactly why it's the
+right default. Almost all of the "JavaScript is broken" equality memes are
+`==` doing precisely what its algorithm says — the fix is usually just to
+not invoke that algorithm.
+
+## The == algorithm, simplified
+
+When the two sides have different types, `==` applies these rules in
+order:
+
+1. **`null` and `undefined` are equal to each other and nothing else.**
+   `null == undefined` is `true`; `null == 0` is `false`. There's no
+   coercion here — it's a special-cased pair.
+2. **Number vs string** → the string is converted to a number.
+3. **Boolean vs anything** → the boolean is converted to a number first
+   (`true` → 1, `false` → 0), *then* the rules re-apply.
+4. **Object vs primitive** → the object is converted to a primitive (via
+   `valueOf`/`toString`), then compared.
+
+Rule 3 is the source of the most notorious footgun:
+
+```javascript
+if (x == true) { ... }
+```
+
+This does **not** mean "if x is truthy". It coerces `true` to `1`, so it's
+really `x == 1`. The string `"hello"` is truthy, but `"hello" == true` is
+`false` (because `"hello"` becomes `NaN`, and `NaN == 1` is false). Never
+compare against boolean literals — just write `if (x)`.
+
+## Decoding the famous puzzles
+
+Armed with the rules, the "chaos" examples become mechanical derivations.
+
+```javascript
+"" == 0;
+// number vs string → "" converts to 0 → 0 == 0 → true
+```
+
+```javascript
+"5" == 5;
+// number vs string → "5" converts to 5 → 5 == 5 → true
+```
+
+```javascript
+[] == ![];
+// step 1: ![] is a boolean. [] is truthy (all objects are), so ![] is false
+// now: [] == false
+// step 2: boolean → number, false becomes 0  →  [] == 0
+// step 3: object vs number, [] converts to primitive: [].toString() is ""
+//         → "" == 0
+// step 4: string → number, "" becomes 0  →  0 == 0  →  true
+```
+
+Genuinely cursed to *read*, but every step is a rule you just saw. This is
+also the definitive argument for `===`: with strict equality, all three of
+these are simply `false` and you never think about them again.
+
+## Truthiness
+
+Separate from `==`, every value has a boolean interpretation used by
+`if`, `&&`, `||`, and `!`. The **falsy** values are a short, closed list —
+memorize these eight and everything else is truthy:
+
+<table>
+  <thead>
+    <tr>
+      <th>Falsy (the complete list)</th>
+      <th>Notably truthy (surprises)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>false</code></td>
+      <td><code>"0"</code> (non-empty string)</td>
+    </tr>
+    <tr>
+      <td><code>0</code>, <code>-0</code>, <code>0n</code></td>
+      <td><code>"false"</code> (non-empty string)</td>
+    </tr>
+    <tr>
+      <td><code>""</code> (empty string)</td>
+      <td><code>[]</code> (empty array)</td>
+    </tr>
+    <tr>
+      <td><code>null</code></td>
+      <td><code>{}</code> (empty object)</td>
+    </tr>
+    <tr>
+      <td><code>undefined</code></td>
+      <td><code>function(){}</code></td>
+    </tr>
+    <tr>
+      <td><code>NaN</code></td>
+      <td><code>Infinity</code></td>
+    </tr>
+  </tbody>
+</table>
+
+The empty-array-is-truthy row catches people constantly:
+
+```javascript
+if ([]) console.log("runs!"); // [] is truthy — this logs
+[].length === 0;              // this is how you actually check for empty
+```
+
+## The one place == is genuinely useful
+
+There's exactly one loose-equality idiom worth keeping. Because
+`null == undefined` is `true` and neither equals anything else,
+`x == null` is a clean check for "is this null *or* undefined":
+
+```javascript
+if (value == null) {
+  // true for both null and undefined, false for 0, "", false, NaN
+}
+```
+
+That's tidier than `value === null || value === undefined`. Modern
+JavaScript also gives you dedicated tools for the same intent —
+`??` (nullish coalescing) and `?.` (optional chaining) both trigger on
+exactly this null-or-undefined pair:
+
+```javascript
+const name = user.name ?? "Anonymous"; // fallback only if null/undefined
+const city = user.address?.city;       // undefined if address is missing
+```
+
+Note `??` differs from `||`: `0 || "x"` is `"x"` (0 is falsy) but
+`0 ?? "x"` is `0` (0 is not nullish) — reach for `??` whenever `0`,
+`""`, or `false` are valid values you don't want to overwrite.
+
+## A few more coercion traps
+
+- **`NaN` is not equal to itself.** `NaN === NaN` is `false`. Use
+  `Number.isNaN(x)` to test for it.
+- **`+` is overloaded.** If either operand is a string, `+` concatenates:
+  `1 + "2"` is `"12"`, but `1 - "2"` is `-1` (minus only does numbers).
+  `"" + value` is a quick string coercion; `+value` a quick numeric one.
+- **`typeof null` is `"object"`.** A famous bug preserved forever for
+  backward compatibility — test for null with `value === null`.
+- **Sorting numbers.** `[10, 2, 1].sort()` gives `[1, 10, 2]` because
+  `sort` coerces to strings by default. Pass a comparator:
+  `.sort((a, b) => a - b)`.
+
+## Wrap-up
+
+Type coercion isn't random — it's an algorithm, and once you can run it in
+your head the scary examples turn into two-line derivations. But the
+practical takeaway is simpler than the theory: **default to `===`**, know
+the eight falsy values cold, keep `x == null` as your one blessed use of
+loose equality, and reach for `??`/`?.` when nullishness is what you
+actually mean. Do that and coercion stops being a source of bugs and goes
+back to being a party trick.
