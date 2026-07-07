@@ -15,7 +15,10 @@ function hexToRgba(hex: string, alpha: number) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
-export function NotesCanvas() {
+export function NotesCanvas({ slug }: { slug: string }) {
+  const drawKey = `adarshm-notes-draw:${slug}`
+  const bgKey = `adarshm-notes-bg:${slug}`
+
   const [open, setOpen] = useState(false)
   const [tool, setTool] = useState<Tool>('pen')
   const [penColor, setPenColor] = useState(PEN_COLORS[0])
@@ -23,13 +26,41 @@ export function NotesCanvas() {
   const [bgColor, setBgColor] = useState(BG_PRESETS[0])
   const [bgOpacity, setBgOpacity] = useState(0.9)
   const [copied, setCopied] = useState(false)
+  const [hasSaved, setHasSaved] = useState(false)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null)
   const drawing = useRef(false)
   const overlayRef = useRef<HTMLDivElement>(null)
+  const loaded = useRef(false)
 
-  // Size the canvas to the viewport (accounting for device pixel ratio) on open.
+  // Restore saved background settings once, and note whether a drawing exists.
+  useEffect(() => {
+    try {
+      const bg = localStorage.getItem(bgKey)
+      if (bg) {
+        const parsed = JSON.parse(bg)
+        if (parsed.color) setBgColor(parsed.color)
+        if (typeof parsed.opacity === 'number') setBgOpacity(parsed.opacity)
+      }
+      setHasSaved(!!localStorage.getItem(drawKey))
+    } catch {
+      /* localStorage unavailable — feature just runs without persistence */
+    }
+    loaded.current = true
+  }, [bgKey, drawKey])
+
+  // Persist background settings when they change (after the initial load).
+  useEffect(() => {
+    if (!loaded.current) return
+    try {
+      localStorage.setItem(bgKey, JSON.stringify({ color: bgColor, opacity: bgOpacity }))
+    } catch {
+      /* ignore quota errors */
+    }
+  }, [bgColor, bgOpacity, bgKey])
+
+  // Size the canvas to the viewport, restore any saved drawing, lock scroll.
   useEffect(() => {
     if (!open) return
     const canvas = canvasRef.current
@@ -48,12 +79,39 @@ export function NotesCanvas() {
     ctx.lineJoin = 'round'
     ctxRef.current = ctx
 
+    try {
+      const saved = localStorage.getItem(drawKey)
+      if (saved) {
+        const img = new Image()
+        img.onload = () => ctx.drawImage(img, 0, 0, w, h)
+        img.src = saved
+      }
+    } catch {
+      /* ignore */
+    }
+
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
     const onEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
     }
     window.addEventListener('keydown', onEsc)
-    return () => window.removeEventListener('keydown', onEsc)
-  }, [open])
+    return () => {
+      window.removeEventListener('keydown', onEsc)
+      document.body.style.overflow = prevOverflow
+    }
+  }, [open, drawKey])
+
+  function persistDrawing() {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    try {
+      localStorage.setItem(drawKey, canvas.toDataURL('image/png'))
+      setHasSaved(true)
+    } catch {
+      /* ignore quota errors */
+    }
+  }
 
   function pointerPos(e: React.PointerEvent) {
     const rect = canvasRef.current!.getBoundingClientRect()
@@ -89,10 +147,11 @@ export function NotesCanvas() {
   }
 
   function endStroke() {
+    if (!drawing.current) return
     drawing.current = false
+    persistDrawing()
   }
 
-  // Text tool: drop a positioned input; commit its text onto the canvas.
   function placeTextInput(x: number, y: number) {
     const overlay = overlayRef.current
     if (!overlay) return
@@ -120,6 +179,7 @@ export function NotesCanvas() {
         ctx.font = `${penSize * 6 + 10}px sans-serif`
         ctx.textBaseline = 'top'
         ctx.fillText(value, x + 2, y - 12)
+        persistDrawing()
       }
       input.remove()
     }
@@ -141,9 +201,14 @@ export function NotesCanvas() {
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.restore()
+    try {
+      localStorage.removeItem(drawKey)
+    } catch {
+      /* ignore */
+    }
+    setHasSaved(false)
   }
 
-  // Flatten background + drawing into one canvas for export.
   function composite(): HTMLCanvasElement | null {
     const src = canvasRef.current
     if (!src) return null
@@ -162,7 +227,7 @@ export function NotesCanvas() {
     const out = composite()
     if (!out) return
     const link = document.createElement('a')
-    link.download = `notes-${Date.now()}.png`
+    link.download = `notes-${slug}-${Date.now()}.png`
     link.href = out.toDataURL('image/png')
     link.click()
   }
@@ -179,7 +244,6 @@ export function NotesCanvas() {
         setCopied(true)
         setTimeout(() => setCopied(false), 1500)
       } catch {
-        // Clipboard image write unsupported (e.g. Firefox) — fall back to download.
         downloadPng()
       }
     }, 'image/png')
@@ -191,20 +255,26 @@ export function NotesCanvas() {
         type="button"
         onClick={() => setOpen(true)}
         aria-label="Open notes canvas"
-        className="hidden md:flex fixed right-4 top-1/2 -translate-y-1/2 z-40 flex-col items-center gap-1 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white/80 dark:bg-neutral-900/80 backdrop-blur px-2.5 py-3 text-neutral-600 dark:text-neutral-300 shadow-sm hover:text-green-700 dark:hover:text-green-400 hover:border-green-400 transition-colors"
+        className="fixed right-3 top-1/2 -translate-y-1/2 z-40 flex flex-col items-center gap-1 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white/80 dark:bg-neutral-900/80 backdrop-blur px-2.5 py-3 text-neutral-600 dark:text-neutral-300 shadow-sm hover:text-green-700 dark:hover:text-green-400 hover:border-green-400 transition-colors"
       >
         <span aria-hidden className="text-base">✎</span>
         <span className="text-[10px] font-medium [writing-mode:vertical-rl]">
           Notes
         </span>
+        {hasSaved && (
+          <span
+            aria-hidden
+            className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-green-500"
+            title="Saved notes on this post"
+          />
+        )}
       </button>
     )
   }
 
   const btn =
-    'rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors border'
-  const active =
-    'bg-green-600 dark:bg-green-500 text-white border-transparent'
+    'shrink-0 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors border'
+  const active = 'bg-green-600 dark:bg-green-500 text-white border-transparent'
   const idle =
     'bg-white dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 border-neutral-200 dark:border-neutral-700 hover:border-green-400'
 
@@ -224,9 +294,9 @@ export function NotesCanvas() {
         style={{ cursor: tool === 'text' ? 'text' : 'crosshair' }}
       />
 
-      <div className="absolute left-1/2 top-4 -translate-x-1/2 z-20 flex flex-wrap items-center justify-center gap-2 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white/95 dark:bg-neutral-900/95 backdrop-blur px-3 py-2 shadow-lg max-w-[95vw]">
+      <div className="absolute left-1/2 top-3 -translate-x-1/2 z-20 flex w-[min(96vw,880px)] items-center gap-2 overflow-x-auto rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white/95 dark:bg-neutral-900/95 backdrop-blur px-3 py-2 shadow-lg [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {/* tools */}
-        <div className="flex gap-1">
+        <div className="flex shrink-0 gap-1">
           <button type="button" className={`${btn} ${tool === 'pen' ? active : idle}`} onClick={() => setTool('pen')}>
             ✎ Pen
           </button>
@@ -238,10 +308,10 @@ export function NotesCanvas() {
           </button>
         </div>
 
-        <span className="h-5 w-px bg-neutral-200 dark:bg-neutral-700" />
+        <span className="h-5 w-px shrink-0 bg-neutral-200 dark:bg-neutral-700" />
 
         {/* pen colors */}
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
           {PEN_COLORS.map((c) => (
             <button
               key={c}
@@ -255,7 +325,7 @@ export function NotesCanvas() {
         </div>
 
         {/* pen size */}
-        <label className="flex items-center gap-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+        <label className="flex shrink-0 items-center gap-1 text-[11px] text-neutral-500 dark:text-neutral-400">
           Size
           <input
             type="range"
@@ -263,14 +333,14 @@ export function NotesCanvas() {
             max={10}
             value={penSize}
             onChange={(e) => setPenSize(Number(e.target.value))}
-            className="w-16 accent-green-600"
+            className="w-14 accent-green-600"
           />
         </label>
 
-        <span className="h-5 w-px bg-neutral-200 dark:bg-neutral-700" />
+        <span className="h-5 w-px shrink-0 bg-neutral-200 dark:bg-neutral-700" />
 
         {/* background */}
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
           <span className="text-[11px] text-neutral-500 dark:text-neutral-400">BG</span>
           {BG_PRESETS.map((c) => (
             <button
@@ -291,7 +361,7 @@ export function NotesCanvas() {
           />
         </div>
 
-        <label className="flex items-center gap-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+        <label className="flex shrink-0 items-center gap-1 text-[11px] text-neutral-500 dark:text-neutral-400">
           Opacity
           <input
             type="range"
@@ -299,11 +369,11 @@ export function NotesCanvas() {
             max={100}
             value={Math.round(bgOpacity * 100)}
             onChange={(e) => setBgOpacity(Number(e.target.value) / 100)}
-            className="w-16 accent-green-600"
+            className="w-14 accent-green-600"
           />
         </label>
 
-        <span className="h-5 w-px bg-neutral-200 dark:bg-neutral-700" />
+        <span className="h-5 w-px shrink-0 bg-neutral-200 dark:bg-neutral-700" />
 
         {/* actions */}
         <button type="button" className={`${btn} ${idle}`} onClick={clearCanvas}>
@@ -324,8 +394,8 @@ export function NotesCanvas() {
         </button>
       </div>
 
-      <p className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 text-[11px] text-neutral-500 dark:text-neutral-400">
-        Lower the background opacity to trace over the article · Esc to close
+      <p className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 z-20 px-4 text-center text-[11px] text-neutral-500 dark:text-neutral-400">
+        Notes auto-save on this post · lower the background opacity to trace the article · Esc to close
       </p>
     </div>
   )

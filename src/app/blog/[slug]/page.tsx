@@ -66,7 +66,7 @@ export default async function Blog({
       <ReadingProgress />
       <TableOfContents />
       <PostSidebar slug={post.slug} title={post.metadata.title} url={url} />
-      <NotesCanvas />
+      <NotesCanvas slug={post.slug} />
       <script
         type="application/ld+json"
         suppressHydrationWarning

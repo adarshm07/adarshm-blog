@@ -153,7 +153,9 @@ function shortestPath(graph, start, goal) {
 
 BFS finds the fewest-edges path because it explores all distance-1 nodes
 before any distance-2 node. (For large graphs, use a real queue with a head
-pointer — `Array.shift` is O(n).)
+pointer — `Array.shift` is O(n).) Deep dive:
+[Graph Traversal: BFS and DFS](/blog/graph-traversal-bfs-dfs) with animated
+walkthroughs of both.
 
 ## DFS (depth-first search)
 
@@ -177,7 +179,9 @@ function numIslands(grid) {
 ```
 
 Each cell is visited once → O(rows × cols). BFS and DFS visit the same
-nodes; the choice is shortest-path (BFS) vs. exhaustive exploration (DFS).
+nodes; the choice is shortest-path (BFS) vs. exhaustive exploration (DFS) —
+see [Graph Traversal: BFS and DFS](/blog/graph-traversal-bfs-dfs) for both
+built from scratch.
 
 ## Backtracking
 
