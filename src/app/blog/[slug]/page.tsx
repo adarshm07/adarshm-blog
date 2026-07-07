@@ -3,6 +3,7 @@ import { CustomMDX } from '@/app/components/mdx'
 import { ReadingProgress } from '@/app/components/reading-progress'
 import { TableOfContents } from '@/app/components/toc'
 import { PostSidebar } from '@/app/components/post-sidebar'
+import { NotesCanvas } from '@/app/components/notes-canvas'
 import { formatDate, getBlogPosts, getReadingTime } from '@/app/blog/utils'
 import { baseUrl } from '@/app/sitemap'
 
@@ -65,6 +66,7 @@ export default async function Blog({
       <ReadingProgress />
       <TableOfContents />
       <PostSidebar slug={post.slug} title={post.metadata.title} url={url} />
+      <NotesCanvas />
       <script
         type="application/ld+json"
         suppressHydrationWarning
