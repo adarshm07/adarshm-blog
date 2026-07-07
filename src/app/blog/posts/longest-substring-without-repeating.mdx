@@ -1,0 +1,150 @@
+---
+title: "Longest Substring Without Repeating Characters: Brute Force to Sliding Window"
+publishedAt: "2026-07-07"
+summary: "A classic string problem that turns an O(n²) scan into an O(n) sliding window — with an animated walkthrough of the window expanding and contracting."
+tags: "DSA"
+---
+
+The problem: given a string, find the length of the longest substring with
+no repeated characters.
+
+```javascript
+lengthOfLongestSubstring("abcabcbb"); // 3  → "abc"
+lengthOfLongestSubstring("bbbbb");    // 1  → "b"
+lengthOfLongestSubstring("pwwkew");   // 3  → "wke"
+```
+
+It's the canonical introduction to the
+[sliding window pattern](/blog/dsa-patterns#sliding-window), and the best
+way to see *why* that pattern exists is to first feel the pain of doing it
+the slow way.
+
+## Approach 1: brute force
+
+Generate every substring, check each for duplicates, track the longest.
+
+```javascript
+function lengthOfLongestSubstring(s) {
+  let best = 0;
+  for (let i = 0; i < s.length; i++) {
+    const seen = new Set();
+    for (let j = i; j < s.length; j++) {
+      if (seen.has(s[j])) break; // duplicate — this start is exhausted
+      seen.add(s[j]);
+      best = Math.max(best, j - i + 1);
+    }
+  }
+  return best;
+}
+```
+
+- **Time:** O(n²) — every starting index re-scans forward
+- **Space:** O(min(n, alphabet)) for the set
+
+It works, but look at the waste: when we start over at `i + 1`, we throw
+away everything we just learned about the characters between `i` and `j`
+and re-scan them from scratch. The characters get visited over and over.
+
+## Approach 2: sliding window
+
+The insight: we never actually need to restart. Keep a **window** — a
+range `[start, end]` — that always holds a substring with no repeats.
+**Expand** on the right by one character each step. If that new character
+is already inside the window, **shrink** from the left until it isn't. The
+window slides across the string exactly once.
+
+<LongestSubstringWindow />
+
+The two pointers only ever move *forward*, so even though the window
+grows and shrinks, each character enters once and leaves at most once —
+that's what collapses O(n²) into O(n).
+
+```javascript
+function lengthOfLongestSubstring(s) {
+  const seen = new Set();
+  let start = 0;
+  let best = 0;
+
+  for (let end = 0; end < s.length; end++) {
+    // shrink until the incoming character is unique in the window
+    while (seen.has(s[end])) {
+      seen.delete(s[start]);
+      start++;
+    }
+    seen.add(s[end]);
+    best = Math.max(best, end - start + 1);
+  }
+  return best;
+}
+```
+
+- **Time:** O(n) — `start` and `end` each advance at most n times
+- **Space:** O(min(n, alphabet))
+
+### One more trick: jump instead of crawl
+
+The `while` loop shrinks one character at a time. If we instead store each
+character's **last index** in a map, we can jump `start` straight past the
+duplicate in a single move:
+
+```javascript
+function lengthOfLongestSubstring(s) {
+  const lastSeen = new Map(); // char -> last index
+  let start = 0;
+  let best = 0;
+
+  for (let end = 0; end < s.length; end++) {
+    const ch = s[end];
+    if (lastSeen.has(ch) && lastSeen.get(ch) >= start) {
+      start = lastSeen.get(ch) + 1; // jump past the previous occurrence
+    }
+    lastSeen.set(ch, end);
+    best = Math.max(best, end - start + 1);
+  }
+  return best;
+}
+```
+
+Same O(n) big-O, but `end` now never pauses to crawl — a cleaner one-pass
+version, and a nice example of a [hash map](/blog/hash-maps-under-the-hood)
+turning a loop into a lookup.
+
+## Comparison
+
+<table>
+  <thead>
+    <tr>
+      <th>Approach</th>
+      <th>Time</th>
+      <th>Space</th>
+      <th>Idea</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Brute force</td>
+      <td>O(n²)</td>
+      <td>O(k)</td>
+      <td>Re-scan every substring</td>
+    </tr>
+    <tr>
+      <td>Sliding window + set</td>
+      <td>O(n)</td>
+      <td>O(k)</td>
+      <td>Expand right, shrink left on repeat</td>
+    </tr>
+    <tr>
+      <td>Sliding window + last-index map</td>
+      <td>O(n)</td>
+      <td>O(k)</td>
+      <td>Jump the left pointer past the duplicate</td>
+    </tr>
+  </tbody>
+</table>
+
+The tell for a sliding window: you're asked about the **longest / shortest
+/ best contiguous** run that satisfies some condition, and a brute force
+would re-examine overlapping ranges. Whenever expanding and contracting a
+range keeps the answer valid, the window turns quadratic work linear. The
+[patterns overview](/blog/dsa-patterns) lists the other problems where the
+same shape shows up.

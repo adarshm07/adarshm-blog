@@ -19,6 +19,8 @@ import {
   ScopeChainDiagram,
 } from '@/app/components/diagrams'
 import { PrototypeChainVisualizer } from '@/app/components/prototype-visualizer'
+import { TwoSumTwoPointer } from '@/app/components/two-pointer-visualizer'
+import { LongestSubstringWindow } from '@/app/components/sliding-window-visualizer'
 import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
@@ -149,6 +151,8 @@ const components = {
   PromiseStateDiagram,
   ScopeChainDiagram,
   PrototypeChainVisualizer,
+  TwoSumTwoPointer,
+  LongestSubstringWindow,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {
