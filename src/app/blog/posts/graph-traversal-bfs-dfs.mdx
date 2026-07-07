@@ -1,0 +1,217 @@
+---
+title: "Graph Traversal: BFS and DFS From the Ground Up"
+publishedAt: "2026-07-07"
+summary: "How to represent a graph and walk it two ways — breadth-first and depth-first — with animated traversals, code, and the rule for choosing between them."
+tags: "DSA"
+---
+
+Graphs are the most general data structure in the toolbox — trees, grids,
+maps, dependency chains, and social networks are all graphs. And almost
+every graph algorithm starts with the same question: *how do I visit every
+node in some sensible order?* There are two fundamental answers — **BFS**
+and **DFS** — and they're the backbone of the
+[BFS and DFS patterns](/blog/dsa-patterns#bfs-breadth-first-search) in the
+patterns catalog. Let's build both from scratch.
+
+## Representing a graph
+
+Before traversing, we need the graph in memory. The standard choice is an
+**adjacency list**: a map from each node to its neighbors.
+
+```javascript
+const graph = {
+  A: ["B", "C"],
+  B: ["A", "D", "E"],
+  C: ["A", "F"],
+  D: ["B"],
+  E: ["B", "F"],
+  F: ["C", "E"],
+};
+```
+
+This stores each edge with its endpoints and nothing more, so it uses
+O(V + E) space (vertices plus edges) — efficient for the *sparse* graphs
+that dominate the real world. (The alternative, an adjacency matrix, is a
+V×V grid of booleans: O(V²) space, only worth it for dense graphs or O(1)
+edge lookups.)
+
+One rule underpins both traversals: **track visited nodes**. Graphs have
+cycles, so without a visited set you'd loop forever.
+
+## Breadth-first search
+
+BFS explores in rings: all nodes one edge away, then all nodes two edges
+away, and so on. The engine is a **queue** (first-in, first-out) — you
+enqueue a node's neighbors and process them in arrival order.
+
+<GraphTraversalVisualizer mode="bfs" />
+
+```javascript
+function bfs(graph, start) {
+  const visited = new Set([start]);
+  const queue = [start];
+  const order = [];
+
+  while (queue.length > 0) {
+    const node = queue.shift();   // take the oldest
+    order.push(node);
+    for (const neighbor of graph[node]) {
+      if (!visited.has(neighbor)) {
+        visited.add(neighbor);    // mark on enqueue, not on visit
+        queue.push(neighbor);
+      }
+    }
+  }
+  return order;
+}
+```
+
+Two details that trip people up:
+
+- **Mark visited when you enqueue, not when you dequeue.** Otherwise a node
+  with two earlier neighbors gets added to the queue twice.
+- **`Array.shift` is O(n).** Fine for small graphs and clearer to read, but
+  for large ones use a queue with a head pointer (or a deque) so dequeue is
+  O(1).
+
+BFS's superpower falls out of the ring-by-ring order: in an **unweighted**
+graph, the first time you reach a node is along a shortest path. Track the
+distance alongside each node and BFS *is* your shortest-path algorithm.
+
+## Depth-first search
+
+DFS does the opposite: it plunges as deep as possible along one path, and
+only backtracks when it hits a dead end. The engine is a **stack** —
+usually the call stack, via recursion.
+
+<GraphTraversalVisualizer mode="dfs" />
+
+```javascript
+function dfs(graph, start) {
+  const visited = new Set();
+  const order = [];
+
+  function visit(node) {
+    visited.add(node);
+    order.push(node);
+    for (const neighbor of graph[node]) {
+      if (!visited.has(neighbor)) visit(neighbor);
+    }
+  }
+
+  visit(start);
+  return order;
+}
+```
+
+The recursion is elegant but rides on the call stack, so a very deep or
+large graph can overflow it. The iterative version swaps in an explicit
+stack:
+
+```javascript
+function dfsIterative(graph, start) {
+  const visited = new Set();
+  const order = [];
+  const stack = [start];
+
+  while (stack.length > 0) {
+    const node = stack.pop();       // take the newest
+    if (visited.has(node)) continue;
+    visited.add(node);
+    order.push(node);
+    for (const neighbor of graph[node]) {
+      if (!visited.has(neighbor)) stack.push(neighbor);
+    }
+  }
+  return order;
+}
+```
+
+Notice the only real difference from BFS is **stack (`pop`) vs. queue
+(`shift`)** — swap the data structure and the same loop flips from
+depth-first to breadth-first.
+
+## Choosing between them
+
+Both visit every node and edge once, so both run in **O(V + E)** time. The
+choice is about *order*, not speed:
+
+<table>
+  <thead>
+    <tr>
+      <th></th>
+      <th>BFS</th>
+      <th>DFS</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Structure</td>
+      <td>Queue (FIFO)</td>
+      <td>Stack / recursion (LIFO)</td>
+    </tr>
+    <tr>
+      <td>Explores</td>
+      <td>Level by level, nearest first</td>
+      <td>One path to the end, then backtrack</td>
+    </tr>
+    <tr>
+      <td>Shortest path (unweighted)</td>
+      <td>Yes — first visit is shortest</td>
+      <td>No</td>
+    </tr>
+    <tr>
+      <td>Memory</td>
+      <td>O(width) — can be wide</td>
+      <td>O(depth) — the current path</td>
+    </tr>
+    <tr>
+      <td>Natural fit</td>
+      <td>Shortest reach, level order</td>
+      <td>Cycles, topological sort, all paths</td>
+    </tr>
+  </tbody>
+</table>
+
+Reach for **BFS** when distance or levels matter: shortest path in a maze,
+fewest moves in a puzzle, friends-within-2-hops. Reach for **DFS** when the
+structure matters: detecting cycles, topological sort of dependencies,
+finding connected components, or exhaustively exploring paths (where it
+shades into [backtracking](/blog/dsa-patterns#backtracking)).
+
+## A grid is just a graph
+
+Interview "grid" problems — counting islands, flood fill, shortest path
+through a maze — are graph traversals in disguise. Each cell is a node;
+its neighbors are the up/down/left/right cells. No adjacency list needed —
+you compute neighbors on the fly:
+
+```javascript
+function numIslands(grid) {
+  let count = 0;
+  const flood = (r, c) => {
+    if (r < 0 || c < 0 || r >= grid.length || c >= grid[0].length || grid[r][c] === "0")
+      return;
+    grid[r][c] = "0";          // mark visited by sinking the land
+    flood(r + 1, c); flood(r - 1, c);
+    flood(r, c + 1); flood(r, c - 1);
+  };
+  for (let r = 0; r < grid.length; r++) {
+    for (let c = 0; c < grid[0].length; c++) {
+      if (grid[r][c] === "1") { count++; flood(r, c); }  // DFS each island
+    }
+  }
+  return count;
+}
+```
+
+Once you see the grid-as-graph trick, a whole category of problems
+collapses into "BFS or DFS from each unvisited cell."
+
+## Wrap-up
+
+BFS and DFS are the same loop with a different container: a queue spreads
+out in rings, a stack dives down a path. Get comfortable writing both from
+memory — they're the foundation under shortest paths, topological sort,
+cycle detection, connected components, and most grid problems. Back to the
+[patterns catalog](/blog/dsa-patterns) for where they fit among the rest.
