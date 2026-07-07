@@ -16,12 +16,9 @@ import { RateLimiterVisualizer } from '@/app/components/rate-limiter-visualizer'
 import { MessageFlowVisualizer } from '@/app/components/message-flow-visualizer'
 import {
   PromiseStateDiagram,
+  PrototypeChainDiagram,
   ScopeChainDiagram,
 } from '@/app/components/diagrams'
-import { PrototypeChainVisualizer } from '@/app/components/prototype-visualizer'
-import { TwoSumTwoPointer } from '@/app/components/two-pointer-visualizer'
-import { LongestSubstringWindow } from '@/app/components/sliding-window-visualizer'
-import { GraphTraversalVisualizer } from '@/app/components/graph-traversal-visualizer'
 import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
@@ -150,11 +147,8 @@ const components = {
   RateLimiterVisualizer,
   MessageFlowVisualizer,
   PromiseStateDiagram,
+  PrototypeChainDiagram,
   ScopeChainDiagram,
-  PrototypeChainVisualizer,
-  TwoSumTwoPointer,
-  LongestSubstringWindow,
-  GraphTraversalVisualizer,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {
