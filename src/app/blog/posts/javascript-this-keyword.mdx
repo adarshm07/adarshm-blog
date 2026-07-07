@@ -1,0 +1,204 @@
+---
+title: "The this Keyword: Four Rules That Explain Every Case"
+publishedAt: "2026-07-07"
+summary: "Why this is confusing in JavaScript and how four simple binding rules — plus arrow functions — determine its value in any situation."
+tags: "JavaScript"
+---
+
+No feature of JavaScript generates more "wait, why is `this` undefined?"
+moments than `this`. The confusion comes from a wrong mental model: people
+assume `this` refers to the function, or the place the function was
+written. It doesn't. **`this` is determined by *how a function is called*,
+not where it's defined** — and it's decided fresh on every single call.
+
+Once you internalize that, the whole thing collapses into four rules with a
+clear priority order. Let's walk them from lowest to highest precedence.
+
+## Rule 1: default binding
+
+A plain function call — no object, no dot — gets the global object
+(`window` in browsers), or `undefined` in strict mode and ES modules
+(which are always strict):
+
+```javascript
+function show() {
+  console.log(this);
+}
+
+show(); // undefined in a module / strict mode, window otherwise
+```
+
+This is the source of the classic bug: pull a method off its object and
+call it bare, and `this` is lost:
+
+```javascript
+const user = {
+  name: "Ada",
+  greet() {
+    console.log(`Hi, ${this.name}`);
+  },
+};
+
+const fn = user.greet;
+fn(); // "Hi, undefined" — called with no object, default binding kicks in
+```
+
+## Rule 2: implicit binding
+
+When a function is called **as a method** — `object.method()` — `this` is
+the object left of the dot:
+
+```javascript
+const user = {
+  name: "Ada",
+  greet() {
+    console.log(`Hi, ${this.name}`);
+  },
+};
+
+user.greet(); // "Hi, Ada" — this is user
+```
+
+The key word is *call-time*. Only the final dot matters — `a.b.c.method()`
+binds `this` to `c`, not `a`. And because it's decided at the call site,
+passing a method as a callback silently breaks it:
+
+```javascript
+setTimeout(user.greet, 100); // "Hi, undefined" — setTimeout calls it bare
+```
+
+## Rule 3: explicit binding
+
+You can force `this` with `call`, `apply`, or `bind`:
+
+```javascript
+function greet(greeting) {
+  console.log(`${greeting}, ${this.name}`);
+}
+
+const user = { name: "Ada" };
+
+greet.call(user, "Hello");        // Hello, Ada  — args listed
+greet.apply(user, ["Hi"]);        // Hi, Ada      — args as an array
+const bound = greet.bind(user);   // returns a new function
+bound("Hey");                     // Hey, Ada     — this locked to user forever
+```
+
+- **`call`** invokes immediately, arguments passed one by one.
+- **`apply`** is identical but takes arguments as an array (mnemonic:
+  **a**pply → **a**rray).
+- **`bind`** doesn't invoke — it returns a *new function* with `this`
+  permanently locked. This is the standard fix for the lost-method problem:
+  `setTimeout(user.greet.bind(user), 100)`.
+
+A bound function's `this` cannot be overridden — not by a later `call`, not
+by method invocation. That permanence is why `bind` sits above implicit
+binding in priority.
+
+## Rule 4: new binding
+
+Calling a function with `new` creates a fresh object and binds `this` to
+it:
+
+```javascript
+function User(name) {
+  this.name = name; // this = the brand-new object
+}
+
+const ada = new User("Ada");
+ada.name; // "Ada"
+```
+
+Under the hood `new` creates an empty object, links its prototype, runs the
+constructor with `this` pointing at it, and returns it. (Prototypes are
+their own topic — see the
+[prototypes post](/blog/javascript-prototypes-explained).)
+
+## The priority order
+
+When more than one rule *could* apply, they resolve in this order:
+
+<table>
+  <thead>
+    <tr>
+      <th>Priority</th>
+      <th>Rule</th>
+      <th>this is…</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1 (highest)</td>
+      <td>new binding</td>
+      <td>the newly created object</td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td>Explicit (bind / call / apply)</td>
+      <td>the object you passed</td>
+    </tr>
+    <tr>
+      <td>3</td>
+      <td>Implicit (object.method())</td>
+      <td>the object before the dot</td>
+    </tr>
+    <tr>
+      <td>4 (lowest)</td>
+      <td>Default (plain call)</td>
+      <td>undefined / global object</td>
+    </tr>
+  </tbody>
+</table>
+
+To find `this` for any call, ask the questions top-down: Was it called with
+`new`? With `call`/`apply`, or is it a bound function? As a method off an
+object? None of the above → default.
+
+## Arrow functions ignore all of it
+
+Arrow functions don't have their own `this`. They **capture it lexically**
+from the surrounding scope at definition time — and none of the four rules
+can change it. This is a feature, and it fixes the most annoying `this`
+bug in the language:
+
+```javascript
+const timer = {
+  seconds: 0,
+  start() {
+    setInterval(() => {
+      this.seconds++; // arrow: this is still `timer`, inherited from start()
+      console.log(this.seconds);
+    }, 1000);
+  },
+};
+
+timer.start(); // 1, 2, 3, … as expected
+```
+
+A regular `function` there would hit **default binding** (setInterval calls
+its callback bare) and `this.seconds` would blow up. The arrow inherits
+`this` from `start`, where it correctly points at `timer`. Before arrows,
+people wrote `const self = this` at the top of the method to smuggle it
+into the callback — the arrow makes that ceremony obsolete.
+
+The flip side: **never use an arrow as an object method** if you need
+`this` to be the object, because it'll capture the *outer* scope
+(usually the module or global) instead:
+
+```javascript
+const user = {
+  name: "Ada",
+  greet: () => console.log(this.name), // this is NOT user — captured outer
+};
+
+user.greet(); // undefined
+```
+
+## Wrap-up
+
+The one sentence to remember: **`this` is set by the call, not the
+definition** — except for arrow functions, which freeze it at definition
+and ignore the call entirely. Regular functions get their `this` from
+whichever of the four rules applies, in priority order; arrows inherit it
+from their birthplace. Trace those two paths and every `this` mystery in
+your codebase becomes mechanical.

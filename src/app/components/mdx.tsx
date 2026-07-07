@@ -16,6 +16,7 @@ import { RateLimiterVisualizer } from '@/app/components/rate-limiter-visualizer'
 import { MessageFlowVisualizer } from '@/app/components/message-flow-visualizer'
 import {
   PromiseStateDiagram,
+  PrototypeChainDiagram,
   ScopeChainDiagram,
 } from '@/app/components/diagrams'
 import { CopyButton } from '@/app/components/copy-button'
@@ -146,6 +147,7 @@ const components = {
   RateLimiterVisualizer,
   MessageFlowVisualizer,
   PromiseStateDiagram,
+  PrototypeChainDiagram,
   ScopeChainDiagram,
 }
 
