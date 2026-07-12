@@ -1,0 +1,155 @@
+---
+title: "Tries: Searching by Prefix"
+publishedAt: "2026-07-11"
+summary: "The data structure behind autocomplete and spellcheck. How a trie stores words as shared character paths, and why lookups cost the length of the word — not the size of the dictionary."
+tags: "DSA"
+---
+
+Every time your phone finishes a word, or a search box suggests completions
+as you type, there's a good chance a **trie** (pronounced "try," from
+re*trie*val) is doing the work. It's a tree specialised for strings, and it
+turns "find every word starting with these letters" into a cheap, natural
+operation.
+
+## The idea: words as paths
+
+A trie stores a set of strings by their characters. Each edge is labelled
+with a letter, and each path from the root spells out a prefix. Words that
+share a prefix share the same path until they diverge — `cat`, `car`, and
+`card` all travel down `c → a` together before splitting:
+
+<TrieVisualizer />
+
+Two things to notice in the animation:
+
+- **Shared prefixes are stored once.** The `ca` path is a single sequence
+  of nodes no matter how many words use it. That's the space win.
+- **Nodes carry an "end of word" flag** (the double rings). The node for
+  `car` exists as part of the path to `card`, but whether `car` itself is a
+  stored word is a separate yes/no marker on the node.
+
+## Building one
+
+A trie node is just a map from a character to a child node, plus a boolean:
+
+```javascript
+class TrieNode {
+  constructor() {
+    this.children = new Map(); // char → TrieNode
+    this.isWord = false;
+  }
+}
+
+class Trie {
+  constructor() { this.root = new TrieNode(); }
+
+  insert(word) {
+    let node = this.root;
+    for (const ch of word) {
+      if (!node.children.has(ch)) {
+        node.children.set(ch, new TrieNode());
+      }
+      node = node.children.get(ch);   // descend, creating as needed
+    }
+    node.isWord = true;               // mark the final node
+  }
+}
+```
+
+Insertion walks the word one character at a time, creating child nodes when
+they don't exist yet, and flips `isWord` on the last node.
+
+## Searching and prefix matching
+
+Search follows the same path. The distinction between "is this a stored
+word" and "is this a prefix of some word" is just *which* flag you check at
+the end:
+
+```javascript
+  // exact word: path must exist AND the last node is a word end
+  search(word) {
+    const node = this.walk(word);
+    return node !== null && node.isWord;
+  }
+
+  // prefix: path must exist; end flag doesn't matter
+  startsWith(prefix) {
+    return this.walk(prefix) !== null;
+  }
+
+  // shared traversal helper
+  walk(str) {
+    let node = this.root;
+    for (const ch of str) {
+      if (!node.children.has(ch)) return null; // fell off the trie
+      node = node.children.get(ch);
+    }
+    return node;
+  }
+```
+
+The key property: a lookup takes **O(L)** time where `L` is the length of
+the query string — completely independent of how many words the trie
+holds. A million-word dictionary and a ten-word one search a 5-letter
+prefix in the same number of steps.
+
+## Autocomplete falls right out
+
+Once `startsWith` lands you on the node for a prefix, every word underneath
+it is a completion. Collect them with a small DFS:
+
+```javascript
+  autocomplete(prefix) {
+    const start = this.walk(prefix);
+    const results = [];
+    if (!start) return results;
+
+    const dfs = (node, path) => {
+      if (node.isWord) results.push(prefix + path);
+      for (const [ch, child] of node.children) {
+        dfs(child, path + ch);
+      }
+    };
+    dfs(start, "");
+    return results;
+  }
+```
+
+This is exactly the shape of a search-box suggestion list.
+
+## When a trie is (and isn't) the right call
+
+<table>
+  <thead>
+    <tr>
+      <th>Reach for a trie when…</th>
+      <th>Skip it when…</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>You need prefix queries / autocomplete</td>
+      <td>You only ever check exact membership</td>
+    </tr>
+    <tr>
+      <td>Many keys share long prefixes</td>
+      <td>Keys are random with little overlap</td>
+    </tr>
+    <tr>
+      <td>You want keys in sorted order for free</td>
+      <td>Memory is tight (a hash set is leaner)</td>
+    </tr>
+  </tbody>
+</table>
+
+For pure exact-match lookups, a hash set is simpler and usually smaller — a
+trie earns its keep when *prefixes* are the point. The main cost is memory:
+each node carries a map of children, which adds up.
+
+## Wrap-up
+
+A trie stores strings as a tree of shared character paths, so lookups cost
+the length of the word rather than the size of the dictionary, and every
+prefix query — the hard part in other structures — becomes a simple walk to
+a node followed by a traversal of what's below it. That's autocomplete,
+spellcheck, and IP routing tables, all from one idea.

@@ -1,0 +1,147 @@
+---
+title: "Two Pointers and the Sliding Window"
+publishedAt: "2026-07-08"
+summary: "Two of the highest-leverage array patterns in interviews and real code — how they turn nested O(n²) loops into a single O(n) pass, and when each one applies."
+tags: "DSA"
+---
+
+A huge fraction of array and string problems that *look* like they need
+nested loops actually don't. Two related patterns — **two pointers** and
+the **sliding window** — collapse that quadratic work into a single pass by
+never throwing away information you already computed. Once you recognize
+the shape, you'll see them everywhere.
+
+## The problem with the naive approach
+
+Say you want the maximum sum of any 3 consecutive elements in an array. The
+obvious solution sums every window from scratch:
+
+```javascript
+function maxSum(arr, k) {
+  let best = -Infinity;
+  for (let i = 0; i + k <= arr.length; i++) {
+    let sum = 0;
+    for (let j = i; j < i + k; j++) sum += arr[j]; // re-adds k elements
+    best = Math.max(best, sum);
+  }
+  return best;
+}
+```
+
+That inner loop re-adds `k` numbers for every position — `O(n·k)` work. But
+look at what happens when the window moves one step right: it loses its
+leftmost element and gains one on the right. Everything in the middle is
+*identical*. We're recomputing what we already knew.
+
+## The sliding window
+
+Keep a running sum. When the window slides, subtract the element leaving
+and add the one entering — two operations, regardless of window size:
+
+<SlidingWindowVisualizer />
+
+```javascript
+function maxSum(arr, k) {
+  let sum = 0;
+  for (let i = 0; i < k; i++) sum += arr[i]; // first window
+  let best = sum;
+
+  for (let end = k; end < arr.length; end++) {
+    sum += arr[end] - arr[end - k]; // add new, drop old
+    best = Math.max(best, sum);
+  }
+  return best;
+}
+```
+
+One pass, `O(n)` time, `O(1)` space. The window carries its state forward
+instead of rebuilding it.
+
+### Fixed vs. dynamic windows
+
+The example above is a **fixed-size** window. The more powerful variant is
+the **dynamic window**, where the right edge expands to include more and
+the left edge contracts when a constraint breaks. The classic is *longest
+substring without repeating characters*:
+
+```javascript
+function longestUnique(s) {
+  const seen = new Set();
+  let left = 0, best = 0;
+
+  for (let right = 0; right < s.length; right++) {
+    while (seen.has(s[right])) {
+      seen.delete(s[left]); // shrink from the left until valid again
+      left++;
+    }
+    seen.add(s[right]);
+    best = Math.max(best, right - left + 1);
+  }
+  return best;
+}
+```
+
+Each character is added once and removed at most once, so even with the
+inner `while` this is still `O(n)` — the pointers only ever move forward.
+
+## Two pointers
+
+The sliding window is really a special case of the broader **two pointers**
+idea: maintain two indices and move them based on the data instead of
+brute-forcing every pair. The other common flavor is **converging
+pointers** on a sorted array — one from each end, walking toward the
+middle. Finding a pair that sums to a target:
+
+```javascript
+function twoSumSorted(arr, target) {
+  let lo = 0, hi = arr.length - 1;
+  while (lo < hi) {
+    const sum = arr[lo] + arr[hi];
+    if (sum === target) return [lo, hi];
+    if (sum < target) lo++;  // need more → move the low end up
+    else hi--;               // need less → move the high end down
+  }
+  return null;
+}
+```
+
+Because the array is sorted, each comparison lets us *rule out* an entire
+row or column of the pair space — `O(n)` instead of the `O(n²)` of checking
+all pairs.
+
+## How to spot them
+
+<table>
+  <thead>
+    <tr>
+      <th>Signal in the problem</th>
+      <th>Reach for</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>"subarray / substring of size k" or "contiguous"</td>
+      <td>Sliding window</td>
+    </tr>
+    <tr>
+      <td>"longest / shortest window satisfying a condition"</td>
+      <td>Dynamic sliding window</td>
+    </tr>
+    <tr>
+      <td>Sorted array, find a pair / triplet</td>
+      <td>Converging two pointers</td>
+    </tr>
+    <tr>
+      <td>In-place partition, dedupe, or reverse</td>
+      <td>Two pointers (read + write)</td>
+    </tr>
+  </tbody>
+</table>
+
+## Wrap-up
+
+The common thread is **don't recompute what hasn't changed**. A sliding
+window updates its state incrementally as it moves; two converging pointers
+use sorted order to discard half the possibilities each step. Both trade a
+nested loop for a single forward sweep — the difference between code that
+scales and code that times out.

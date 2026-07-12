@@ -1,0 +1,124 @@
+---
+title: "Graph Traversal: BFS and DFS Side by Side"
+publishedAt: "2026-07-09"
+summary: "Breadth-first and depth-first search are the same algorithm with one data structure swapped. See both walk the same graph, and learn which to reach for."
+tags: "DSA"
+---
+
+Almost every graph problem — shortest paths, connectivity, cycle
+detection, topological sort — is built on one of two traversals: **breadth-first
+search (BFS)** or **depth-first search (DFS)**. The remarkable thing is how
+similar they are. They differ by a single choice: what container holds the
+nodes you've discovered but not yet processed.
+
+## BFS: explore level by level
+
+BFS uses a **queue** (first-in, first-out). You visit a node, enqueue all
+its neighbours, then process them in the order they were added — so you
+finish everything one hop away before anything two hops away. It fans out
+in rings:
+
+<GraphBFSVisualizer />
+
+```javascript
+function bfs(graph, start) {
+  const visited = new Set([start]);
+  const queue = [start];
+
+  while (queue.length) {
+    const node = queue.shift();     // take from the front
+    visit(node);
+    for (const next of graph[node]) {
+      if (!visited.has(next)) {
+        visited.add(next);          // mark on enqueue, not on visit
+        queue.push(next);           // add to the back
+      }
+    }
+  }
+}
+```
+
+Because BFS reaches nodes in order of distance from the start, it finds the
+**shortest path in an unweighted graph** for free — the first time you see
+a node is via a shortest route.
+
+> Mark nodes visited *when you enqueue them*, not when you dequeue them.
+> Otherwise a node with two neighbours already in the queue gets added
+> twice.
+
+## DFS: dive deep, then backtrack
+
+DFS uses a **stack** (last-in, first-out) — usually the call stack, via
+recursion. You follow one path as far as it goes, hit a dead end, back up,
+and try the next branch. It plunges down each branch to the bottom before
+exploring siblings:
+
+<GraphDFSVisualizer />
+
+```javascript
+function dfs(graph, node, visited = new Set()) {
+  if (visited.has(node)) return;
+  visited.add(node);
+  visit(node);
+  for (const next of graph[node]) {
+    dfs(graph, next, visited);      // recurse = push onto the call stack
+  }
+}
+```
+
+Swap the queue for a stack and BFS *becomes* DFS — that's the whole
+difference. The queue's FIFO order spreads outward; the stack's LIFO order
+drives downward.
+
+## Which one to use
+
+<table>
+  <thead>
+    <tr>
+      <th>You want…</th>
+      <th>Use</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Shortest path in an unweighted graph</td>
+      <td>BFS</td>
+    </tr>
+    <tr>
+      <td>"Fewest steps / nearest" anything</td>
+      <td>BFS</td>
+    </tr>
+    <tr>
+      <td>Detecting cycles, topological sort</td>
+      <td>DFS</td>
+    </tr>
+    <tr>
+      <td>Exploring all paths, backtracking</td>
+      <td>DFS</td>
+    </tr>
+    <tr>
+      <td>Graph so deep recursion might overflow</td>
+      <td>BFS (or iterative DFS)</td>
+    </tr>
+  </tbody>
+</table>
+
+Both run in **O(V + E)** — every vertex and every edge is touched once. The
+difference is memory shape: BFS's queue can hold an entire level at once
+(wide graphs cost memory), while DFS's stack is only as deep as the longest
+path (deep graphs risk stack overflow).
+
+## The one bug that catches everyone
+
+For both traversals, the `visited` set is what stops infinite loops when
+the graph has cycles. A tree has no cycles so you can sometimes skip it —
+but a general graph will loop forever without it. When a "why is this
+hanging?" bug shows up in graph code, a missing or mis-timed `visited`
+check is the first thing to look at.
+
+## Wrap-up
+
+BFS and DFS are one algorithm parameterized by a container: a queue gives
+you level-order and shortest paths, a stack gives you deep-first and
+backtracking. Learn them as a pair, remember to mark nodes visited, and a
+whole category of graph problems opens up.

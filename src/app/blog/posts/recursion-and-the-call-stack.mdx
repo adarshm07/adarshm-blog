@@ -1,0 +1,123 @@
+---
+title: "Recursion and the Call Stack: What Actually Happens"
+publishedAt: "2026-07-08"
+summary: "Recursion feels like magic until you see the call stack. Here's the mechanical picture — frames pushing and popping — plus base cases, stack overflows, and tail calls."
+tags: "DSA"
+---
+
+Recursion trips people up because it asks you to trust a function that
+isn't finished yet. The trick to understanding it is to stop thinking about
+the *idea* of recursion and look at the *machine*: a stack of paused
+function calls, each waiting on the one above it.
+
+## Every call gets a frame
+
+When a function is called, the runtime pushes a **stack frame** — a little
+box holding that call's arguments, local variables, and where to return
+to. When the function returns, its frame pops off. Recursion is just a
+function that calls itself, so frames stack up until something stops the
+chain.
+
+Watch `factorial(3)` build up frames on the way down and resolve them on
+the way back up:
+
+<CallStackVisualizer />
+
+```javascript
+function factorial(n) {
+  if (n === 0) return 1;      // base case — stops the recursion
+  return n * factorial(n - 1); // recursive case — pauses, waits for the sub-call
+}
+```
+
+Notice the two phases. Going **down**, each call pauses at the
+multiplication because it can't finish until the inner call returns —
+frames pile up. Going **up**, the base case returns a concrete value and
+each paused frame completes its multiplication in reverse order. The answer
+is assembled during the unwinding.
+
+## The base case is not optional
+
+Every recursion needs a **base case** — an input it can answer without
+recursing — and every recursive call must move *toward* it. Forget either
+and the stack grows forever:
+
+```javascript
+function boom(n) {
+  return boom(n - 1); // no base case → frames forever
+}
+boom(5); // RangeError: Maximum call stack size exceeded
+```
+
+That error is the runtime telling you it ran out of room to push frames.
+Most engines cap the stack in the low tens of thousands of frames, so deep
+recursion on large inputs can overflow even when the logic is correct.
+
+## Recursion is a stack you didn't write
+
+Anything recursion does, you can do with an explicit stack — because that's
+literally what's happening under the hood. Here's depth-first traversal
+both ways:
+
+```javascript
+// Recursive: uses the call stack
+function walk(node) {
+  if (!node) return;
+  visit(node);
+  walk(node.left);
+  walk(node.right);
+}
+
+// Iterative: uses an explicit stack, no call frames
+function walkIterative(root) {
+  const stack = [root];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) continue;
+    visit(node);
+    stack.push(node.right, node.left); // left ends on top → visited first
+  }
+}
+```
+
+The iterative version can't overflow the call stack because the data lives
+on the heap instead. That's the standard escape hatch when recursion depth
+is a problem.
+
+## Tail calls (and why JavaScript mostly ignores them)
+
+A **tail call** is a recursive call that's the very last thing a function
+does — nothing waits on its result:
+
+```javascript
+function factorialTail(n, acc = 1) {
+  if (n === 0) return acc;
+  return factorialTail(n - 1, n * acc); // nothing left to do after this
+}
+```
+
+In principle the engine could reuse the current frame instead of pushing a
+new one, making this run in constant stack space (*tail-call
+optimization*). The ES2015 spec even requires it — but in practice almost
+no JavaScript engine implements it, so don't rely on it. If depth is a
+concern, convert to a loop.
+
+## Where recursion shines
+
+Recursion is the natural fit whenever the problem is **self-similar** — a
+thing defined in terms of smaller copies of itself:
+
+- Trees and graphs (each subtree is a tree)
+- Divide and conquer (merge sort, quick sort, binary search)
+- Backtracking (permutations, N-queens, parsing)
+
+For those, recursive code often reads almost exactly like the definition of
+the problem. For simple linear iteration, a plain loop is clearer and
+cheaper — don't recurse just to prove you can.
+
+## Wrap-up
+
+Recursion isn't magic; it's a stack of paused calls. Keep three things
+straight and it stops being scary: every call gets a frame, the base case
+is what lets the stack unwind, and deep recursion can overflow — at which
+point an explicit stack or a loop is your way out.

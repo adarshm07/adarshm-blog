@@ -1,0 +1,146 @@
+---
+title: "Dynamic Programming: From Memoization to Tables"
+publishedAt: "2026-07-09"
+summary: "DP is not a scary black box — it's recursion that stops repeating itself. Follow one problem from exponential recursion to a linear table, one cell at a time."
+tags: "DSA"
+---
+
+Dynamic programming has a reputation for being hard, but the core idea is
+almost embarrassingly simple: **if you're solving the same subproblem more
+than once, solve it once and write the answer down.** Everything else —
+memoization, tabulation, the mysterious tables — is bookkeeping around that
+one idea.
+
+## The problem: recursion that repeats itself
+
+Count the ways to climb `n` stairs taking 1 or 2 steps at a time. The
+recursive definition is natural — to reach step `n`, you came from `n-1`
+(one step) or `n-2` (two steps):
+
+```javascript
+function climb(n) {
+  if (n <= 1) return 1;
+  return climb(n - 1) + climb(n - 2);
+}
+```
+
+Clean, correct, and catastrophically slow. `climb(5)` calls `climb(3)`
+twice, `climb(2)` three times, and so on — the call tree branches
+exponentially. `climb(50)` would make over a billion calls, most of them
+recomputing answers already found elsewhere in the tree. This is `O(2ⁿ)`.
+
+## Fix #1: memoization (top-down)
+
+The subproblems repeat, so cache them. The first time you compute
+`climb(k)`, store it; every later request is a lookup:
+
+```javascript
+function climb(n, memo = {}) {
+  if (n <= 1) return 1;
+  if (n in memo) return memo[n];      // already solved
+  memo[n] = climb(n - 1) + climb(n - 2);
+  return memo[n];
+}
+```
+
+That one cache collapses the exponential tree into `O(n)`: each subproblem
+is computed exactly once, then reused. This is **memoization** — keep the
+recursion, just stop repeating work. It's called *top-down* because you
+start from the answer you want and recurse toward the base cases.
+
+## Fix #2: tabulation (bottom-up)
+
+If we're going to solve every subproblem from `0` to `n` anyway, why
+recurse at all? Start at the base cases and fill an array forward, each
+entry built from ones already computed:
+
+<DPTableVisualizer />
+
+```javascript
+function climb(n) {
+  const ways = new Array(n + 1);
+  ways[0] = 1;
+  ways[1] = 1;
+  for (let i = 2; i <= n; i++) {
+    ways[i] = ways[i - 1] + ways[i - 2]; // reuse two finished answers
+  }
+  return ways[n];
+}
+```
+
+Same `O(n)` time, no recursion, no call-stack risk. This is **tabulation** —
+*bottom-up*. The table filling left to right is the animation above.
+
+## The two things every DP problem needs
+
+To turn a problem into DP, you're hunting for two properties:
+
+- **Overlapping subproblems** — the same smaller problems come up again and
+  again. (If they don't, caching buys nothing — that's plain divide and
+  conquer.)
+- **Optimal substructure** — the answer to the big problem is built from
+  answers to smaller ones. (For stairs: ways to reach `n` is exactly the
+  sum of ways to reach `n-1` and `n-2`.)
+
+The hard part of DP is rarely the code — it's finding the **recurrence**:
+the equation that expresses one state in terms of smaller states. Once you
+have that, memoization and tabulation are mechanical translations of it.
+
+## Squeezing the space
+
+Look at the loop: `ways[i]` only ever reads the previous two entries. We
+don't need the whole array — two variables suffice:
+
+```javascript
+function climb(n) {
+  let prev = 1, curr = 1;
+  for (let i = 2; i <= n; i++) {
+    [prev, curr] = [curr, prev + curr];
+  }
+  return curr;
+}
+```
+
+`O(1)` space. This "only keep the window of state you actually reference"
+trick is common once you have a working table.
+
+## Memoization vs. tabulation
+
+<table>
+  <thead>
+    <tr>
+      <th></th>
+      <th>Memoization (top-down)</th>
+      <th>Tabulation (bottom-up)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Shape</td>
+      <td>Recursion + cache</td>
+      <td>Loop + array</td>
+    </tr>
+    <tr>
+      <td>Computes</td>
+      <td>Only subproblems it needs</td>
+      <td>Every subproblem, in order</td>
+    </tr>
+    <tr>
+      <td>Risk</td>
+      <td>Stack overflow if deep</td>
+      <td>None (no recursion)</td>
+    </tr>
+    <tr>
+      <td>Best when</td>
+      <td>Sparse / unclear which states matter</td>
+      <td>All states needed; want O(1) space tricks</td>
+    </tr>
+  </tbody>
+</table>
+
+## Wrap-up
+
+DP is recursion with a memory. Write the honest recursive solution first,
+notice it recomputes subproblems, then either cache them (top-down) or fill
+a table of them in order (bottom-up). Find the recurrence and the rest
+writes itself.
