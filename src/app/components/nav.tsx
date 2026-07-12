@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation'
 const navItems: Record<string, { name: string }> = {
   '/': { name: 'home' },
   '/blog': { name: 'blog' },
+  '/dsa': { name: 'dsa' },
   'mailto:contact@adarshm.com': { name: 'contact' },
 }
 
