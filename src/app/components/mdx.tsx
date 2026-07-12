@@ -19,6 +19,20 @@ import {
   PrototypeChainDiagram,
   ScopeChainDiagram,
 } from '@/app/components/diagrams'
+import { PrototypeChainVisualizer } from '@/app/components/prototype-chain-visualizer'
+import { SlidingWindowVisualizer } from '@/app/components/sliding-window-visualizer'
+import { CallStackVisualizer } from '@/app/components/call-stack-visualizer'
+import {
+  GraphBFSVisualizer,
+  GraphDFSVisualizer,
+} from '@/app/components/graph-traversal-visualizer'
+import { DPTableVisualizer } from '@/app/components/dp-table-visualizer'
+import { LinkedListCycleVisualizer } from '@/app/components/linked-list-cycle-visualizer'
+import { HeapVisualizer } from '@/app/components/heap-visualizer'
+import { TrieVisualizer } from '@/app/components/trie-visualizer'
+import { BitVisualizer } from '@/app/components/bit-visualizer'
+import { ConsistentHashRingVisualizer } from '@/app/components/consistent-hash-ring-visualizer'
+import { GeneratorVisualizer } from '@/app/components/generator-visualizer'
 import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
@@ -149,6 +163,18 @@ const components = {
   PromiseStateDiagram,
   PrototypeChainDiagram,
   ScopeChainDiagram,
+  PrototypeChainVisualizer,
+  SlidingWindowVisualizer,
+  CallStackVisualizer,
+  GraphBFSVisualizer,
+  GraphDFSVisualizer,
+  DPTableVisualizer,
+  LinkedListCycleVisualizer,
+  HeapVisualizer,
+  TrieVisualizer,
+  BitVisualizer,
+  ConsistentHashRingVisualizer,
+  GeneratorVisualizer,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {

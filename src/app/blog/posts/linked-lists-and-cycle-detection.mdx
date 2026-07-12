@@ -1,0 +1,121 @@
+---
+title: "Linked Lists and Floyd's Cycle Detection"
+publishedAt: "2026-07-10"
+summary: "Why linked lists still matter, and the two-pointer trick that detects a loop in one pass with no extra memory — the famous tortoise and hare."
+tags: "DSA"
+---
+
+Arrays get all the attention, but the linked list is where a couple of the
+most elegant algorithms in the whole field live. Chief among them is
+**Floyd's cycle detection** — a way to tell whether a list loops back on
+itself using two pointers and no extra memory. It's worth learning both for
+the trick itself and for how it teaches you to think about pointers.
+
+## A quick refresher
+
+A linked list is a chain of nodes, each holding a value and a pointer to
+the next node. The last node points to `null`:
+
+```javascript
+class Node {
+  constructor(value) {
+    this.value = value;
+    this.next = null;
+  }
+}
+
+// 1 → 2 → 3 → null
+const head = new Node(1);
+head.next = new Node(2);
+head.next.next = new Node(3);
+```
+
+Unlike an array, there's no index — to reach the `k`-th node you follow
+`next` `k` times (`O(n)`). What you get in return is `O(1)` insertion and
+deletion once you're holding the right node: just rewire a couple of
+pointers, no shifting of elements.
+
+## The problem: is there a cycle?
+
+If some node's `next` points back to an earlier node, the list has a
+**cycle** — and a naive traversal loops forever. How do you detect that?
+
+The obvious approach stores every node you've seen in a `Set` and checks
+for a repeat: `O(n)` time but `O(n)` extra memory. Floyd's algorithm does
+it in `O(1)` memory.
+
+## The tortoise and the hare
+
+Run two pointers through the list at different speeds: **slow** moves one
+node per step, **fast** moves two. If the list ends (`null`), there's no
+cycle. But if there *is* a cycle, the fast pointer laps around and
+eventually lands on the slow one — they can't pass through each other
+without meeting:
+
+<LinkedListCycleVisualizer />
+
+```javascript
+function hasCycle(head) {
+  let slow = head, fast = head;
+
+  while (fast && fast.next) {
+    slow = slow.next;        // 1 step
+    fast = fast.next.next;   // 2 steps
+
+    if (slow === fast) return true; // they met → cycle
+  }
+  return false;              // fast hit null → no cycle
+}
+```
+
+### Why they're guaranteed to meet
+
+Once both pointers are inside the loop, think about the *gap* between them.
+Each step, fast gains one position on slow (it moves 2, slow moves 1, net
++1). The gap shrinks by exactly one every step, so it must eventually hit
+zero — a collision. It can never "jump over" slow, because closing a gap of
+1 lands them on the same node. That's the entire proof.
+
+## Bonus: where does the cycle start?
+
+Floyd's trick has a beautiful sequel. After the pointers meet, reset one to
+the head and move *both* one step at a time. They meet again exactly at the
+node where the cycle begins:
+
+```javascript
+function cycleStart(head) {
+  let slow = head, fast = head;
+  while (fast && fast.next) {
+    slow = slow.next;
+    fast = fast.next.next;
+    if (slow === fast) {          // phase 1: find a meeting point
+      let ptr = head;
+      while (ptr !== slow) {      // phase 2: walk to the entry
+        ptr = ptr.next;
+        slow = slow.next;
+      }
+      return ptr;                 // start of the cycle
+    }
+  }
+  return null;
+}
+```
+
+This falls out of the distance math: the gap from the head to the cycle
+entry equals the gap from the meeting point to the entry. You don't need to
+memorize the proof to use it, but it's a satisfying one to work through on
+paper.
+
+## Where this shows up
+
+- Detecting infinite loops in state machines or "next pointer" data
+- Finding duplicates in an array where values point to indices (the array
+  *is* a disguised linked list)
+- Any interview with the words "linked list" and "constant space"
+
+## Wrap-up
+
+Linked lists trade random access for cheap splicing, and they're the home
+of the tortoise-and-hare: two pointers at different speeds detect a cycle
+in one pass and `O(1)` memory. The gap-shrinks-by-one insight is the kind
+of reasoning that transfers far beyond this one problem.

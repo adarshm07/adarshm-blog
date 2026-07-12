@@ -1,0 +1,144 @@
+---
+title: "Bit Manipulation Fundamentals"
+publishedAt: "2026-07-11"
+summary: "The operators every developer half-remembers — AND, OR, XOR, shifts — and the handful of tricks that turn them into fast, elegant solutions."
+tags: "DSA"
+---
+
+Bitwise operations feel like a relic from a lower-level era, but they show
+up constantly: flags and permissions, hashing, graphics, compression, and a
+whole genre of interview problems. The operators are simple; the leverage
+comes from a few recurring tricks. Let's build them up.
+
+## The operators
+
+Every integer is a row of bits. The bitwise operators work on those bits in
+parallel:
+
+<table>
+  <thead>
+    <tr>
+      <th>Op</th>
+      <th>Name</th>
+      <th>Rule per bit</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>&</code></td>
+      <td>AND</td>
+      <td>1 only if both bits are 1</td>
+    </tr>
+    <tr>
+      <td><code>|</code></td>
+      <td>OR</td>
+      <td>1 if either bit is 1</td>
+    </tr>
+    <tr>
+      <td><code>^</code></td>
+      <td>XOR</td>
+      <td>1 if the bits differ</td>
+    </tr>
+    <tr>
+      <td><code>~</code></td>
+      <td>NOT</td>
+      <td>flips every bit</td>
+    </tr>
+    <tr>
+      <td><code>&lt;&lt;</code></td>
+      <td>left shift</td>
+      <td>shift bits up (× 2 per step)</td>
+    </tr>
+    <tr>
+      <td><code>&gt;&gt;</code></td>
+      <td>right shift</td>
+      <td>shift bits down (÷ 2 per step)</td>
+    </tr>
+  </tbody>
+</table>
+
+XOR is the interesting one. It's "difference," and it has magic properties:
+`x ^ 0 === x`, `x ^ x === 0`, and it's its own inverse. Those three facts
+power a surprising number of tricks.
+
+## Reading, setting, and clearing a bit
+
+The basic vocabulary — to work with bit `i`, build a **mask** `1 << i` (a
+number with a single 1 in position `i`) and combine it:
+
+```javascript
+const isSet   = (n, i) => (n & (1 << i)) !== 0; // test bit i
+const setBit  = (n, i) => n | (1 << i);         // force bit i to 1
+const clear   = (n, i) => n & ~(1 << i);        // force bit i to 0
+const toggle  = (n, i) => n ^ (1 << i);         // flip bit i
+```
+
+This is exactly how permission flags work: `READ | WRITE` packs multiple
+booleans into one integer, and `flags & WRITE` checks one.
+
+## Trick 1: n & (n − 1) clears the lowest set bit
+
+Subtracting 1 flips the lowest `1` bit to `0` and turns everything below it
+to `1`; AND-ing with the original wipes out that lowest bit and everything
+under it. Repeat until zero and you've counted the set bits — running once
+per *set* bit, not once per bit:
+
+<BitVisualizer />
+
+```javascript
+function countBits(n) {
+  let count = 0;
+  while (n) {
+    n &= n - 1;   // remove the lowest set bit
+    count++;
+  }
+  return count;
+}
+```
+
+For a number with only a few bits set, this is far faster than checking all
+32 positions. (`n & (n - 1)) === 0` is also the classic power-of-two test —
+a power of two has exactly one set bit.)
+
+## Trick 2: XOR finds the unique element
+
+Every number XOR'd with itself is 0, and XOR is commutative. So if every
+value in an array appears twice except one, XOR-ing them all together
+cancels the pairs and leaves the loner — `O(n)` time, `O(1)` space, no hash
+set:
+
+```javascript
+function singleNumber(nums) {
+  return nums.reduce((acc, n) => acc ^ n, 0);
+}
+singleNumber([4, 1, 2, 1, 2]); // 4
+```
+
+The same idea swaps two variables without a temp (`a ^= b; b ^= a; a ^= b`)
+and detects the one changed bit between two numbers (`a ^ b`).
+
+## A warning specific to JavaScript
+
+JavaScript's bitwise operators coerce their operands to **32-bit signed
+integers**, even though numbers are normally 64-bit floats. That has two
+consequences:
+
+- Bit operations silently break for values above 2³¹ − 1. For big integers,
+  use `BigInt` (whose bitwise operators have no width limit).
+- `>>` is an *arithmetic* shift (preserves the sign bit); `>>>` is a
+  *logical* shift (fills with zeros). Mixing them up on negative numbers is
+  a classic bug.
+
+```javascript
+-8 >> 1;   // -4  (sign preserved)
+-8 >>> 1;  // 2147483644  (treated as unsigned)
+```
+
+## Wrap-up
+
+Bit manipulation is a small vocabulary — masks with `1 << i`, and the AND /
+OR / XOR / shift operators — plus a few tricks worth memorizing:
+`n & (n-1)` strips the lowest set bit, XOR cancels pairs and finds the odd
+one out, and a single set bit means a power of two. Reach for them when you
+need packed flags or a constant-space answer, and mind JavaScript's 32-bit
+coercion.

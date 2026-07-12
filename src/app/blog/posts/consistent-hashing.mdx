@@ -1,0 +1,148 @@
+---
+title: "Consistent Hashing: Scaling Without Reshuffling Everything"
+publishedAt: "2026-07-12"
+summary: "Why `hash % N` falls apart the moment you add a server, and how consistent hashing moves only a fraction of your keys when the cluster changes."
+tags: "System Design"
+---
+
+You have data — cache entries, sessions, database rows — and a set of
+servers to spread it across. The question is deceptively simple: *given a
+key, which server owns it?* The naive answer works fine until the day you
+add or remove a server, at which point it quietly melts down. Consistent
+hashing is the fix, and it's behind Redis Cluster, Cassandra, DynamoDB,
+CDNs, and load balancers everywhere.
+
+## The naive approach and why it breaks
+
+The obvious mapping is modulo:
+
+```javascript
+function serverFor(key, serverCount) {
+  return hash(key) % serverCount;
+}
+```
+
+With 4 servers, key `hash = 1234` goes to server `1234 % 4 = 2`. Clean and
+fast. The problem is the `% N`: change `N` and *almost every key* maps
+somewhere new.
+
+Go from 4 servers to 5 and `1234 % 5 = 4` — a different server. Do the math
+across all keys and roughly **80% of them relocate**. For a cache, that's a
+mass miss storm: nearly everything has to be re-fetched from the origin at
+once. For a database, it's a giant, coordinated data migration just to add
+one node. The system is punished for growing.
+
+## The ring
+
+Consistent hashing changes the geometry. Instead of mapping keys to `N`
+slots, hash both **keys and servers** onto the same circular space (say
+0 to 2³² − 1, wrapped into a ring). To find a key's owner, start at the
+key's position and walk **clockwise** to the first server you hit:
+
+<ConsistentHashRingVisualizer />
+
+The crucial property is in the last steps of that animation. When you add
+server **D**, the only keys that move are the ones sitting in the arc
+between D and the server that *used* to cover that stretch. Every other key
+still walks clockwise to the same server as before. Adding a node into an
+`N`-node ring relocates roughly `1/N` of the keys — not 80%.
+
+```javascript
+class HashRing {
+  constructor() { this.ring = []; } // sorted [{ hash, server }]
+
+  addServer(server) {
+    this.ring.push({ hash: hash(server), server });
+    this.ring.sort((a, b) => a.hash - b.hash);
+  }
+
+  serverFor(key) {
+    const h = hash(key);
+    // first server clockwise (hash >= h), else wrap to the first
+    for (const node of this.ring) {
+      if (node.hash >= h) return node.server;
+    }
+    return this.ring[0].server; // wrapped past the top of the ring
+  }
+}
+```
+
+Removing a server is the mirror image: only *its* keys move, and they go to
+the next server clockwise. Everyone else is untouched.
+
+## The uneven-load problem, and virtual nodes
+
+There's a catch. With only a few servers placed randomly on the ring, the
+arcs between them are uneven — one server might own a huge slice of the
+circle and get hammered while another sits idle. And when a server dies,
+its *entire* load dumps onto the single next server, not the whole cluster.
+
+The fix is **virtual nodes**: place each physical server at many points
+around the ring (say 100–200 hashes per server, using
+`hash(server + "#" + i)`). Now each physical server owns many small arcs
+scattered around the circle instead of one big one. Two benefits:
+
+- Load evens out — the law of large numbers smooths the arc sizes.
+- When a server fails, its many small arcs spill onto *many* different
+  neighbours, spreading the extra load across the whole cluster instead of
+  crushing one node.
+
+```javascript
+addServer(server, vnodes = 150) {
+  for (let i = 0; i < vnodes; i++) {
+    this.ring.push({ hash: hash(`${server}#${i}`), server });
+  }
+  this.ring.sort((a, b) => a.hash - b.hash);
+}
+```
+
+Virtually every real implementation uses virtual nodes; the plain ring is
+just the teaching version.
+
+## The trade-offs
+
+<table>
+  <thead>
+    <tr>
+      <th></th>
+      <th>hash % N</th>
+      <th>Consistent hashing</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Lookup cost</td>
+      <td>O(1)</td>
+      <td>O(log N) (binary search the ring)</td>
+    </tr>
+    <tr>
+      <td>Keys moved when adding a node</td>
+      <td>~all of them</td>
+      <td>~1/N of them</td>
+    </tr>
+    <tr>
+      <td>Even load</td>
+      <td>Yes, automatically</td>
+      <td>Needs virtual nodes</td>
+    </tr>
+    <tr>
+      <td>Complexity</td>
+      <td>Trivial</td>
+      <td>Moderate</td>
+    </tr>
+  </tbody>
+</table>
+
+If your server set truly never changes, `% N` is fine — don't over-engineer.
+Consistent hashing earns its complexity precisely when nodes come and go:
+autoscaling caches, sharded databases, and any cluster where a single
+deploy shouldn't invalidate everything.
+
+## Wrap-up
+
+`hash % N` ties every key's location to the exact server count, so changing
+that count reshuffles nearly everything. Consistent hashing puts keys and
+servers on a ring and assigns each key to the next server clockwise, so a
+membership change disturbs only a thin slice of keys — and virtual nodes
+keep that slice evenly spread. It's the standard answer to "how do I add a
+server without a stampede?"

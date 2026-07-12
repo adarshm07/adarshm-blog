@@ -1,0 +1,141 @@
+---
+title: "Generators and Iterators: Functions That Pause"
+publishedAt: "2026-07-12"
+summary: "The protocol behind for...of, the spread operator, and async/await — plus generator functions, which can pause mid-execution and resume exactly where they left off."
+tags: "JavaScript"
+---
+
+Most functions run start to finish and hand back one value. **Generators**
+break that rule: they can pause in the middle, hand a value out, and later
+resume from the exact spot they stopped — locals and all. Understanding
+them explains `for...of`, the spread operator, lazy infinite sequences, and
+ultimately how `async/await` works.
+
+## The iterator protocol
+
+First, the contract everything is built on. An **iterator** is any object
+with a `next()` method that returns `{ value, done }`. An **iterable** is
+any object with a `[Symbol.iterator]` method that returns an iterator.
+`for...of`, spread (`...`), and destructuring all speak this protocol:
+
+```javascript
+const iter = [10, 20][Symbol.iterator]();
+iter.next(); // { value: 10, done: false }
+iter.next(); // { value: 20, done: false }
+iter.next(); // { value: undefined, done: true }
+```
+
+Arrays, strings, `Map`, and `Set` are all iterable — that's *why* you can
+spread or `for...of` them. You can make your own objects iterable by
+implementing `[Symbol.iterator]`, but writing a correct iterator by hand
+(tracking state across calls) is fiddly. Generators do it for you.
+
+## Generator functions
+
+A generator function — `function*` — returns an iterator, but its body
+doesn't run on call. Instead, each `yield` is a pause point. Calling
+`next()` runs the body up to the next `yield`, hands out that value, and
+freezes. The next `next()` thaws it and continues:
+
+<GeneratorVisualizer />
+
+```javascript
+function* counter() {
+  yield 1;
+  yield 2;
+  yield 3;
+}
+
+const g = counter();
+g.next(); // { value: 1, done: false }
+g.next(); // { value: 2, done: false }
+g.next(); // { value: 3, done: false }
+g.next(); // { value: undefined, done: true }
+```
+
+The revelation in the animation: calling `counter()` runs *nothing*. The
+body only advances when you pull the next value. Between pulls, the
+function sits frozen with its local state intact — that's the superpower
+plain functions don't have.
+
+Because a generator returns an iterator, it's automatically iterable:
+
+```javascript
+for (const n of counter()) console.log(n); // 1, 2, 3
+const nums = [...counter()];               // [1, 2, 3]
+```
+
+## Lazy and infinite sequences
+
+Since values are produced only on demand, a generator can describe an
+*infinite* sequence without looping forever — you just stop pulling:
+
+```javascript
+function* naturals() {
+  let n = 1;
+  while (true) yield n++;   // never terminates on its own
+}
+
+const g = naturals();
+g.next().value; // 1
+g.next().value; // 2   — computed only when asked
+```
+
+This laziness is the real value. You can express "all the natural numbers"
+or "every line of a huge file" as a generator and consume just the part you
+need, computing nothing extra. Pair it with a `take(gen, k)` helper and you
+have composable, memory-cheap pipelines.
+
+## Two-way communication
+
+`yield` is also an expression — whatever you pass to `next(value)` becomes
+the result of the paused `yield`. So data flows *in* as well as out:
+
+```javascript
+function* echo() {
+  const received = yield "ready";
+  yield `you said: ${received}`;
+}
+
+const g = echo();
+g.next();          // { value: "ready", done: false }
+g.next("hello");   // { value: "you said: hello", done: false }
+```
+
+This bidirectional channel is what makes generators powerful enough to
+drive async control flow.
+
+## The punchline: async/await is a generator
+
+Here's the connection that ties it together. An `async` function is
+essentially a generator where `await` plays the role of `yield` — it pauses
+the function until a promise settles, then resumes with the resolved value.
+Before `async/await` was a language feature, libraries like `co` implemented
+it *exactly* this way: a generator that yields promises, plus a runner that
+calls `next()` each time a promise resolves.
+
+```javascript
+// what async/await is doing, conceptually
+function run(genFn) {
+  const gen = genFn();
+  function step(value) {
+    const { value: promise, done } = gen.next(value);
+    if (done) return Promise.resolve(promise);
+    return Promise.resolve(promise).then(step); // resume when it settles
+  }
+  return step();
+}
+```
+
+The pause-and-resume machinery you watched in the animation is the same
+machinery that lets `await` suspend a function without blocking the thread.
+`async/await` is generators with promises wired in and the runner built
+into the engine.
+
+## Wrap-up
+
+Iterators are the `{ value, done }` protocol that `for...of` and spread rely
+on; generators are the easy way to produce them, with the unique ability to
+pause at `yield` and resume with state intact. That gives you lazy and even
+infinite sequences, two-way communication — and, once promises are mixed
+in, `async/await` itself.

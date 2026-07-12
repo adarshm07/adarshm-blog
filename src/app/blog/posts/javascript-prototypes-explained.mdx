@@ -19,11 +19,27 @@ itself. If it's not there, it follows a hidden internal link — called
 `[[Prototype]]` — to another object and checks *that*, and so on up a
 chain until it either finds the property or reaches `null`.
 
-<PrototypeChainDiagram />
+Step through a real lookup below. We call `dog.eat()`, and the engine has
+to *find* `eat` by walking upward one link at a time — missing on the
+instance, missing on `Dog.prototype`, and finally hitting it on
+`Animal.prototype`:
+
+<PrototypeChainVisualizer />
 
 That's the entire mechanism. There is no copying, no "inherited members"
 baked into the object at creation — just a live pointer to another object
-and a lookup that walks it. You can see the link directly:
+and a lookup that walks it. Two things fall directly out of the animation
+and are worth naming:
+
+- **Lookup is dynamic, not cached at creation.** If you add `eat` to
+  `Animal.prototype` *after* `dog` already exists, the very next
+  `dog.eat()` finds it — the walk happens fresh on every access.
+- **The walk has a cost.** A property deep up the chain takes more hops
+  than an own property. It's rarely worth worrying about, but it's why a
+  hot loop reading a deeply-inherited getter can be measurably slower than
+  reading an own field.
+
+You can see the link directly:
 
 ```javascript
 const arr = [1, 2, 3];
@@ -121,6 +137,28 @@ new Dog().speak(); // "woof" — found on Dog.prototype first
 This is method overriding, and it falls out of the lookup rule for free —
 there's no special "override" machinery. `super.speak()` is how a child
 reaches past its own shadow to the parent's version.
+
+## instanceof is just a chain walk
+
+Once you picture the chain, `instanceof` stops being magic. `x instanceof C`
+asks a single question: *is `C.prototype` anywhere on `x`'s prototype
+chain?* It walks the same links the property lookup does, looking for one
+specific object instead of one specific key.
+
+```javascript
+class Animal {}
+class Dog extends Animal {}
+const rex = new Dog();
+
+rex instanceof Dog;    // true  — Dog.prototype is link #1
+rex instanceof Animal; // true  — Animal.prototype is link #2
+rex instanceof Object; // true  — Object.prototype is link #3
+```
+
+This is also why `instanceof` can *lie* across realms (e.g. an array from
+an `<iframe>` isn't `instanceof` the parent window's `Array`): different
+realm, different `Array.prototype`, so it's not on the chain. `Array.isArray`
+exists precisely to sidestep that.
 
 ## Where it bites
 

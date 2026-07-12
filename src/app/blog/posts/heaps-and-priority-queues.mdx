@@ -1,0 +1,153 @@
+---
+title: "Heaps and the Priority Queue"
+publishedAt: "2026-07-10"
+summary: "How a heap keeps the smallest (or largest) element one lookup away, why it's stored in a plain array, and the sift-up/sift-down operations that keep it valid."
+tags: "DSA"
+---
+
+When you need "the smallest thing right now," over and over, while the set
+keeps changing — a heap is the data structure. It's what powers priority
+queues, Dijkstra's algorithm, event schedulers, and the "top K" family of
+problems. And despite looking like a tree, it lives in a flat array.
+
+## What a heap guarantees
+
+A **binary heap** is a complete binary tree with one rule, the *heap
+property*:
+
+- In a **min-heap**, every parent is ≤ its children. The minimum is always
+  at the root.
+- In a **max-heap**, every parent is ≥ its children. The maximum is at the
+  root.
+
+That's a weaker promise than a sorted array — siblings have no defined
+order, and the structure isn't fully sorted. But it's exactly enough to
+make "peek at the extreme" an `O(1)` lookup, while insert and remove stay
+`O(log n)`. A sorted array gives `O(1)` peek too, but `O(n)` inserts; a
+heap is the sweet spot when both operations matter.
+
+## The array trick
+
+A heap doesn't use node objects and pointers. Because it's always a
+*complete* tree (filled left to right, no gaps), you can store it in an
+array and compute relationships with arithmetic:
+
+```javascript
+// for a node at index i:
+parent = (i - 1) >> 1;   // floor((i-1)/2)
+left   = 2 * i + 1;
+right  = 2 * i + 2;
+```
+
+No pointers, great cache locality, and the "next open slot" is just
+`array.length`. The tree in the animation below and the array underneath it
+are the same thing.
+
+## Insert: add at the end, sift up
+
+To insert, drop the new value in the next open slot (keeping the tree
+complete), then **sift up**: while it's smaller than its parent, swap them.
+It bubbles up until the heap property holds again:
+
+<HeapVisualizer />
+
+```javascript
+class MinHeap {
+  constructor() { this.h = []; }
+
+  push(value) {
+    this.h.push(value);
+    let i = this.h.length - 1;
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (this.h[parent] <= this.h[i]) break; // property holds — stop
+      [this.h[parent], this.h[i]] = [this.h[i], this.h[parent]];
+      i = parent;
+    }
+  }
+}
+```
+
+The value climbs at most the height of the tree — `O(log n)` swaps.
+
+## Remove the min: swap, shrink, sift down
+
+The minimum is at index 0, but you can't just delete it — that would leave
+a hole at the root. The trick: move the *last* element to the root, shrink
+the array, then **sift down**, swapping the root with its smaller child
+until order is restored:
+
+```javascript
+pop() {
+  const min = this.h[0];
+  const last = this.h.pop();
+  if (this.h.length) {
+    this.h[0] = last;
+    let i = 0;
+    const n = this.h.length;
+    while (true) {
+      let smallest = i;
+      const l = 2 * i + 1, r = 2 * i + 2;
+      if (l < n && this.h[l] < this.h[smallest]) smallest = l;
+      if (r < n && this.h[r] < this.h[smallest]) smallest = r;
+      if (smallest === i) break;
+      [this.h[i], this.h[smallest]] = [this.h[smallest], this.h[i]];
+      i = smallest;
+    }
+  }
+  return min;
+}
+```
+
+Again `O(log n)` — one swap per level as the misplaced value settles down.
+
+## Cost summary
+
+<table>
+  <thead>
+    <tr>
+      <th>Operation</th>
+      <th>Time</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>peek (min / max)</td>
+      <td>O(1)</td>
+    </tr>
+    <tr>
+      <td>push (insert)</td>
+      <td>O(log n)</td>
+    </tr>
+    <tr>
+      <td>pop (remove extreme)</td>
+      <td>O(log n)</td>
+    </tr>
+    <tr>
+      <td>build heap from n items</td>
+      <td>O(n)</td>
+    </tr>
+  </tbody>
+</table>
+
+## Where you'll use it
+
+- **Priority queues** — process the most urgent job first.
+- **Dijkstra / A\*** — repeatedly pull the nearest unvisited node.
+- **Top K elements** — keep a size-K heap and evict the extreme; `O(n log k)`
+  instead of sorting everything.
+- **Merge K sorted lists** — a heap of the K front elements.
+- **Streaming median** — one max-heap and one min-heap balanced against
+  each other.
+
+JavaScript has no built-in heap, so you'll often hand-roll one like the
+above — or reach for a library. Most other languages ship one
+(`heapq` in Python, `PriorityQueue` in Java).
+
+## Wrap-up
+
+A heap keeps one specific element — the min or the max — perpetually one
+lookup away, at the price of `O(log n)` inserts and removes. Store it in an
+array, restore the heap property by sifting up on insert and down on
+remove, and you've got the engine behind priority queues and a whole class
+of "give me the next best thing" problems.
