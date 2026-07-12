@@ -1,0 +1,230 @@
+---
+title: "The Network Stack, Layer by Layer: OSI, TCP/IP, and TCP vs UDP"
+publishedAt: "2026-07-12"
+summary: "What actually happens between typing a URL and bytes arriving — the OSI model, the four practical TCP/IP layers, and why TCP and UDP make opposite trade-offs."
+tags: "System Design"
+---
+
+"That layer, this layer" — the reason nobody remembers which is which is
+that we're taught *seven* OSI layers as a memorization exercise, when the
+internet actually runs on *four*. Let me untangle both, then get to the
+part that matters in practice: the transport layer, where TCP and UDP make
+two opposite bets on the same problem.
+
+The core idea is **encapsulation**. Each layer wraps the layer above it in
+its own envelope, does one job, and hands it down. Your data picks up a
+transport header, then a network header, then a link header on the way
+out — and each is peeled off in reverse on the way in. No layer needs to
+understand the others; it just adds its stamp and passes the package along.
+
+## The two models
+
+The **OSI model** is the seven-layer textbook diagram. It's a reference,
+not something anyone implements literally. The **TCP/IP model** is what the
+internet actually uses — four layers that collapse OSI's top three into
+one and its bottom two into one.
+
+<table>
+  <thead>
+    <tr>
+      <th>OSI (7 layers)</th>
+      <th>TCP/IP (4 layers)</th>
+      <th>Job</th>
+      <th>Lives where</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>7. Application<br />6. Presentation<br />5. Session</td>
+      <td>Application</td>
+      <td>What the data <em>means</em></td>
+      <td>Your app</td>
+    </tr>
+    <tr>
+      <td>4. Transport</td>
+      <td>Transport</td>
+      <td>Port-to-port delivery, reliability</td>
+      <td>OS kernel</td>
+    </tr>
+    <tr>
+      <td>3. Network</td>
+      <td>Internet</td>
+      <td>Host-to-host routing across networks</td>
+      <td>OS + routers</td>
+    </tr>
+    <tr>
+      <td>2. Data Link<br />1. Physical</td>
+      <td>Link</td>
+      <td>Getting bits onto the wire</td>
+      <td>NIC + drivers</td>
+    </tr>
+  </tbody>
+</table>
+
+I'll walk them top to bottom — the direction your data travels when you
+hit *send*.
+
+## Application layer — HTTP, DNS, TLS
+
+This is the only layer most of us touch directly. It's where protocols
+speak in terms a human designed: `GET /index.html`, a DNS question for
+`adarshm.com`, an SMTP `MAIL FROM`. OSI splits this into three (session,
+presentation, application), but in practice your library — the HTTP
+client, the TLS stack — handles all of it. The layer's defining trait: it
+knows nothing about *how* the bytes get there, only what they say.
+
+```text
+GET /blog HTTP/1.1
+Host: adarshm.com
+Accept: text/html
+```
+
+That request is just a string. It has no idea it's about to be chopped
+into segments, routed through a dozen networks, and reassembled.
+
+## Transport layer — TCP and UDP
+
+Here's the interesting layer, and the one your question is really about.
+The network layer below can only do one thing: shove a packet toward a
+host, best-effort, no promises. Packets can be dropped, duplicated,
+reordered, or corrupted. The transport layer is where we decide **how much
+we care** about fixing that — and it adds one more crucial thing: **ports**,
+so the OS knows the packet is for your browser tab and not your mail
+client.
+
+Two protocols, two philosophies.
+
+**UDP** is the honest minimalist. It adds ports and a checksum to a raw
+packet and calls it done. No connection, no acknowledgements, no
+retransmission, no ordering. A UDP header is 8 bytes.
+
+```text
+Source Port | Dest Port | Length | Checksum
+   2 bytes  |  2 bytes  | 2 bytes|  2 bytes
+```
+
+Fire and forget. If a packet vanishes, UDP never knows and never tells
+you. That sounds broken until you realize it's exactly right for some
+jobs — more below.
+
+**TCP** is the reliability machine. On top of the same unreliable network,
+it manufactures the illusion of a clean, ordered, lossless byte stream.
+That illusion costs a header of 20+ bytes and a fair amount of
+bookkeeping:
+
+- **Connection setup** — the three-way handshake (`SYN`, `SYN-ACK`,
+  `ACK`) before any data flows, so both sides agree on starting sequence
+  numbers.
+- **Sequence numbers + ACKs** — every byte is numbered; the receiver
+  acknowledges what it got, and anything unacknowledged is retransmitted.
+  This is what makes delivery *reliable* and *in order*.
+- **Flow control** — a sliding window so a fast sender can't drown a slow
+  receiver.
+- **Congestion control** — the sender backs off when the *network* shows
+  signs of overload (this is why one lost packet can slow a whole
+  stream).
+
+<table>
+  <thead>
+    <tr>
+      <th></th>
+      <th>TCP</th>
+      <th>UDP</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Connection</td>
+      <td>Handshake first</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>Reliability</td>
+      <td>Guaranteed, retransmits</td>
+      <td>Best-effort</td>
+    </tr>
+    <tr>
+      <td>Ordering</td>
+      <td>In order</td>
+      <td>May arrive shuffled</td>
+    </tr>
+    <tr>
+      <td>Header</td>
+      <td>20+ bytes</td>
+      <td>8 bytes</td>
+    </tr>
+    <tr>
+      <td>Speed</td>
+      <td>Slower, chattier</td>
+      <td>Lean, low latency</td>
+    </tr>
+    <tr>
+      <td>Good for</td>
+      <td>Web, APIs, email, files</td>
+      <td>Video calls, games, DNS</td>
+    </tr>
+  </tbody>
+</table>
+
+The rule of thumb: **pick TCP when every byte must arrive; pick UDP when a
+late byte is worse than a lost one.** In a video call, a packet that shows
+up 300ms late is useless — you'd rather skip it and keep the conversation
+live than stall the stream waiting for a retransmit. Live audio, gaming,
+and DNS lookups all take that bet. Loading this blog post does not: a web
+page with a missing chunk is broken, so HTTP rides on TCP.
+
+Worth knowing: **QUIC** (the transport under HTTP/3) is built *on top of*
+UDP, then re-implements TCP's reliability and ordering in user space —
+getting TCP's guarantees while dodging its handshake and head-of-line
+blocking. It's a neat reminder that these layers are conventions, not
+laws.
+
+## Internet layer — IP and routing
+
+Below transport sits **IP**, whose one job is host-to-host delivery across
+independent networks. It stamps each packet with a source and destination
+**IP address** and hands it to the first router. Each router along the way
+looks only at the destination, consults its routing table, and forwards
+the packet one hop closer — no router knows the full path, and different
+packets in the same conversation can take different routes.
+
+IP is deliberately dumb and unreliable — no delivery guarantee, no
+ordering. That's not a bug; it's the design. By pushing reliability *up*
+to TCP and keeping the network layer simple, the internet stays cheap to
+route and easy to scale. This is the famous **end-to-end principle**:
+smarts live at the edges, the middle just forwards.
+
+## Link layer — Ethernet, Wi-Fi
+
+The bottom layer gets bits onto the actual medium — a copper cable, a
+Wi-Fi channel, fiber. It deals in **MAC addresses** (hardware addresses
+baked into your network card) and frames, and it only ever moves data
+across a *single* physical hop: your laptop to your router, one router to
+the next. Every hop re-wraps the packet in a fresh link-layer frame for
+whatever medium it's crossing next. This is OSI's physical and data-link
+layers fused into one.
+
+## Putting it together
+
+Load this page and the layers cooperate like an assembly line:
+
+1. **Application** — your browser forms an HTTP `GET` for `/blog`.
+2. **Transport** — TCP wraps it in a segment, tags the port, and (on a new
+   connection) does its handshake.
+3. **Internet** — IP wraps the segment in a packet addressed to the
+   server's IP.
+4. **Link** — Ethernet/Wi-Fi wraps the packet in a frame and puts it on
+   the wire.
+
+At the server, the same envelopes come off in reverse — link, internet,
+transport, application — and the web server finally reads a plain HTTP
+request, blissfully unaware of the journey. Each layer only ever talks to
+its counterpart on the other side and trusts the layers below to do their
+one job.
+
+That's the whole mental model. When something breaks — a stalled download,
+a laggy call, a site that won't resolve — knowing which layer owns which
+job tells you where to look: DNS and TLS at the top, packet loss and
+retransmits at transport, routing and reachability at the internet layer,
+and cables and signal down at the link. Most debugging is just figuring
+out which envelope didn't make it.
