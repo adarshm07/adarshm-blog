@@ -1,46 +1,5 @@
 @import "tailwindcss";
 
-/* ── Palette ─────────────────────────────────────────────── */
-
-:root {
-  --bg: #faf6ef;
-  --surface: #ffffff;
-  --text: #2a2e3a;
-  --accent: #4f8a8b;
-  --accent-2: #3b4a6b;
-  --muted: #8a8f9c;
-  --line: #e8e1d4;
-  --glow: rgba(79, 138, 139, 0.12);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1e222c;
-    --surface: #262b37;
-    --text: #e9e7e1;
-    --accent: #74c0c1;
-    --accent-2: #9fb2d6;
-    --muted: #9aa0ad;
-    --line: #343a48;
-    --glow: rgba(79, 138, 139, 0.1);
-  }
-  html {
-    color-scheme: dark;
-  }
-}
-
-@theme inline {
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
-  --color-bg: var(--bg);
-  --color-surface: var(--surface);
-  --color-ink: var(--text);
-  --color-accent: var(--accent);
-  --color-accent-2: var(--accent-2);
-  --color-muted: var(--muted);
-  --color-line: var(--line);
-}
-
 /* sugar-high syntax colors — light */
 :root {
   --sh-class: #2d5e9d;
@@ -66,17 +25,20 @@
     --sh-property: #f69d50;
     --sh-entity: #f69d50;
   }
+  html {
+    color-scheme: dark;
+  }
 }
 
 ::selection {
-  background-color: #d8eaea;
-  color: #1f3d3e;
+  background-color: #dcfce7;
+  color: #14532d;
 }
 
 @media (prefers-color-scheme: dark) {
   ::selection {
-    background-color: #2f5253;
-    color: #dff1f1;
+    background-color: #14532d;
+    color: #dcfce7;
   }
 }
 
@@ -116,46 +78,74 @@ html {
 
 .prose .anchor:after {
   content: "#";
-  color: var(--muted);
-  opacity: 0.6;
+  color: #d1d5db;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose .anchor:after {
+    color: #374151;
+  }
 }
 
 .prose a {
   text-decoration: underline;
   text-underline-offset: 3px;
   text-decoration-thickness: 1px;
-  text-decoration-color: var(--line);
+  text-decoration-color: #d1d5db;
   transition: text-decoration-color 0.15s;
 }
 
 .prose a:hover {
-  text-decoration-color: var(--accent);
+  text-decoration-color: #16a34a;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose a {
+    text-decoration-color: #374151;
+  }
+  .prose a:hover {
+    text-decoration-color: #22c55e;
+  }
 }
 
 .prose pre {
   @apply rounded-xl overflow-x-auto py-4 px-5 text-sm my-6;
-  background-color: var(--surface);
-  border: 1px solid var(--line);
+  background-color: #f6f8fa;
+  border: 1px solid #d1d9e0;
   line-height: 1.7;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose pre {
+    background-color: #0d1117;
+    border-color: #21262d;
+  }
 }
 
 .prose code {
   @apply px-1.5 py-0.5 rounded-md text-sm;
-  background-color: #f1ece1;
-  color: var(--text);
+  background-color: #f3f4f6;
+  color: #111827;
 }
 
 @media (prefers-color-scheme: dark) {
   .prose code {
-    background-color: #303646;
+    background-color: #1f2937;
+    color: #e5e7eb;
   }
 }
 
 .prose pre code {
   @apply p-0 text-sm;
   background-color: transparent;
-  color: var(--text);
+  color: #1f2328;
   border: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose pre code {
+    color: #e6edf3;
+  }
 }
 
 .prose code span {
@@ -168,32 +158,53 @@ html {
 
 .prose p {
   @apply my-5 leading-relaxed;
-  color: var(--text);
+  color: #374151;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose p {
+    color: #d1d5db;
+  }
 }
 
 .prose h1 {
   @apply text-3xl font-semibold tracking-tight mt-10 mb-4;
-  color: var(--text);
+  color: #111827;
 }
 
 .prose h2 {
   @apply text-2xl font-semibold tracking-tight mt-10 mb-3;
-  color: var(--text);
+  color: #111827;
 }
 
 .prose h3 {
   @apply text-xl font-semibold tracking-tight mt-8 mb-3;
-  color: var(--text);
+  color: #111827;
 }
 
 .prose h4 {
   @apply text-lg font-semibold tracking-tight mt-6 mb-2;
-  color: var(--text);
+  color: #111827;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose h1,
+  .prose h2,
+  .prose h3,
+  .prose h4 {
+    color: #f9fafb;
+  }
 }
 
 .prose strong {
   @apply font-semibold;
-  color: var(--text);
+  color: #111827;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose strong {
+    color: #f3f4f6;
+  }
 }
 
 .prose ul {
@@ -205,18 +216,36 @@ html {
 }
 
 .prose li {
-  color: var(--text);
+  color: #374151;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose li {
+    color: #d1d5db;
+  }
 }
 
 .prose blockquote {
   @apply border-l-4 pl-4 my-6 italic;
-  border-color: var(--accent-2);
-  color: var(--muted);
+  border-color: #16a34a;
+  color: #6b7280;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose blockquote {
+    color: #9ca3af;
+  }
 }
 
 .prose hr {
   @apply my-8;
-  border-color: var(--line);
+  border-color: #f3f4f6;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose hr {
+    border-color: #1f2937;
+  }
 }
 
 .prose > :first-child {
@@ -231,12 +260,29 @@ html {
 .prose th,
 .prose td {
   @apply border px-3 py-2 text-left;
-  border-color: var(--line);
-  color: var(--text);
+  border-color: #e5e7eb;
 }
 
 .prose th {
   @apply font-semibold;
+  color: #111827;
+}
+
+.prose td {
+  color: #374151;
+}
+
+@media (prefers-color-scheme: dark) {
+  .prose th,
+  .prose td {
+    border-color: #1f2937;
+  }
+  .prose th {
+    color: #f9fafb;
+  }
+  .prose td {
+    color: #d1d5db;
+  }
 }
 
 /* ── Utilities ───────────────────────────────────────────── */

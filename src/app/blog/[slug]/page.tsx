@@ -88,23 +88,13 @@ export default async function Blog({
         }}
       />
 
-      <div className="mb-10 pb-8 border-b border-line">
-        <h1 className="title font-bold text-3xl sm:text-4xl tracking-tight text-ink">
+      <div className="mb-10 pb-8 border-b border-neutral-100 dark:border-neutral-800">
+        <h1 className="title font-semibold text-2xl tracking-tight text-neutral-900 dark:text-neutral-50 mb-3">
           {post.metadata.title}
         </h1>
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <p className="text-sm text-muted">
-            {formatDate(post.metadata.publishedAt)} · {readingTime} min read
-          </p>
-          {post.metadata.tags?.map((t) => (
-            <span
-              key={t}
-              className="rounded-full border border-line bg-surface px-2.5 py-0.5 text-[11px] text-muted"
-            >
-              {t}
-            </span>
-          ))}
-        </div>
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">
+          {formatDate(post.metadata.publishedAt)} · {readingTime} min read
+        </p>
       </div>
 
       <article className="prose">
