@@ -1,35 +1,23 @@
-const links = [
-  { name: 'RSS', href: '/rss', external: false },
-  { name: 'GitHub', href: 'https://github.com/adarshm07', external: true },
-  { name: 'X', href: 'https://x.com/adarshm07', external: true },
-  {
-    name: 'LinkedIn',
-    href: 'https://www.linkedin.com/in/adarshm07/',
-    external: true,
-  },
-]
-
 export default function Footer() {
   return (
-    <footer className="mt-20 pt-8 pb-10 border-t border-line">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <p className="text-xs text-muted">
-          © {new Date().getFullYear()} Adarsh M
-          <span className="text-accent">.</span>
-        </p>
+    <footer className="mt-16 pt-8 border-t border-neutral-100 dark:border-neutral-800">
+      <div className="flex items-center justify-between text-sm text-neutral-400 dark:text-neutral-500">
+        <p>© {new Date().getFullYear()} Adarsh M.</p>
         <div className="flex gap-5">
-          {links.map((link) => (
-            <a
-              key={link.name}
-              href={link.href}
-              {...(link.external
-                ? { target: '_blank', rel: 'noopener noreferrer' }
-                : {})}
-              className="text-xs text-muted hover:text-accent transition-colors"
-            >
-              {link.name}
-            </a>
-          ))}
+          <a
+            href="/rss"
+            className="hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
+          >
+            RSS
+          </a>
+          <a
+            href="https://github.com/adarshm07"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
+          >
+            GitHub
+          </a>
         </div>
       </div>
     </footer>

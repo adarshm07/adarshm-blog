@@ -1,3 +1,4 @@
+import Image from 'next/image'
 import { getGithubProfile } from '@/app/lib/github'
 
 const LINKEDIN_URL = 'https://www.linkedin.com/in/adarshm07/'
@@ -30,63 +31,65 @@ export async function Profile() {
   const profile = await getGithubProfile()
 
   const name = profile?.name ?? 'Adarsh M'
+  const avatarUrl = profile?.avatar_url ?? null
   const twitterUsername = profile?.twitter_username ?? 'adarshm07'
   const githubUrl = profile?.html_url ?? 'https://github.com/adarshm07'
 
-  const chipClass =
-    'inline-flex items-center gap-1.5 rounded-full border border-line bg-surface px-3.5 py-1.5 text-xs font-medium text-ink/80 hover:border-accent/60 hover:text-accent transition-colors'
-
   return (
-    <div>
-        <span className="inline-flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1 text-xs font-medium text-ink/80">
-          <span className="relative flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-60" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
-          </span>
-          Software Engineer · Kerala, India
-        </span>
+    <div className="flex flex-col sm:flex-row sm:items-center gap-5">
+      {avatarUrl && (
+        <Image
+          src={avatarUrl}
+          alt={name}
+          width={64}
+          height={64}
+          className="rounded-full ring-2 ring-neutral-100 dark:ring-neutral-800 shrink-0"
+          priority
+        />
+      )}
 
-        <h1 className="mt-6 text-5xl sm:text-6xl font-bold tracking-tight text-ink">
+      <div className="flex-1 min-w-0">
+        <h1 className="text-2xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-50">
           {name}
-          <span className="text-accent">.</span>
         </h1>
-
-        <p className="mt-6 max-w-xl text-lg leading-relaxed text-ink/70">
-          I write here as I learn — data structures & algorithms, system
-          design, and other things I pick up along the way.
+        <p className="mt-1.5 text-sm leading-relaxed text-neutral-500 dark:text-neutral-400">
+          Software engineer based in Kerala, India. I write here as I learn —
+          data structures & algorithms, system design, and other things I
+          pick up along the way.
         </p>
 
-        <div className="mt-8 flex flex-wrap items-center gap-2.5">
+        <div className="mt-3 flex items-center gap-3">
           <a
             href={githubUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className={chipClass}
+            aria-label="GitHub"
+            className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 transition-colors"
           >
             <GithubIcon />
-            GitHub
           </a>
           {twitterUsername && (
             <a
               href={`https://x.com/${twitterUsername}`}
               target="_blank"
               rel="noopener noreferrer"
-              className={chipClass}
+              aria-label="X / Twitter"
+              className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 transition-colors"
             >
               <TwitterIcon />
-              Twitter
             </a>
           )}
           <a
             href={LINKEDIN_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className={chipClass}
+            aria-label="LinkedIn"
+            className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 transition-colors"
           >
             <LinkedInIcon />
-            LinkedIn
           </a>
         </div>
+      </div>
     </div>
   )
 }

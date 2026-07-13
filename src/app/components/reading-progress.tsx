@@ -29,7 +29,7 @@ export function ReadingProgress() {
   return (
     <div className="fixed top-0 left-0 right-0 h-0.5 z-50">
       <div
-        className="h-full bg-accent"
+        className="h-full bg-green-600 dark:bg-green-500"
         style={{ width: `${progress * 100}%` }}
       />
     </div>

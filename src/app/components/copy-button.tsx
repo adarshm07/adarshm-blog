@@ -15,10 +15,10 @@ export function CopyButton({ code }: { code: string }) {
     <button
       onClick={copy}
       aria-label={copied ? 'Copied' : 'Copy code'}
-      className="absolute top-3 right-3 rounded-md border border-line bg-surface/80 p-1.5 text-muted opacity-0 backdrop-blur transition-opacity hover:text-ink focus:opacity-100 group-hover:opacity-100"
+      className="absolute top-3 right-3 rounded-md border border-neutral-200 bg-white/80 p-1.5 text-neutral-400 opacity-0 backdrop-blur transition-opacity hover:text-neutral-700 focus:opacity-100 group-hover:opacity-100 dark:border-neutral-700 dark:bg-neutral-900/80 dark:text-neutral-500 dark:hover:text-neutral-200"
     >
       {copied ? (
-        <svg viewBox="0 0 16 16" className="h-4 w-4 fill-current text-accent" aria-hidden>
+        <svg viewBox="0 0 16 16" className="h-4 w-4 fill-current text-green-600 dark:text-green-500" aria-hidden>
           <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z" />
         </svg>
       ) : (
