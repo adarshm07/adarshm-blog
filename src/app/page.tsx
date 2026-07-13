@@ -43,13 +43,14 @@ export default function Page() {
       </Suspense>
 
       <div>
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-xs font-medium uppercase tracking-widest text-neutral-400 dark:text-neutral-500">
-            Writing
+        <div className="mb-5 flex items-center justify-between">
+          <h2 className="flex items-center gap-2.5 text-lg font-semibold tracking-tight text-ink">
+            <span className="h-5 w-1 rounded-full bg-gradient-to-b from-accent to-accent-2" />
+            Latest writing
           </h2>
           <Link
             href="/blog"
-            className="text-xs text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
+            className="text-sm text-muted hover:text-accent transition-colors"
           >
             View all →
           </Link>
@@ -62,11 +63,12 @@ export default function Page() {
 
 function ProfileSkeleton() {
   return (
-    <div className="flex items-center gap-5 animate-pulse">
-      <div className="h-16 w-16 rounded-full bg-neutral-100 dark:bg-neutral-800 shrink-0" />
-      <div className="flex-1 space-y-2">
-        <div className="h-6 w-40 rounded bg-neutral-100 dark:bg-neutral-800" />
-        <div className="h-4 w-64 rounded bg-neutral-100 dark:bg-neutral-800" />
+    <div className="animate-pulse space-y-6">
+      <div className="h-6 w-56 rounded-full bg-line/50" />
+      <div className="h-14 w-72 rounded bg-line/50" />
+      <div className="space-y-2">
+        <div className="h-5 w-full max-w-xl rounded bg-line/50" />
+        <div className="h-5 w-80 rounded bg-line/50" />
       </div>
     </div>
   )

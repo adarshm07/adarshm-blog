@@ -46,17 +46,42 @@ export default function Page() {
     }),
   }))
 
+  const totalArticles = phases.reduce(
+    (n, phase) => n + phase.items.filter((item) => item.slug).length,
+    0
+  )
+  const totalMinutes = phases.reduce(
+    (n, phase) =>
+      n + phase.items.reduce((m, item) => m + (item.readingTime ?? 0), 0),
+    0
+  )
+
   return (
     <section>
-      <h1 className="mb-3 text-2xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-50">
+      <h1 className="mb-3 text-3xl sm:text-4xl font-bold tracking-tight text-ink">
         Learn DSA
+        <span className="text-accent">.</span>
       </h1>
-      <p className="mb-8 text-sm text-neutral-500 dark:text-neutral-400">
+      <p className="mb-5 leading-relaxed text-ink/70">
         A structured path through data structures and algorithms. The articles
         build on each other, so follow the order if you&apos;re starting fresh —
         or jump to whatever you want to brush up on. Most posts include
         interactive visualizations you can step through.
       </p>
+      <div className="mb-8 flex flex-wrap gap-2">
+        {[
+          `${totalArticles} articles`,
+          `${phases.length} phases`,
+          `~${totalMinutes} min of reading`,
+        ].map((stat) => (
+          <span
+            key={stat}
+            className="rounded-full border border-line bg-surface px-3 py-1 text-xs font-medium text-ink/80"
+          >
+            {stat}
+          </span>
+        ))}
+      </div>
       <DsaPath phases={phases} />
     </section>
   )
