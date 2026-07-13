@@ -1,0 +1,209 @@
+---
+title: "Union-Find: Connectivity in (Almost) Constant Time"
+publishedAt: "2026-07-13"
+summary: "The disjoint set union structure answers 'are these two connected?' in near-O(1) — with two optimizations you can write in twenty lines. Includes Kruskal's MST and cycle detection."
+tags: "DSA"
+---
+
+Some problems are secretly about **groups**: friend circles in a social
+network, connected islands in a grid, machines in the same cluster,
+variables that must be equal. You need two operations — *merge two groups*
+and *ask whether two items share a group* — and you need them fast, over
+thousands of interleaved calls. That's exactly what **Union-Find** (also
+called Disjoint Set Union, or DSU) does, in effectively constant time per
+operation, in about twenty lines of code.
+
+## The idea: forests of pointers
+
+Every element starts as its own group. Each group is a tree where every
+node points toward a **root**, and the root is the group's representative:
+
+- `find(x)` — follow parent pointers up from `x` to its root. Two elements
+  are in the same group exactly when they have the same root.
+- `union(x, y)` — find both roots and point one at the other, merging the
+  trees.
+
+```javascript
+class UnionFind {
+  constructor(n) {
+    this.parent = Array.from({ length: n }, (_, i) => i); // self = root
+  }
+
+  find(x) {
+    while (this.parent[x] !== x) x = this.parent[x];
+    return x;
+  }
+
+  union(x, y) {
+    this.parent[this.find(x)] = this.find(y);
+  }
+
+  connected(x, y) {
+    return this.find(x) === this.find(y);
+  }
+}
+```
+
+This works, but it has a flaw: nothing stops the trees from degenerating
+into long chains, making `find` O(n). Two small changes fix that — and
+they're what make Union-Find famous.
+
+## Optimization 1: union by rank
+
+When merging, always hang the **shorter** tree under the **taller** one.
+The result never gets taller than the taller input (unless they're equal),
+so tree height grows logarithmically at worst.
+
+## Optimization 2: path compression
+
+Every time `find` walks up to a root, **repoint everything it passed
+directly at the root**. The tree flattens itself as a side effect of being
+queried — later finds on the same branch become one hop.
+
+Here's the full structure with both:
+
+```javascript
+class UnionFind {
+  constructor(n) {
+    this.parent = Array.from({ length: n }, (_, i) => i);
+    this.rank = new Array(n).fill(0);
+    this.groups = n; // handy: how many groups remain
+  }
+
+  find(x) {
+    if (this.parent[x] !== x) {
+      this.parent[x] = this.find(this.parent[x]); // path compression
+    }
+    return this.parent[x];
+  }
+
+  union(x, y) {
+    let rx = this.find(x), ry = this.find(y);
+    if (rx === ry) return false;               // already connected
+
+    if (this.rank[rx] < this.rank[ry]) [rx, ry] = [ry, rx];
+    this.parent[ry] = rx;                      // union by rank
+    if (this.rank[rx] === this.rank[ry]) this.rank[rx]++;
+
+    this.groups--;
+    return true;                               // a real merge happened
+  }
+}
+```
+
+With both optimizations, a sequence of `m` operations costs
+O(m · α(n)), where α is the **inverse Ackermann function** — a function
+that grows so slowly it's ≤ 4 for any input that fits in the physical
+universe. In practice: constant time.
+
+Two small API choices above pay off constantly in real problems:
+`union` returning whether a merge *actually happened*, and a live `groups`
+counter. You'll see both earn their keep below.
+
+## Application 1: counting islands / components
+
+"How many connected components?" becomes: start with `n` groups, union
+every edge, read off `groups`.
+
+```javascript
+function countComponents(n, edges) {
+  const uf = new UnionFind(n);
+  for (const [a, b] of edges) uf.union(a, b);
+  return uf.groups;
+}
+```
+
+For grid problems ("number of islands"), map cell `(r, c)` to index
+`r * cols + c` and union each land cell with its land neighbors.
+
+## Application 2: cycle detection in an undirected graph
+
+If `union` returns `false`, the two endpoints were *already* connected —
+meaning this edge closes a loop:
+
+```javascript
+function hasCycle(n, edges) {
+  const uf = new UnionFind(n);
+  return edges.some(([a, b]) => !uf.union(a, b));
+}
+```
+
+This is also how you'd detect the "redundant connection" in a network, or
+validate that a graph is a tree (n − 1 edges *and* no cycle).
+
+## Application 3: Kruskal's minimum spanning tree
+
+Kruskal's algorithm builds the cheapest network connecting all nodes: sort
+edges by weight, then greedily take each edge **unless it would create a
+cycle** — which is exactly the check Union-Find gives you for free:
+
+```javascript
+function kruskal(n, edges) {          // edges: [weight, a, b]
+  edges.sort((e1, e2) => e1[0] - e2[0]);
+  const uf = new UnionFind(n);
+  let total = 0, used = 0;
+
+  for (const [w, a, b] of edges) {
+    if (uf.union(a, b)) {             // no cycle → keep this edge
+      total += w;
+      if (++used === n - 1) break;    // tree is complete
+    }
+  }
+  return used === n - 1 ? total : -1; // -1 if graph was disconnected
+}
+```
+
+Sorting dominates at O(E log E); the Union-Find part is effectively free.
+
+## Union-Find vs BFS/DFS for connectivity
+
+BFS or DFS can also find connected components — so when do you reach for
+Union-Find instead?
+
+<table>
+  <thead>
+    <tr>
+      <th>Situation</th>
+      <th>Better tool</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Static graph, one-time component labeling</td>
+      <td>BFS / DFS</td>
+    </tr>
+    <tr>
+      <td>Edges arrive over time, queries interleaved</td>
+      <td>Union-Find</td>
+    </tr>
+    <tr>
+      <td>Need the actual paths between nodes</td>
+      <td>BFS / DFS</td>
+    </tr>
+    <tr>
+      <td>Only need "same group?" yes/no</td>
+      <td>Union-Find</td>
+    </tr>
+    <tr>
+      <td>Kruskal's MST, offline dynamic connectivity</td>
+      <td>Union-Find</td>
+    </tr>
+  </tbody>
+</table>
+
+The dividing line is **incrementality**. DFS answers connectivity for a
+graph you already have; Union-Find answers it *while the graph is still
+being built*, which no traversal can do without re-running.
+
+One honest limitation: Union-Find only merges. It cannot efficiently
+**un-union** (delete an edge) — supporting deletions needs much heavier
+machinery, so if edges disappear, look elsewhere.
+
+## Wrap-up
+
+Union-Find tracks disjoint groups with two operations, and two
+optimizations — union by rank and path compression — make both effectively
+O(1). Return a boolean from `union` and keep a group counter, and you get
+cycle detection and component counting for free; add sorted edges and you
+get Kruskal's MST. For "are these connected?" under a stream of merges,
+nothing else comes close.

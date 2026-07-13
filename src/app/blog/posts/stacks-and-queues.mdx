@@ -1,0 +1,204 @@
+---
+title: "Stacks and Queues: Two Rules That Run Your Whole Program"
+publishedAt: "2026-07-13"
+summary: "LIFO and FIFO look trivial until you notice they power your call stack, undo history, browser navigation, and every BFS. Plus the classic interview patterns for each."
+tags: "DSA"
+---
+
+A stack lets you touch only the most recent item; a queue lets you touch
+only the oldest. That's it — two access rules. But those two rules are the
+skeleton of your call stack, your undo history, your event loop, and half
+the graph algorithms you'll ever write. They're also the source of some of
+the most elegant interview problems, because *restricting* access turns
+out to organize computation beautifully.
+
+## Stacks: last in, first out
+
+A **stack** supports `push` (add to top), `pop` (remove from top), and
+`peek` (look at top). In JavaScript, an array is already a perfectly good
+stack — `push` and `pop` both run in amortized O(1) because they only
+touch the end:
+
+```javascript
+const stack = [];
+stack.push("a");
+stack.push("b");
+stack.pop();  // "b" — the most recent thing in is the first thing out
+stack.at(-1); // "a" — peek without removing
+```
+
+You already rely on stacks constantly:
+
+- **The call stack** — every function call pushes a frame; every return
+  pops one. Recursion *is* a stack.
+- **Undo/redo** — each edit pushes onto an undo stack; undo pops it and
+  pushes onto a redo stack.
+- **Browser history** — back button pops the history stack.
+- **Parsing** — matching brackets, nested tags, expression evaluation.
+
+### The signature problem: matched brackets
+
+Is `"{[()]}"` valid? Nesting means the *most recently opened* bracket must
+close *first* — the definition of LIFO:
+
+```javascript
+function isValid(s) {
+  const pairs = { ")": "(", "]": "[", "}": "{" };
+  const stack = [];
+
+  for (const ch of s) {
+    if (ch === "(" || ch === "[" || ch === "{") {
+      stack.push(ch);
+    } else if (stack.pop() !== pairs[ch]) {
+      return false;          // wrong closer, or closed with nothing open
+    }
+  }
+  return stack.length === 0; // anything left open is also invalid
+}
+```
+
+Whenever a problem says "most recent unmatched thing" — open brackets, open
+HTML tags, the previous smaller element — a stack is almost certainly the
+answer.
+
+### The next level: monotonic stacks
+
+A **monotonic stack** keeps its contents sorted by popping anything that
+violates the order before pushing. It sounds niche, but it solves a whole
+family of "next greater element" problems in O(n):
+
+```javascript
+// For each day, how many days until a warmer temperature?
+function dailyTemperatures(temps) {
+  const result = new Array(temps.length).fill(0);
+  const stack = []; // indices of days still waiting for a warmer day
+
+  for (let i = 0; i < temps.length; i++) {
+    while (stack.length && temps[i] > temps[stack.at(-1)]) {
+      const day = stack.pop();     // today answers this waiting day
+      result[day] = i - day;
+    }
+    stack.push(i);
+  }
+  return result;
+}
+```
+
+The magic is the amortized analysis: each index is pushed once and popped
+at most once, so despite the nested `while`, the whole thing is O(n).
+
+## Queues: first in, first out
+
+A **queue** supports `enqueue` (add to back) and `dequeue` (remove from
+front). Fairness in data-structure form: things are handled in arrival
+order. Queues run print jobs, task schedulers, message brokers, rate
+limiters — and most importantly for interviews, **breadth-first search**,
+where the queue's FIFO order is exactly what guarantees you explore nearer
+nodes before farther ones.
+
+One JavaScript trap: `array.shift()` is **O(n)** because it re-indexes
+every remaining element. Fine for small inputs, painful for big BFS runs.
+The fix is a queue with a moving head pointer:
+
+```javascript
+class Queue {
+  #items = [];
+  #head = 0;
+
+  enqueue(x) { this.#items.push(x); }
+
+  dequeue() {
+    const x = this.#items[this.#head++];
+    // occasionally compact so memory doesn't grow forever
+    if (this.#head > 1000 && this.#head * 2 > this.#items.length) {
+      this.#items = this.#items.slice(this.#head);
+      this.#head = 0;
+    }
+    return x;
+  }
+
+  get size() { return this.#items.length - this.#head; }
+}
+```
+
+Now both operations are O(1) amortized, and BFS on a million-node graph
+stops being mysteriously slow.
+
+### Deques: both ends at once
+
+A **deque** (double-ended queue) allows push/pop at both ends. Its
+flagship use is the *sliding window maximum* — maintaining the max of a
+moving window in O(n) total — using the same "pop everything smaller"
+discipline as a monotonic stack, just applied at both ends.
+
+## The classic twist: build one from the other
+
+A favorite interview question: implement a queue using two stacks. The
+insight is that reversing a stack's order twice gets you back to arrival
+order:
+
+```javascript
+class QueueFromStacks {
+  #in = [];   // arrivals pile up here
+  #out = [];  // reversed arrivals leave from here
+
+  enqueue(x) { this.#in.push(x); }
+
+  dequeue() {
+    if (this.#out.length === 0) {
+      while (this.#in.length) this.#out.push(this.#in.pop());
+    }
+    return this.#out.pop();
+  }
+}
+```
+
+Each element moves at most twice (into `#in`, over to `#out`), so
+`dequeue` is amortized O(1). The lesson generalizes: LIFO and FIFO aren't
+different structures so much as different *orderings*, and you can convert
+between them by paying one reversal.
+
+## Which one does your problem want?
+
+<table>
+  <thead>
+    <tr>
+      <th>Signal in the problem</th>
+      <th>Structure</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Most recent / innermost / nesting</td>
+      <td>Stack</td>
+    </tr>
+    <tr>
+      <td>Next greater or smaller element</td>
+      <td>Monotonic stack</td>
+    </tr>
+    <tr>
+      <td>Process in arrival order / level by level</td>
+      <td>Queue</td>
+    </tr>
+    <tr>
+      <td>Shortest path, fewest steps (unweighted)</td>
+      <td>Queue (BFS)</td>
+    </tr>
+    <tr>
+      <td>Max or min of a sliding window</td>
+      <td>Deque</td>
+    </tr>
+    <tr>
+      <td>Undo, backtrack, evaluate nested things</td>
+      <td>Stack</td>
+    </tr>
+  </tbody>
+</table>
+
+## Wrap-up
+
+Stacks and queues are access rules, not exotic machinery: LIFO organizes
+anything nested or reversible, FIFO organizes anything fair or
+level-ordered. Know the O(n) `shift()` trap in JavaScript, recognize the
+monotonic-stack pattern when a problem asks about "next greater", and
+remember that the two structures are one reversal apart.

@@ -1,0 +1,223 @@
+---
+title: "ESM vs CommonJS: What Actually Differs (and Why It Still Bites)"
+publishedAt: "2026-07-13"
+summary: "require vs import isn't just syntax — it's dynamic vs static, copies vs live bindings, sync vs async. A field guide to the module systems and the interop errors between them."
+tags: "JavaScript"
+---
+
+JavaScript shipped for twenty years without a module system, so the
+community built one (**CommonJS**, for Node) and the language later
+standardized another (**ES Modules**). Today both are everywhere, half the
+npm ecosystem straddles the two, and errors like
+`ERR_REQUIRE_ESM` or `"exports is not defined"` come from their genuinely
+different semantics — not just different syntax. Here's the actual
+difference, and how to survive the boundary.
+
+## The surface difference
+
+```javascript
+// CommonJS (CJS) — Node's original system
+const { readFile } = require("fs");
+module.exports = { parse };
+
+// ES Modules (ESM) — the standard
+import { readFile } from "node:fs";
+export function parse() {}
+```
+
+But the syntax is the least of it. Three semantic differences drive
+everything else.
+
+### 1. Dynamic vs static
+
+`require()` is **just a function call**. It can appear anywhere — inside
+an `if`, built from a string, called conditionally:
+
+```javascript
+if (process.env.MOCK) {
+  db = require("./mock-db");   // legal in CJS
+}
+```
+
+`import` declarations are **static** — hoisted, top-level only, with
+string-literal specifiers. The entire dependency graph is known *before
+any code runs*. That's the trade: you lose require-anywhere flexibility
+and gain tooling superpowers — tree-shaking (dead exports dropped at
+bundle time), reliable auto-imports and refactors, and lint-time detection
+of missing exports. ESM still has an escape hatch for genuine dynamism:
+`await import("./mock-db.js")`, which returns a promise of the module.
+
+### 2. Copies vs live bindings
+
+CJS exports are a **snapshot**: `module.exports` is an object, and
+requiring it hands you the values as of that moment. ESM exports are
+**live bindings** — a view of the exporting module's variable itself:
+
+```javascript
+// counter.mjs
+export let count = 0;
+export const increment = () => { count++; };
+
+// main.mjs
+import { count, increment } from "./counter.mjs";
+increment();
+console.log(count); // 1 — the binding is live
+
+// The CJS equivalent logs 0: `count` was copied at require time.
+```
+
+Live bindings are also why ESM handles **circular imports** more
+gracefully: each module sees the other's bindings, which fill in as
+execution proceeds, instead of receiving a frozen half-finished snapshot.
+(Cycles are still a design smell in both systems — ESM just fails less
+weirdly.)
+
+### 3. Synchronous vs asynchronous
+
+`require()` loads, executes, and returns a module **synchronously** —
+reasonable when everything is a local file read. ESM's loading pipeline is
+**asynchronous** by design (it had to work over the network in browsers),
+which is what makes **top-level `await`** possible in ESM — and why it can
+never exist in CJS: a synchronous `require()` cannot wait for a promise.
+
+This one difference is the root of the ecosystem's interop pain, as we'll
+see.
+
+## The comparison at a glance
+
+<table>
+  <thead>
+    <tr>
+      <th></th>
+      <th>CommonJS</th>
+      <th>ES Modules</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Syntax</td>
+      <td>require / module.exports</td>
+      <td>import / export</td>
+    </tr>
+    <tr>
+      <td>Resolution</td>
+      <td>runtime, dynamic</td>
+      <td>parse time, static</td>
+    </tr>
+    <tr>
+      <td>Exports are</td>
+      <td>copied values</td>
+      <td>live bindings</td>
+    </tr>
+    <tr>
+      <td>Loading</td>
+      <td>synchronous</td>
+      <td>asynchronous</td>
+    </tr>
+    <tr>
+      <td>Tree-shaking</td>
+      <td>unreliable</td>
+      <td>designed for it</td>
+    </tr>
+    <tr>
+      <td>Top-level await</td>
+      <td>impossible</td>
+      <td>supported</td>
+    </tr>
+    <tr>
+      <td>Browser support</td>
+      <td>no (needs bundler)</td>
+      <td>native</td>
+    </tr>
+    <tr>
+      <td>File defaults (Node)</td>
+      <td>.cjs, or .js by default</td>
+      <td>.mjs, or .js with "type": "module"</td>
+    </tr>
+  </tbody>
+</table>
+
+## How Node decides which system a file uses
+
+For a `.js` file, Node checks the **nearest `package.json`**: with
+`"type": "module"` it's ESM, otherwise CJS. The explicit extensions
+`.mjs` / `.cjs` override that either way. Two adjacent files in the same
+repo can be in different systems — which is how a copy-pasted snippet
+using `require` explodes inside your `"type": "module"` project with
+`require is not defined`.
+
+ESM in Node also drops some CJS conveniences: there's no `__dirname`,
+`__filename`, or `require` — the replacements are `import.meta.url` and
+`import.meta.dirname` (Node 20+).
+
+## Interop: the rules worth memorizing
+
+The two systems can load each other, but asymmetrically — and the
+asymmetry follows directly from sync vs async:
+
+**ESM importing CJS: works.** The CJS module's `module.exports` becomes
+the default export. Named destructuring often works too (Node
+static-analyzes the CJS source), but when it doesn't, fall back to:
+
+```javascript
+import pkg from "some-cjs-package";
+const { thing } = pkg;
+```
+
+**CJS requiring ESM: historically forbidden** — sync `require` can't wait
+for an async module, so you got `ERR_REQUIRE_ESM`, the single most
+googled module error of the decade. The workaround was dynamic import,
+which works in both systems:
+
+```javascript
+// inside a CJS file
+const { parse } = await import("some-esm-package");
+```
+
+Recent Node versions (22+) finally allow `require()` of ESM *when the
+module graph has no top-level await* — which softens the wall but doesn't
+remove it. If you're supporting older Node, keep using dynamic `import()`
+at the boundary.
+
+**For library authors**, the `exports` map in `package.json` declares both
+faces explicitly:
+
+```json
+{
+  "type": "module",
+  "exports": {
+    "import": "./dist/index.js",
+    "require": "./dist/index.cjs"
+  }
+}
+```
+
+Ship both until your consumers are ESM-only; getting this map wrong is
+where "works in Vite, breaks in Jest" bug reports are born.
+
+## What should you write today?
+
+**New code: ESM.** It's the standard, browsers run it natively, every
+runtime (Node, Deno, Bun) treats it as the default direction, tooling
+optimizes for it, and top-level await is genuinely useful. Set
+`"type": "module"` and don't look back.
+
+**Existing CJS codebases: don't panic-migrate.** CJS isn't deprecated and
+runs fine. Migrate when something forces it — a dependency that goes
+ESM-only, wanting top-level await — and do it package-by-package with the
+`exports` map bridging the boundary.
+
+And when a module error hits, decode it by system: `require is not
+defined` → you're in ESM running CJS code. `Cannot use import statement
+outside a module` → the reverse; add `"type": "module"` or rename to
+`.mjs`. `ERR_REQUIRE_ESM` → CJS trying to require an ESM-only package;
+use dynamic `import()` or upgrade Node.
+
+## Wrap-up
+
+CJS and ESM differ in three load-bearing ways: dynamic vs static
+resolution, copied values vs live bindings, sync vs async loading. Those
+three facts explain tree-shaking, top-level await, circular-import
+behavior, and every interop error message between them. Write ESM for
+anything new, bridge with dynamic `import()` and the `exports` map where
+the worlds meet, and the errors stop being mysterious.
