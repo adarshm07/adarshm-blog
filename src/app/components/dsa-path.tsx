@@ -22,8 +22,7 @@ export type PathPhase = {
 const STORAGE_KEY = 'dsa-path-progress'
 
 const difficultyStyles: Record<Difficulty, string> = {
-  Beginner:
-    'text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/60',
+  Beginner: 'text-accent bg-accent/10',
   Intermediate:
     'text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60',
   Advanced: 'text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/60',
@@ -57,6 +56,12 @@ export function DsaPath({ phases }: { phases: PathPhase[] }) {
     readableSlugs.length === 0
       ? 0
       : Math.round((completedCount / readableSlugs.length) * 100)
+
+  const nextSlug = hydrated
+    ? phases
+        .flatMap((phase) => phase.items)
+        .find((item) => item.slug && !done.has(item.slug))?.slug
+    : undefined
 
   function toggle(slug: string) {
     setDone((prev) => {
@@ -92,18 +97,23 @@ export function DsaPath({ phases }: { phases: PathPhase[] }) {
             </span>{' '}
             of {readableSlugs.length} articles read
           </p>
-          {hydrated && completedCount > 0 && (
-            <button
-              onClick={reset}
-              className="text-xs text-muted hover:text-ink transition-colors"
-            >
-              Reset progress
-            </button>
-          )}
+          <div className="flex items-baseline gap-3">
+            {hydrated && completedCount > 0 && (
+              <button
+                onClick={reset}
+                className="text-xs text-muted hover:text-ink transition-colors"
+              >
+                Reset progress
+              </button>
+            )}
+            <span className="text-sm font-semibold text-accent tabular-nums">
+              {hydrated ? percent : 0}%
+            </span>
+          </div>
         </div>
         <div className="mt-3 h-1.5 rounded-full bg-line overflow-hidden">
           <div
-            className="h-full rounded-full bg-accent transition-all duration-300"
+            className="h-full rounded-full bg-gradient-to-r from-accent to-accent-2 transition-all duration-300"
             style={{ width: `${hydrated ? percent : 0}%` }}
           />
         </div>
@@ -113,15 +123,34 @@ export function DsaPath({ phases }: { phases: PathPhase[] }) {
       </div>
 
       <div className="space-y-12">
-        {phases.map((phase, phaseIndex) => (
+        {phases.map((phase, phaseIndex) => {
+          const phaseSlugs = phase.items
+            .filter((item) => item.slug)
+            .map((item) => item.slug!)
+          const phaseDone = phaseSlugs.filter((slug) => done.has(slug)).length
+          const phaseComplete =
+            hydrated && phaseSlugs.length > 0 && phaseDone === phaseSlugs.length
+          return (
           <section key={phase.title}>
             <div className="mb-4 flex items-baseline gap-3">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-line bg-surface text-xs font-medium text-muted tabular-nums">
+              <span
+                className={[
+                  'flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs font-medium tabular-nums transition-colors',
+                  phaseComplete
+                    ? 'border-accent bg-accent text-white'
+                    : 'border-line bg-surface text-muted',
+                ].join(' ')}
+              >
                 {phaseIndex + 1}
               </span>
               <div>
                 <h2 className="text-lg font-semibold tracking-tight text-ink">
                   {phase.title}
+                  {hydrated && phaseSlugs.length > 0 && (
+                    <span className="ml-2.5 align-middle text-xs font-normal text-muted tabular-nums">
+                      {phaseDone}/{phaseSlugs.length}
+                    </span>
+                  )}
                 </h2>
                 <p className="mt-1 text-sm text-muted">
                   {phase.description}
@@ -188,6 +217,11 @@ export function DsaPath({ phases }: { phases: PathPhase[] }) {
                             >
                               {item.title}
                             </Link>
+                            {item.slug === nextSlug && (
+                              <span className="rounded-full bg-accent px-2 py-0.5 text-[10px] font-medium text-white">
+                                Up next
+                              </span>
+                            )}
                             <span
                               className={[
                                 'rounded px-1.5 py-0.5 text-[10px] font-medium',
@@ -230,7 +264,8 @@ export function DsaPath({ phases }: { phases: PathPhase[] }) {
               })}
             </ol>
           </section>
-        ))}
+          )
+        })}
       </div>
     </div>
   )
