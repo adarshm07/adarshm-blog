@@ -1,0 +1,201 @@
+---
+title: "Big-O Notation: A Practical Guide for Working Developers"
+publishedAt: "2026-07-13"
+summary: "What Big-O actually measures, how to read a function's complexity straight from its shape, and why O(n log n) beats O(n²) long before n gets big."
+tags: "DSA"
+---
+
+Every data structures conversation eventually lands on Big-O, and most
+explanations either drown you in math or hand-wave it entirely. The truth
+sits in the middle: Big-O is a **growth rate** — a way of answering *"if I
+double the input, what happens to the work?"* — and you can usually read it
+straight off the shape of the code.
+
+## What Big-O measures (and what it ignores)
+
+Big-O describes how running time (or memory) **scales with input size**,
+ignoring constant factors and lower-order terms. `3n² + 40n + 7` is just
+O(n²) — because once `n` is large, the `n²` term dwarfs everything else.
+
+That "ignores constants" part is a feature, not sloppiness. Constants
+depend on the machine, the language, and the compiler. Growth rate doesn't.
+An O(n) algorithm on a slow laptop will eventually beat an O(n²) algorithm
+on a supercomputer — the only question is how big `n` has to get.
+
+It also means Big-O is not a stopwatch. For small inputs, an O(n²)
+algorithm with tiny constants can absolutely outrun an O(n log n) one with
+heavy setup — which is exactly why real sort implementations switch to
+insertion sort for small slices.
+
+## The ladder, from best to worst
+
+<table>
+  <thead>
+    <tr>
+      <th>Complexity</th>
+      <th>Name</th>
+      <th>n = 1,000</th>
+      <th>Typical example</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>O(1)</td>
+      <td>Constant</td>
+      <td>1</td>
+      <td>Hash map lookup, array index</td>
+    </tr>
+    <tr>
+      <td>O(log n)</td>
+      <td>Logarithmic</td>
+      <td>~10</td>
+      <td>Binary search</td>
+    </tr>
+    <tr>
+      <td>O(n)</td>
+      <td>Linear</td>
+      <td>1,000</td>
+      <td>Single loop, linear scan</td>
+    </tr>
+    <tr>
+      <td>O(n log n)</td>
+      <td>Linearithmic</td>
+      <td>~10,000</td>
+      <td>Merge sort, heap sort</td>
+    </tr>
+    <tr>
+      <td>O(n²)</td>
+      <td>Quadratic</td>
+      <td>1,000,000</td>
+      <td>Nested loops over same input</td>
+    </tr>
+    <tr>
+      <td>O(2ⁿ)</td>
+      <td>Exponential</td>
+      <td>astronomical</td>
+      <td>Naive recursion on subsets</td>
+    </tr>
+    <tr>
+      <td>O(n!)</td>
+      <td>Factorial</td>
+      <td>don't</td>
+      <td>Brute-force permutations</td>
+    </tr>
+  </tbody>
+</table>
+
+The gap between rows is the whole story. At `n = 1,000`, quadratic does a
+**million** operations where linearithmic does ten thousand. At
+`n = 1,000,000`, quadratic is a trillion — that's the difference between
+milliseconds and hours.
+
+## Reading complexity off the code
+
+You rarely need formal analysis. A few patterns cover almost everything you
+will write or review.
+
+**A loop over the input is O(n):**
+
+```javascript
+function sum(arr) {
+  let total = 0;
+  for (const x of arr) total += x; // n iterations
+  return total;
+}
+```
+
+**A nested loop over the same input is O(n²):**
+
+```javascript
+function hasDuplicate(arr) {
+  for (let i = 0; i < arr.length; i++) {
+    for (let j = i + 1; j < arr.length; j++) {
+      if (arr[i] === arr[j]) return true; // n·(n−1)/2 comparisons worst case
+    }
+  }
+  return false;
+}
+```
+
+**Halving the input each step is O(log n):**
+
+```javascript
+function binarySearch(arr, target) {
+  let lo = 0, hi = arr.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (arr[mid] === target) return mid;
+    arr[mid] < target ? (lo = mid + 1) : (hi = mid - 1); // half remains
+  }
+  return -1;
+}
+```
+
+**Doing O(log n) work n times is O(n log n)** — that's merge sort:
+`log n` levels of splitting, `O(n)` merging per level.
+
+**Sequential steps add, nested steps multiply.** A loop *followed by*
+another loop is O(n + n) = O(n). A loop *inside* another loop is
+O(n · n) = O(n²). This one distinction resolves most "wait, is this
+quadratic?" questions in code review.
+
+## The hidden loops
+
+The complexity bugs that actually ship to production are rarely explicit
+nested `for` loops. They're a method call *inside* a loop that is secretly
+linear itself:
+
+```javascript
+// Looks linear. Is quadratic.
+function findMissing(all, seen) {
+  return all.filter((id) => !seen.includes(id)); // includes() is O(n)!
+}
+
+// Actually linear: build a Set once, O(1) lookups after.
+function findMissingFast(all, seen) {
+  const seenSet = new Set(seen);
+  return all.filter((id) => !seenSet.has(id));
+}
+```
+
+`Array.prototype.includes`, `indexOf`, `find`, and `splice` are all O(n).
+Inside a loop, each one silently multiplies your complexity by `n`. The
+same trap hides in string concatenation in a loop (each `+=` can copy the
+whole string) and in `unshift` (shifts every element). When something is
+"fine in dev, dead in prod", the input grew and a hidden O(n²) woke up —
+this is the first thing to look for.
+
+## Space complexity: the same idea, for memory
+
+Every rule above applies to memory too. A function that builds an output
+array sized to the input is O(n) space; one that uses a few variables is
+O(1); recursion holds one stack frame per level, so a recursive descent
+`n` levels deep is O(n) space even if it allocates nothing.
+
+Time and space often trade against each other. The duplicate-finder above
+went from O(n²) time / O(1) space to O(n) time / O(n) space — we *bought*
+speed with memory. Most classic optimizations (hash maps, memoization,
+prefix sums) are exactly this trade.
+
+## Best, worst, and average case
+
+Big-O usually quotes the **worst case**, but the cases can differ wildly.
+Quick sort is O(n log n) on average but O(n²) on adversarial input. Hash
+map lookup is O(1) on average but O(n) if every key collides. When someone
+says "hash maps are O(1)", they mean *expected* — and for interviews and
+design docs it's worth saying which case you're quoting.
+
+**Amortized** analysis covers the other subtlety: a dynamic array's `push`
+is usually O(1) but occasionally O(n) when it resizes. Averaged over a long
+sequence of pushes, each one costs O(1) — the expensive resizes are rare
+enough that they "amortize" away. That's why we still call `push` constant
+time.
+
+## Wrap-up
+
+Big-O answers one question: *what happens to the work when the input
+grows?* Loops add when sequential and multiply when nested; halving is
+logarithmic; a linear helper inside a loop makes the loop quadratic — and
+that hidden case is where real-world slowness usually lives. You don't
+need the math background; you need the habit of glancing at every loop and
+asking "what's the cost of the thing inside it?"

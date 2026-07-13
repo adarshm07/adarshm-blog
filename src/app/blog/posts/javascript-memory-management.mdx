@@ -1,0 +1,164 @@
+---
+title: "JavaScript Memory Management: How the Garbage Collector Thinks"
+publishedAt: "2026-07-13"
+summary: "Reachability, generational GC, and the four leak patterns that survive garbage collection — timers, detached DOM nodes, growing caches, and forgotten listeners."
+tags: "JavaScript"
+---
+
+JavaScript manages memory for you, which is exactly why memory bugs in
+JavaScript are so sneaky: there's no `free()` to forget, so leaks come
+from a subtler mistake — **keeping a reference you didn't mean to keep**.
+Understanding how the garbage collector decides what lives and what dies
+turns "the tab gets slower over time" from a mystery into a checklist.
+
+## The one rule: reachability
+
+The garbage collector's contract is simple: memory is reclaimed when it is
+**no longer reachable** from the "roots" — the global object, the
+currently-running call stack, and anything they transitively reference.
+
+```javascript
+let user = { name: "Ada" };   // object reachable via `user`
+user = null;                  // nothing references it → collectible
+```
+
+Note what the rule is *not*: it's not reference counting. A group of
+objects that reference each other in a cycle but are unreachable from any
+root still gets collected — modern engines trace from the roots outward
+("mark and sweep"), so cycles are a non-issue:
+
+```javascript
+function makeCycle() {
+  const a = {}, b = {};
+  a.ref = b;
+  b.ref = a;      // cycle!
+}
+makeCycle();      // both are unreachable after return → collected anyway
+```
+
+The flip side is the important part: **reachable memory is never
+collected, no matter how long you've been ignoring it**. Every JavaScript
+"memory leak" is really a liveness bug — something on the path from a root
+to a pile of objects you thought were gone.
+
+## How V8 actually collects: generations
+
+Engines exploit an empirical law — **most objects die young**. Temporary
+objects, intermediate arrays, promise chains: allocated, used, dropped
+within milliseconds. So V8 splits the heap:
+
+- **New space (the nursery)** — small (a few MB), collected constantly
+  with a fast copying collector. Objects that survive a couple of these
+  minor GCs get promoted.
+- **Old space** — large, collected much less often by the full
+  mark-sweep-compact collector, which is the expensive one.
+
+Two practical consequences. First, **short-lived garbage is cheap** —
+don't contort your code to avoid temporary allocations in ordinary paths;
+the nursery is built for them. Second, **churning long-lived objects is
+expensive** — a cache that constantly replaces old entries forces the slow
+collector to work, which is where GC pauses come from. Modern V8 does much
+of its marking concurrently on background threads, but the cost never
+drops to zero.
+
+## The four classic leaks
+
+### 1. Forgotten timers and intervals
+
+```javascript
+function startPolling(el) {
+  setInterval(() => {
+    el.textContent = Date.now(); // closure holds `el` forever
+  }, 1000);
+}
+```
+
+The interval is registered with the runtime — a root — so its callback,
+and everything its closure captures, stays reachable *forever*, even after
+`el` is removed from the page. Every leaked interval also keeps running,
+so this leaks CPU too. Always store the id and `clearInterval` on cleanup
+(in React, that's the `useEffect` cleanup function).
+
+### 2. Detached DOM nodes
+
+```javascript
+const cache = [];
+function remove(panel) {
+  cache.push(panel);       // JS still references the node…
+  panel.remove();          // …so removing it from the DOM frees nothing
+}
+```
+
+A DOM node removed from the document but still referenced from JavaScript
+is "detached" — and it pins its entire subtree. Grab-and-hold references
+to DOM elements (in module-level variables, caches, or long-lived
+closures) are the top source of leaks in SPAs. DevTools' heap snapshot
+literally has a "Detached" filter for hunting these.
+
+### 3. Unbounded caches and maps
+
+```javascript
+const cache = new Map();
+function getUser(id) {
+  if (!cache.has(id)) cache.set(id, fetchUser(id));
+  return cache.get(id);   // grows forever — every user ever seen
+}
+```
+
+A cache without an eviction policy is a leak with good intentions. Bound
+it (LRU with a max size), or — when the keys are objects — use a
+**WeakMap**, which is built precisely for this:
+
+```javascript
+const metadata = new WeakMap();
+metadata.set(domNode, { clicks: 3 });
+// when domNode becomes unreachable, the entry evaporates with it
+```
+
+`WeakMap`/`WeakSet` hold their keys *weakly*: the entry doesn't count as a
+reference, so it can't keep the key alive. That's why they aren't
+iterable — the contents can change between any two lines of code.
+
+### 4. Forgotten event listeners
+
+```javascript
+window.addEventListener("resize", this.onResize); // added on mount…
+// …never removed on unmount → `this` (and its whole tree) leaks
+```
+
+A listener on a long-lived target (`window`, `document`, a shared
+emitter) roots its handler, and the handler roots whatever it closes
+over — often an entire component. Remove listeners on teardown, or pass an
+`AbortSignal` and cancel them all at once:
+
+```javascript
+const ac = new AbortController();
+window.addEventListener("resize", onResize, { signal: ac.signal });
+// cleanup:
+ac.abort(); // removes every listener registered with this signal
+```
+
+## Finding leaks with DevTools
+
+The reliable procedure is **three snapshots**: take a heap snapshot,
+perform the suspected action (open and close the modal, navigate and
+return), take another, repeat, take a third. In the Memory panel, compare
+snapshot 3 against 2 — objects allocated *between* them that should have
+died are your leak, and the "Retainers" pane shows the exact reference
+path from a root that's keeping each one alive. That path names the
+culprit: an interval, a detached node, a map, a listener — one of the four
+above, nearly every time.
+
+The cruder but faster check: Performance panel, record with the Memory
+box ticked, do the action ten times, and look at the heap graph. A
+sawtooth that returns to baseline is healthy churn; a staircase that never
+comes back down is a leak.
+
+## Wrap-up
+
+The collector frees what's unreachable and faithfully keeps everything
+else — so leaks are always a reference you forgot about. Cycles are fine;
+roots are what matter. Watch the four repeat offenders (timers, detached
+DOM nodes, unbounded caches, listeners), reach for WeakMap when you're
+annotating objects you don't own, and let the three-snapshot technique
+turn "the tab feels slow" into a named line of code.

@@ -1,0 +1,196 @@
+---
+title: "Topological Sort: Putting Dependencies in Order"
+publishedAt: "2026-07-13"
+summary: "Build systems, package managers, and course schedulers all answer the same question: what order satisfies every dependency? Kahn's algorithm answers it — and detects impossible cycles."
+tags: "DSA"
+---
+
+Your bundler deciding which module to compile first, `npm` resolving
+install order, a spreadsheet recalculating cells, a course planner checking
+prerequisites — all of these are the same problem: given tasks where some
+must happen before others, **find an order that respects every
+dependency**. That's topological sort, and the standard solution (Kahn's
+algorithm) is a BFS variant you can write in fifteen lines.
+
+## The setup: DAGs
+
+Model the tasks as a **directed graph**: an edge `A → B` means "A must
+come before B". A topological order is any listing of the nodes where
+every edge points forward.
+
+Two facts follow immediately:
+
+1. **A cycle makes it impossible.** If A needs B and B needs A, no valid
+   order exists. So topological sort only works on **directed acyclic
+   graphs (DAGs)** — and, usefully, the algorithm *detects* cycles as a
+   side effect.
+2. **The order usually isn't unique.** Independent tasks can be sequenced
+   either way. Any order that respects the edges is a valid answer.
+
+## Kahn's algorithm: peel off the free nodes
+
+The idea is intuitive: a task with **no unmet dependencies** can run right
+now. Run it, cross it off, and that may free up other tasks. Repeat.
+
+"Unmet dependencies" is a node's **in-degree** — the number of incoming
+edges. The algorithm:
+
+1. Compute the in-degree of every node.
+2. Put every node with in-degree 0 into a queue.
+3. Dequeue a node, append it to the order, and decrement the in-degree of
+   each of its neighbors. Any neighbor that hits 0 joins the queue.
+4. Repeat until the queue is empty.
+
+```javascript
+function topologicalSort(numNodes, edges) {
+  const graph = Array.from({ length: numNodes }, () => []);
+  const inDegree = new Array(numNodes).fill(0);
+
+  for (const [before, after] of edges) {
+    graph[before].push(after);
+    inDegree[after]++;
+  }
+
+  const queue = [];
+  for (let i = 0; i < numNodes; i++) {
+    if (inDegree[i] === 0) queue.push(i);   // no prerequisites
+  }
+
+  const order = [];
+  while (queue.length) {
+    const node = queue.shift();
+    order.push(node);
+    for (const next of graph[node]) {
+      if (--inDegree[next] === 0) queue.push(next);
+    }
+  }
+
+  return order.length === numNodes
+    ? order
+    : null; // some nodes never freed up → cycle
+}
+```
+
+That last line is the cycle detection: nodes trapped in a cycle can never
+reach in-degree 0, so they never enter the queue, and the output comes up
+short. One comparison gives you "is this dependency graph even valid?"
+
+Complexity is **O(V + E)** — each node enters the queue once, each edge is
+decremented once.
+
+## Worked example: course prerequisites
+
+The classic interview framing ("Course Schedule") maps directly:
+
+```javascript
+// [0,1] means: to take course 0 you must first take course 1
+const prereqs = [[1, 0], [2, 0], [3, 1], [3, 2]];
+// edges: 0→1, 0→2, 1→3, 2→3  (0 unlocks 1 and 2, which unlock 3)
+
+topologicalSort(4, prereqs.map(([course, pre]) => [pre, course]));
+// → [0, 1, 2, 3] (or [0, 2, 1, 3] — both valid)
+```
+
+"Can you finish all courses?" is just "is the result non-null?". Watch the
+edge direction, though — prerequisite pairs are usually given as
+`[course, prerequisite]`, so the edge runs *from* the prerequisite *to*
+the course. Flipping this is the most common wrong answer.
+
+## The DFS alternative
+
+There's a second classic implementation: run DFS, and add each node to the
+output **after** exploring all of its descendants — post-order — then
+reverse. A node finishes only after everything it points to has finished,
+so the reversed finish order respects every edge.
+
+```javascript
+function topoSortDFS(numNodes, edges) {
+  const graph = Array.from({ length: numNodes }, () => []);
+  for (const [a, b] of edges) graph[a].push(b);
+
+  const state = new Array(numNodes).fill(0); // 0=new 1=visiting 2=done
+  const order = [];
+  let hasCycle = false;
+
+  function dfs(node) {
+    if (state[node] === 1) { hasCycle = true; return; } // back edge!
+    if (state[node] === 2) return;
+
+    state[node] = 1;                 // on the current path
+    for (const next of graph[node]) dfs(next);
+    state[node] = 2;                 // fully explored
+    order.push(node);
+  }
+
+  for (let i = 0; i < numNodes; i++) dfs(i);
+  return hasCycle ? null : order.reverse();
+}
+```
+
+The three-color `state` is doing the cycle detection: hitting a node
+marked "visiting" means you've looped back into your own path. A plain
+`visited` boolean is not enough here — that's the bug that makes DFS-based
+toposort silently accept cyclic graphs.
+
+**Which to use?** They're both O(V + E). Kahn's is iterative (no stack
+overflow risk), makes cycle detection trivial, and — a detail schedulers
+care about — processes nodes in "waves" of currently-available work, which
+is exactly what you want for *parallel* execution: everything in the queue
+at the same time can run concurrently. The DFS version is a bit shorter
+and comes up when you're already doing DFS anyway.
+
+## Where you'll meet it in real systems
+
+<table>
+  <thead>
+    <tr>
+      <th>System</th>
+      <th>Nodes</th>
+      <th>Edges</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Build tools (make, Turborepo, Bazel)</td>
+      <td>Build targets</td>
+      <td>declared dependencies</td>
+    </tr>
+    <tr>
+      <td>Package managers</td>
+      <td>Packages</td>
+      <td>depends-on relations</td>
+    </tr>
+    <tr>
+      <td>Spreadsheets</td>
+      <td>Cells</td>
+      <td>formula references</td>
+    </tr>
+    <tr>
+      <td>Database migrations</td>
+      <td>Migration files</td>
+      <td>run-after constraints</td>
+    </tr>
+    <tr>
+      <td>CI pipelines</td>
+      <td>Jobs</td>
+      <td>needs / depends_on</td>
+    </tr>
+    <tr>
+      <td>Module bundlers</td>
+      <td>Modules</td>
+      <td>import statements</td>
+    </tr>
+  </tbody>
+</table>
+
+In every one of these, "topological sort returned null" surfaces to you as
+a familiar error: *circular dependency detected*. Now you know exactly
+what check produced it.
+
+## Wrap-up
+
+Topological sort turns "what order satisfies the dependencies?" into a
+mechanical procedure: track in-degrees, repeatedly peel off nodes with
+none, and if anything is left over, you've found a circular dependency.
+It's O(V + E), it parallelizes naturally by processing in waves, and it's
+quietly running inside every build tool and package manager you use.

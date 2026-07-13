@@ -1,0 +1,151 @@
+---
+title: "Event Delegation: One Listener to Rule the List"
+publishedAt: "2026-07-13"
+summary: "How DOM events really travel — capture, target, bubble — and how delegation exploits bubbling to handle a thousand rows with a single listener."
+tags: "JavaScript"
+---
+
+Click a button inside a card inside a list inside `document.body` — whose
+listeners fire, and in what order? The answer (**event propagation**) is
+one of the oldest pieces of browser machinery, and mastering it unlocks
+**event delegation**: the pattern where one listener on a parent handles
+events for any number of children, including children that don't exist
+yet. Frameworks lean on it; so should your vanilla-DOM code.
+
+## How an event actually travels
+
+When you click that button, the browser doesn't just "fire the click".
+The event makes a round trip through the tree in three phases:
+
+1. **Capture phase** — from `document` *down* through every ancestor to
+   the target: `document → body → ul → li → button`.
+2. **Target phase** — listeners on the clicked element itself.
+3. **Bubble phase** — back *up* through the same ancestors in reverse:
+   `button → li → ul → body → document`.
+
+`addEventListener` attaches to the bubble phase by default; pass
+`{ capture: true }` to hook the way down instead. Nearly all everyday code
+uses bubbling — capture is for special jobs like closing dropdowns on any
+outside click before other handlers can react, or centralized
+analytics/logging that must see events even if an inner handler stops
+them.
+
+Two properties on every event tell you where you are in this journey:
+
+- **`event.target`** — the element the event *originated* on (the button).
+- **`event.currentTarget`** — the element whose listener is *currently
+  running* (whatever you attached to).
+
+Confusing these two is the classic propagation bug. `target` is where it
+happened; `currentTarget` is where you're listening.
+
+Not every event bubbles, one nuance worth knowing: `focus`, `blur`, and
+`mouseenter`/`mouseleave` don't. Their bubbling twins are `focusin`,
+`focusout`, and `mouseover`/`mouseout` — reach for those when delegating.
+
+## The problem delegation solves
+
+The naive way to make a list interactive:
+
+```javascript
+document.querySelectorAll("#todo-list li").forEach((li) => {
+  li.addEventListener("click", () => toggle(li));
+});
+```
+
+Three problems. It creates N listeners (memory, setup cost on huge lists).
+It doesn't cover **future** items — anything added after this runs is
+inert, the "why doesn't my new row respond?" bug. And every re-render
+means tearing down and re-wiring listeners.
+
+## Delegation: listen once, at the parent
+
+Since clicks bubble up anyway, put one listener on the container and ask
+*what was clicked*:
+
+```javascript
+document.querySelector("#todo-list").addEventListener("click", (e) => {
+  const li = e.target.closest("li");
+  if (!li) return;                      // click on padding/gap — ignore
+  toggle(li);
+});
+```
+
+One listener, forever. Items added tomorrow are covered automatically,
+because the listener never cared about the items — only about clicks
+passing through the parent.
+
+The load-bearing line is `e.target.closest("li")`. A raw
+`e.target === li` check breaks the moment the `<li>` contains a `<span>`
+or `<svg>` — the target is the *innermost* element clicked. `closest()`
+walks up from the target to find the row you actually care about, and
+returns `null` if the click landed outside any row. Target + `closest()`
+is the entire delegation pattern.
+
+Multiple actions per row? Data attributes turn the handler into a
+dispatcher:
+
+```html
+<li data-id="42">
+  Buy milk
+  <button data-action="edit">✎</button>
+  <button data-action="delete">✕</button>
+</li>
+```
+
+```javascript
+list.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  const id = btn.closest("li").dataset.id;
+
+  if (btn.dataset.action === "delete") removeTodo(id);
+  if (btn.dataset.action === "edit") editTodo(id);
+});
+```
+
+This scales to a table with ten thousand rows at zero marginal cost —
+which is precisely why React and friends internally attach a handful of
+listeners at the root and route events themselves rather than wiring every
+`onClick` to its own DOM listener.
+
+## Stopping the journey (and why you usually shouldn't)
+
+- **`e.stopPropagation()`** — the event goes no further up the tree.
+- **`e.stopImmediatePropagation()`** — also skips remaining listeners on
+  the *same* element.
+- **`e.preventDefault()`** — unrelated to propagation! It cancels the
+  browser's *default action* (following a link, submitting a form); the
+  event keeps bubbling normally.
+
+Treat `stopPropagation()` as a last resort. Every delegated listener,
+every "click outside to close" handler, and every analytics hook above you
+depends on events completing their journey — a stray `stopPropagation()`
+deep in a widget is how "the modal won't close" bugs are made. Prefer
+checking `e.target` at the listener and ignoring events you don't own.
+
+## The options that matter
+
+```javascript
+el.addEventListener("scroll", onScroll, {
+  passive: true,  // promise not to preventDefault → browser can scroll immediately
+  once: true,     // auto-remove after first call
+  signal: ac.signal, // bulk-remove via AbortController
+});
+```
+
+`passive: true` matters for `scroll`/`touchmove`: without the promise, the
+browser must *wait* for your handler before scrolling, causing jank.
+`signal` is the modern cleanup story — one `ac.abort()` detaches every
+listener you registered with that signal, which pairs beautifully with
+component unmount.
+
+## Wrap-up
+
+Events travel down (capture), hit the target, and bubble back up — and
+`target` vs `currentTarget` tells you where you are. Delegation exploits
+the bubble: one parent listener plus `e.target.closest(...)` handles
+unlimited, even not-yet-created children. Use data attributes to dispatch
+actions, be stingy with `stopPropagation()`, and remember the non-bubbling
+events (`focus` → `focusin`) when a delegated listener mysteriously never
+fires.

@@ -1,70 +1,271 @@
 ---
 title: "How to Create Your First Micro-Frontend Using NextJS"
 publishedAt: "2024-09-22"
-summary: "Learn how to build your first micro-frontend architecture using NextJS, exploring the benefits of modular development and strategies for seamless integration in modern web applications."
+summary: "Build a micro-frontend architecture with Next.js multi-zones: rewrites, assetPrefix, cross-zone navigation, shared auth, deployment, and the pitfalls nobody mentions."
 tags: "System Design"
 ---
 
-This tutorial focuses on creating a micro-frontend architecture using NextJS and its built-in features. If you're looking to implement micro-frontends with different technologies, this post may not be directly applicable, but it can still provide valuable insights and ideas.
+This tutorial focuses on creating a micro-frontend architecture using
+NextJS and its built-in features — no extra frameworks, no module
+federation plugins. If you're looking to implement micro-frontends with
+different technologies, this post may not be directly applicable, but the
+concepts (routing boundaries, asset isolation, cross-app navigation)
+transfer everywhere.
 
 ## Introduction to Micro-Frontends
 
-Micro-frontends are an architectural style where independently deliverable frontend applications are composed into a larger, cohesive application. This approach allows for more modular development, easier maintenance, and the ability to use different technologies for different parts of your application.
+Micro-frontends are an architectural style where independently deliverable
+frontend applications are composed into a larger, cohesive application.
+Instead of one team gate-keeping one giant repo, each team owns a slice of
+the product end to end — its own codebase, its own dependencies, its own
+deploy pipeline.
 
-## Choosing the Right NextJS Version
+The benefits are mostly *organizational*, and it's worth being honest
+about that up front:
 
-NextJS offers two routing systems: the traditional Pages Router and the newer App Router. For micro-frontend implementations, you have flexibility in your choice:
+- **Independent deploys** — the admin team ships without waiting for the
+  storefront team's release train.
+- **Isolated blast radius** — a bad deploy of one zone doesn't take down
+  the others.
+- **Incremental migration** — new sections can use a newer Next.js (or a
+  different stack entirely) while legacy sections stay untouched. This is
+  the single most common *good* reason to adopt micro-frontends.
+- **Team autonomy** — separate repos, separate upgrade schedules.
 
-- You can use either the Pages Router or the App Router.
-- It's possible to mix and match, creating combinations like app-app, page-page, or page-app for different parts of your micro-frontend architecture.
+The cost is duplicated infrastructure, harder cross-app consistency, and
+full page loads at the boundaries. We'll deal with all three.
 
-I've personally experimented with all these combinations, and each has its own advantages depending on your specific use case.
+## The approaches, briefly
 
-## Step-by-Step Guide to Creating a Micro-Frontend in NextJS
+There are three mainstream ways to do micro-frontends, and choosing wrong
+is expensive:
 
-Let's walk through an example of creating a micro-frontend for an e-commerce platform. We'll assume we have a main site at `example-shopping.com` and want to add an admin section as a separate micro-frontend at `example-shopping.com/admin`.
+<table>
+  <thead>
+    <tr>
+      <th>Approach</th>
+      <th>How it composes</th>
+      <th>Best for</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Multi-zones (this post)</td>
+      <td>path-based routing via rewrites; each zone is a full Next.js app</td>
+      <td>sections that are separate pages (shop vs admin vs blog)</td>
+    </tr>
+    <tr>
+      <td>Module federation</td>
+      <td>apps share components at runtime from separate bundles</td>
+      <td>mixing UI from several apps on ONE page</td>
+    </tr>
+    <tr>
+      <td>iframes</td>
+      <td>browser-level embedding</td>
+      <td>third-party or strongly sandboxed content</td>
+    </tr>
+  </tbody>
+</table>
 
-### Step 1: Configure the Admin Micro-Frontend
+The rule of thumb: if your micro-frontends are **different pages**, use
+multi-zones — it's dramatically simpler. If you need **different teams'
+components composed on the same page**, you're in module federation
+territory and should budget for the complexity. Never start with iframes
+unless isolation is the actual requirement.
 
-Let's set up the configuration for our micro-frontend architecture:
+Next.js's official answer is multi-zones, so that's what we'll build.
 
-1. Main Site (example-shopping.com)
-2. Admin Micro-Frontend (example-shopping.com/admin)
+## Step-by-Step: a Shop with a Separate Admin
 
-First, let's set up the configuration for the Main site micro-frontend. Open the `next.config.js` file in your main project:
+We'll assume a main site at `example-shopping.com` and an admin section
+served at `example-shopping.com/admin` — two separate Next.js apps that
+look like one site:
+
+1. **Main site** (the "shell") — owns the domain, runs on port 3000 in dev.
+2. **Admin zone** — a completely separate Next.js app on port 3001.
+
+### Step 1: Route /admin traffic to the admin app
+
+In the **main site's** `next.config.js`, add rewrites so any request under
+`/admin` is proxied to the admin app:
 
 ```ts
-/\*_ @type {import('next').NextConfig} _/;
+/** @type {import('next').NextConfig} */
 const nextConfig = {
   async rewrites() {
+    const adminUrl = process.env.ADMIN_URL ?? "http://localhost:3001";
     return [
+      { source: "/admin", destination: `${adminUrl}/admin` },
+      { source: "/admin/:path*", destination: `${adminUrl}/admin/:path*` },
+      // the admin app's static assets must be reachable too:
       {
-        source: "/admin",
-        destination: "http://localhost:3001",
-      },
-      {
-        source: "/admin/:path*",
-        destination: "http://localhost:3001/:path*",
+        source: "/admin-static/:path*",
+        destination: `${adminUrl}/admin-static/:path*`,
       },
     ];
   },
 };
+
+module.exports = nextConfig;
 ```
 
-**What is rewrites?**
-As per NextJS, Rewrites are,
+**What are rewrites?** Rewrites map incoming request paths to different
+destinations *invisibly* — they act as a URL proxy. The user's address bar
+says `example-shopping.com/admin`, but the response is served by the admin
+app. This is the crucial difference from redirects, which visibly change
+the URL and bounce the browser to a new location. Rewrites are what make
+two apps feel like one site.
 
-Rewrites are a powerful feature in NextJS that allow you to map incoming request paths to different destination paths. They act as a URL proxy, masking the actual destination and creating the illusion that the user hasn't navigated away from their current location on the site. This is in contrast to redirects, which visibly change the URL and take the user to a new page.
+Notice the `ADMIN_URL` environment variable: in dev it falls back to
+`localhost:3001`, in production it points at wherever the admin app is
+deployed (e.g. `https://admin-internal.example.com`). Hard-coding
+`localhost` in the config is the #1 "works on my machine" mistake in
+multi-zone setups.
 
-By using rewrites, we can seamlessly integrate our admin micro-frontend into the main application, providing a unified experience for users while maintaining separation at the development level.
+### Step 2: Configure the admin app to live under /admin
 
-Now, we need to update the admin project, open your next.config.js
+The admin app needs two settings in **its** `next.config.js`:
 
 ```ts
-/\*_ @type {import('next').NextConfig} _/;
+/** @type {import('next').NextConfig} */
 const nextConfig = {
-  assetPrefix: "/admin",
+  basePath: "/admin",
+  assetPrefix: "/admin-static",
 };
+
+module.exports = nextConfig;
 ```
 
-Your micro-frontend is ready now!
+These two are commonly confused, and the distinction matters:
+
+- **`basePath`** prefixes every *page route* in the app. The admin's
+  `app/dashboard/page.tsx` now serves at `/admin/dashboard`, and its
+  internal `<Link href="/dashboard">` automatically renders as
+  `/admin/dashboard`. Without this, the admin app thinks it owns `/` and
+  every internal link breaks when proxied.
+- **`assetPrefix`** prefixes the app's *static assets* — the
+  `/_next/static/...` JS and CSS bundles. Both zones would otherwise serve
+  their assets from the same `/_next/...` paths through the same domain,
+  and the shell would try to answer requests for the admin's chunks with
+  its own (missing) files. Giving each zone a unique prefix
+  (`/admin-static`) keeps the bundles from colliding — that's also why
+  Step 1 added a rewrite for it.
+
+If you've ever set up a multi-zone and seen the admin pages render as
+unstyled HTML with 404s in the network tab for every chunk — this is the
+asset-prefix collision, and now you know the fix.
+
+Restart both apps, visit `localhost:3000/admin`, and the shell proxies you
+into the admin app. Your micro-frontend is running — but it isn't
+production-ready yet. The rest of this post is what the short version of
+this tutorial leaves out.
+
+## Navigation Across Zones: the Detail Everyone Misses
+
+Inside one Next.js app, `<Link>` gives you fast client-side navigation.
+**Across zones, that's impossible** — the shell's JavaScript bundle knows
+nothing about the admin's pages. Cross-zone navigation must be a full page
+load, and each app needs to know which URLs are "foreign":
+
+```tsx
+// In the SHELL, linking into the admin zone — use a plain anchor:
+<a href="/admin">Go to admin</a>
+
+// In the shell, linking within the shell — normal Link:
+<Link href="/products">Products</Link>
+```
+
+If you use `<Link href="/admin">` from the shell, Next.js attempts a
+client-side transition, finds no such route in its own manifest, and you
+get a 404 or a hard error. The mental model: **`<Link>` within a zone,
+`<a>` between zones.** Some teams wrap this in a `<SmartLink>` component
+that checks the target against a list of foreign path prefixes and picks
+the right element — worth doing once you have more than two zones.
+
+This is also the honest UX cost of multi-zones: boundary crossings are
+full page loads. Design your zone boundaries so users cross them rarely
+(shop → admin: fine; every product page → cart: don't split those).
+
+## Sharing Auth and State Between Zones
+
+Zones are separate apps, but they share an origin — and that's your
+communication channel:
+
+- **Cookies** set on the shared domain are visible to every zone. Standard
+  practice: a session cookie (issued by your auth provider or the shell)
+  that each zone independently validates in its middleware. Don't try to
+  share in-memory state or React context across zones — there is no shared
+  runtime.
+- **A shared UI package** (`@acme/ui` on a private registry, or a package
+  in a monorepo with Turborepo) keeps the design system consistent. Each
+  zone bundles its own copy, so version skew *between* zones is possible —
+  acceptable for buttons, painful for anything stateful.
+- **localStorage/sessionStorage** are shared per-origin and work across
+  zones, but treat them as a cache, not a source of truth.
+
+## Deploying to Production
+
+Each zone deploys independently — that was the whole point. The shape:
+
+1. Deploy the admin app anywhere (Vercel, a container, a VM). It gets its
+   own internal URL, e.g. `https://shop-admin.vercel.app`.
+2. Deploy the shell with `ADMIN_URL` pointing at that internal URL.
+3. Only the shell's domain is public. The admin app should ideally reject
+   direct traffic to its internal URL (check the `Host` header or a shared
+   secret header in middleware) so `/admin` is the *only* door in.
+
+On Vercel specifically, multi-zones are first-class: two projects, and the
+shell's rewrites do exactly what they do locally. If you self-host, the
+same pattern works with nginx doing the path-based proxying instead of (or
+in front of) Next.js rewrites — moving the routing table out of app code
+and into infrastructure, which ops teams often prefer.
+
+Cache carefully at the CDN layer: the two zones have different deploy
+cadences, so a CDN caching `/admin/*` under the shell's cache rules can
+serve stale admin HTML after an admin deploy. Scope cache keys and purges
+per zone.
+
+## Pitfalls Checklist
+
+Collected from real multi-zone setups — check these before calling it done:
+
+- **Asset prefix collisions** — every zone needs a distinct
+  `assetPrefix`, and the shell needs a rewrite for each one. Symptom:
+  unstyled pages, 404s on `/_next/static/*`.
+- **`<Link>` across zones** — must be `<a>`. Symptom: 404s on client-side
+  navigation that work on hard refresh.
+- **Hard-coded zone URLs** — use env vars per environment. Symptom: prod
+  shell proxying to `localhost:3001`.
+- **Both zones fighting over a path** — the shell's own router wins before
+  rewrites are consulted for matching pages; keep zone path spaces
+  disjoint.
+- **Middleware overlap** — the shell's middleware runs for `/admin/*`
+  requests too (it's the app doing the proxying). Scope its `matcher`
+  accordingly.
+- **Duplicated dependencies** — each zone ships its own React. That's by
+  design (it's what makes them independent) — resist the urge to "share"
+  runtime chunks across zones; that road leads to module federation
+  complexity without its tooling.
+
+## When Not to Use Micro-Frontends
+
+A single Next.js app with a well-organized `app/` directory, route
+groups, and a monorepo already gives small-to-mid teams independent
+*development*. Micro-frontends earn their complexity when you have
+**multiple teams shipping on independent schedules**, or a **migration**
+where sections must move to a new stack one at a time. If neither is true,
+one app deployed as one unit will be simpler, faster (no boundary page
+loads), and easier to keep consistent. Architecture should follow team
+boundaries — not the other way around.
+
+## Wrap-up
+
+Next.js multi-zones give you micro-frontends with the tools already in the
+framework: **rewrites** in the shell make separate apps answer under one
+domain, **`basePath` + `assetPrefix`** in each zone keep routes and
+bundles from colliding, plain `<a>` tags handle the boundary crossings,
+and cookies on the shared origin carry auth across. Deploy each zone
+independently, wire the zone URLs through environment variables, and keep
+zone boundaries where users rarely cross. Start with two zones, feel the
+operational cost, and only then decide how micro your frontends really
+need to be.

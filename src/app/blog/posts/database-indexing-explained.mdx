@@ -1,0 +1,167 @@
+---
+title: "Database Indexing: Why Your Query Is Slow (and How B-Trees Fix It)"
+publishedAt: "2026-07-13"
+summary: "What an index physically is, how B-trees make lookups logarithmic, composite index ordering, covering indexes, and the query patterns that silently refuse to use your index."
+tags: "System Design"
+---
+
+A table with ten million rows, a `WHERE email = ?`, and no index means the
+database reads **all ten million rows** to find one. That's a full table
+scan, and it's the single most common cause of "the app got slow once we
+got real users". An index turns that scan into a few page reads — but
+indexes have rules, costs, and failure modes, and most of them fit in one
+mental model: **a B-tree of sorted keys with pointers to rows**.
+
+## What an index physically is
+
+An index is a **separate data structure** the database maintains next to
+your table: the indexed column's values, sorted, each entry pointing at
+its row. Sorted is the magic word — sorted data can be searched by
+repeated halving, the same reason binary search beats a linear scan.
+
+Databases don't literally use binary search on one giant array, though.
+They use a **B-tree** (B+ tree, in practice): a search tree where each
+node is a disk page holding hundreds of keys, so the tree stays extremely
+shallow. Ten million rows fit in a tree three or four levels deep — a
+lookup touches three or four pages instead of thousands.
+
+```sql
+CREATE INDEX idx_users_email ON users (email);
+
+-- before: Seq Scan on users  (cost=0.00..180000)  ~10,000,000 rows read
+-- after:  Index Scan using idx_users_email        ~4 pages read
+```
+
+Because the leaf level of a B+ tree is a sorted linked list, indexes
+accelerate more than exact matches: **range queries** (`created_at >
+now() - interval '7 days'`), **ORDER BY** (already sorted — no sort step),
+and **prefix matches** (`LIKE 'ada%'` — but not `LIKE '%ada'`, which has
+no usable prefix).
+
+## The price: writes and space
+
+An index is a copy of part of your table that must be updated on **every
+INSERT, UPDATE, and DELETE** of the indexed columns. Five indexes on a
+table means every insert performs six writes. Indexes also occupy real
+disk and cache space.
+
+So the discipline is: index what your queries filter, join, and sort on —
+and nothing else. Unused indexes are pure tax; every serious database
+exposes stats (`pg_stat_user_indexes` in Postgres) showing which indexes
+haven't been touched in months.
+
+## Composite indexes: order is everything
+
+An index over multiple columns sorts by the first column, then the second
+*within* the first — like a phone book sorted by last name, then first
+name:
+
+```sql
+CREATE INDEX idx_orders_user_date ON orders (user_id, created_at);
+```
+
+This index serves `WHERE user_id = 42`, and serves
+`WHERE user_id = 42 AND created_at > '2026-01-01'` beautifully. But it
+does **almost nothing** for `WHERE created_at > '2026-01-01'` alone — the
+dates are scattered across the user groupings, just as a phone book is
+useless for finding everyone named "Ada" regardless of surname.
+
+That's the **leftmost prefix rule**: a composite index over `(a, b, c)`
+supports filters on `a`, on `a, b`, and on `a, b, c` — not on `b` or `c`
+alone. Two corollaries worth pinning:
+
+- Put **equality columns before range columns**: `(user_id, created_at)`
+  serves "this user's recent orders"; `(created_at, user_id)` mostly
+  doesn't.
+- An index on `(a, b)` makes a separate index on `(a)` redundant — but not
+  one on `(b)`.
+
+## Covering indexes: skip the table entirely
+
+Normally an index lookup finds the pointer, then visits the table for the
+rest of the row. If the index itself contains **every column the query
+needs**, the table visit disappears — an *index-only scan*:
+
+```sql
+CREATE INDEX idx_orders_cover
+  ON orders (user_id, created_at) INCLUDE (total);
+
+SELECT created_at, total FROM orders WHERE user_id = 42;
+-- served 100% from the index — the table is never touched
+```
+
+For hot read paths (dashboards, list endpoints) this is often the single
+biggest lever after the index itself.
+
+## Why the database ignores your index
+
+The most useful debugging skill here is recognizing the query shapes that
+*look* indexed but aren't:
+
+<table>
+  <thead>
+    <tr>
+      <th>Query pattern</th>
+      <th>Problem</th>
+      <th>Fix</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>WHERE lower(email) = ?</td>
+      <td>function hides the sorted values</td>
+      <td>index lower(email) — an expression index</td>
+    </tr>
+    <tr>
+      <td>WHERE status != 'done'</td>
+      <td>negation matches most of the table</td>
+      <td>rethink; partial index on the rare value</td>
+    </tr>
+    <tr>
+      <td>WHERE name LIKE '%son'</td>
+      <td>no leftmost prefix to descend by</td>
+      <td>full-text or trigram index</td>
+    </tr>
+    <tr>
+      <td>WHERE age + 1 = 30</td>
+      <td>arithmetic on the column</td>
+      <td>rewrite as age = 29</td>
+    </tr>
+    <tr>
+      <td>Tiny table / low-selectivity column</td>
+      <td>scan is genuinely cheaper</td>
+      <td>nothing — this is correct behavior</td>
+    </tr>
+  </tbody>
+</table>
+
+The last row matters: the query planner uses statistics to *choose*
+between index and scan, and for a column like `is_active` where 95% of
+rows match, the scan wins honestly. Indexes pay off in proportion to
+**selectivity** — how small a slice of the table the filter keeps.
+
+The tool for all of this is `EXPLAIN ANALYZE`. Reading its output —
+`Seq Scan` where you expected `Index Scan`, row estimates wildly off,
+sorts that shouldn't exist — is the highest-leverage database skill an
+application developer can build.
+
+## A word on primary keys and row storage
+
+In MySQL/InnoDB the table itself *is* a B-tree sorted by primary key (a
+"clustered index"), and every secondary index stores the primary key as
+its row pointer. Two consequences: primary-key range scans are the fastest
+access path you have, and a fat primary key (like a random UUID) bloats
+*every* index on the table and scatters inserts across pages — one reason
+sequential ids or UUIDv7 are kinder to InnoDB than random UUIDv4.
+Postgres tables are heaps instead, so the same concerns show up
+differently (index bloat, `VACUUM`), but the B-tree mental model holds in
+both.
+
+## Wrap-up
+
+An index is a sorted B-tree copy of chosen columns: logarithmic lookups,
+free ordering, cheap ranges — paid for on every write. Composite indexes
+follow the leftmost-prefix rule (equality columns first, then ranges),
+covering indexes let hot queries skip the table, and functions or leading
+wildcards on an indexed column quietly disable it. When in doubt, ask the
+database itself: `EXPLAIN ANALYZE` never lies.

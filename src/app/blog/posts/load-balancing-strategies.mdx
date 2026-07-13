@@ -1,0 +1,166 @@
+---
+title: "Load Balancing Strategies: From Round Robin to Consistent Hashing"
+publishedAt: "2026-07-13"
+summary: "How load balancers decide where each request goes — the classic algorithms, L4 vs L7, health checks, and the sticky-session problem that pushes state out of your servers."
+tags: "System Design"
+---
+
+The moment you run two servers instead of one, a question appears that
+never goes away: **which server gets this request?** The load balancer's
+answer determines your tail latency, what happens when a server dies, and
+whether that one shopping cart mysteriously empties itself. The good news:
+there are only a handful of strategies, and each has a clear "use this
+when".
+
+## Where the balancer sits
+
+A load balancer is a reverse proxy in front of a pool of identical
+servers. Clients see one address; the balancer holds the real topology,
+spreads traffic, and — critically — **stops sending traffic to dead
+servers**. Every strategy below is layered on top of that basic health
+mechanism, so it's worth stating first:
+
+**Health checks** are what turn "a machine crashed" into "users didn't
+notice". Actively, the balancer probes each server (`GET /healthz`) every
+few seconds and ejects servers that fail; passively, it watches real
+traffic for connection errors and timeouts. A good health endpoint checks
+*readiness* (can I reach my database?) not just *liveness* (is the process
+up?) — a server that's up but can't reach its dependencies is worse than a
+dead one, because it eats traffic and returns errors.
+
+## The classic algorithms
+
+### Round robin
+
+Deal requests like cards: server 1, 2, 3, 1, 2, 3. Dead simple, no state
+per request, and the right default when servers are identical and requests
+are cheap and uniform. Its weakness is that it's blind to reality — a
+server chewing on a slow request keeps receiving its full share.
+
+**Weighted round robin** handles heterogeneous hardware: a box with
+double the capacity gets weight 2 and twice the turns. The same knob
+enables **canary deploys** — give the new version weight 5 out of 100 and
+watch its error rate before rolling forward.
+
+### Least connections
+
+Send each request to the server with the **fewest active connections**.
+Active connections approximate current load, so slow requests naturally
+push traffic away from the busy server. This self-correction makes least
+connections the better default whenever request costs vary — which, for
+real APIs, is almost always. (Weighted variants divide connections by
+capacity.)
+
+### Least response time / latency-aware
+
+Track each server's recent response times and prefer the fastest. This
+reacts to problems health checks can't see — a server on a degraded disk
+or a noisy neighbor answers "healthy" while being slow. Fancier balancers
+(Envoy, NGINX Plus) combine outstanding requests with observed latency;
+the simple, robust version many systems use is **"power of two choices"**:
+pick two servers at random, send to the less loaded one. Nearly optimal
+load distribution, no global state, no herd behavior.
+
+### Hash-based routing
+
+Hash something about the request — usually client IP or a session key —
+and use it to pick the server:
+
+```
+server = hash(client_ip) % server_count
+```
+
+Now a given client always lands on the same server, which matters the
+moment servers hold per-client state (cache entries, websocket rooms).
+The naive modulo has a famous flaw: **change the server count and almost
+every client remaps**, flushing every cache at once. The fix is
+[consistent hashing](/blog/consistent-hashing), which remaps only the
+keys owned by the server that changed — it's the standard for cache
+tiers and stateful backends.
+
+## The comparison
+
+<table>
+  <thead>
+    <tr>
+      <th>Strategy</th>
+      <th>Best when</th>
+      <th>Weakness</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Round robin</td>
+      <td>uniform servers, uniform requests</td>
+      <td>blind to actual load</td>
+    </tr>
+    <tr>
+      <td>Weighted RR</td>
+      <td>mixed hardware, canary rollouts</td>
+      <td>weights are static guesses</td>
+    </tr>
+    <tr>
+      <td>Least connections</td>
+      <td>variable request cost (most APIs)</td>
+      <td>needs connection state</td>
+    </tr>
+    <tr>
+      <td>Latency-aware / P2C</td>
+      <td>detecting degraded-but-alive servers</td>
+      <td>more moving parts</td>
+    </tr>
+    <tr>
+      <td>Hash / consistent hash</td>
+      <td>per-client state, cache locality</td>
+      <td>hot keys create hot servers</td>
+    </tr>
+  </tbody>
+</table>
+
+## L4 vs L7: what the balancer can see
+
+A **layer 4** balancer routes on IP and port — it forwards TCP/UDP bytes
+without understanding them. Blazing fast, protocol-agnostic, but it can't
+see HTTP, so it balances *connections*, not *requests*.
+
+A **layer 7** balancer terminates HTTP and sees everything: path, headers,
+cookies. That enables the routing real architectures need — `/api/*` to
+one pool and `/static/*` to another, header-based A/B splits, per-route
+retries and timeouts, TLS termination in one place. The cost is more
+work per request and a bigger operational surface.
+
+The L4 distinction matters most with **gRPC and HTTP/2**: many requests
+multiplex over one long-lived connection, so an L4 balancer pins *all* of
+them to whichever server got the connection — you scale the pool and one
+server stays hot. Multiplexed protocols need L7 (request-level)
+balancing. Most real stacks layer both: L4 at the edge for raw throughput,
+L7 (NGINX, Envoy, an ALB) making the smart decisions behind it.
+
+## Sticky sessions: the trap
+
+If servers keep session state in local memory, the balancer must send
+each user back to *their* server — "sticky sessions", via cookie or IP
+hash. It works, but notice what you've given up: kill one server and its
+users are logged out; scaling out doesn't relieve existing hot servers
+(old sessions stay pinned); deploys drain painfully slowly.
+
+Stickiness treats the symptom. The cure is making servers **stateless** —
+sessions in Redis or a signed cookie, uploads in object storage — so *any*
+server can handle *any* request. Then every strategy above works, servers
+become disposable, and autoscaling actually helps. This is why "keep state
+out of app servers" is close to the first commandment of horizontal
+scaling; sticky sessions are the escape hatch for legacy apps, not the
+design goal. (Long-lived websockets are the honest exception — a
+connection physically lives on one server, so you design a pub/sub layer
+behind them instead.)
+
+## Wrap-up
+
+Load balancing is three decisions stacked: *what can the balancer see*
+(L4 bytes vs L7 requests), *who gets the next request* (round robin for
+uniform worlds, least-connections or power-of-two-choices for real ones,
+consistent hashing when state or caches demand locality), and *how do
+failures surface* (readiness-checking health probes that eject bad
+servers fast). Get those right and keep your servers stateless, and the
+pool becomes what it should be: interchangeable capacity you can grow,
+shrink, and deploy to without users ever noticing.
