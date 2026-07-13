@@ -7,24 +7,24 @@ export function GET(request: Request) {
   return new ImageResponse(
     (
       <div
-        tw="flex flex-col w-full h-full justify-between bg-white p-20"
+        tw="flex flex-col w-full h-full justify-between bg-[#FAF6EF] p-20"
         style={{
           backgroundImage:
-            'radial-gradient(circle at 25px 25px, #e5e7eb 2%, transparent 0%), radial-gradient(circle at 75px 75px, #e5e7eb 2%, transparent 0%)',
+            'radial-gradient(circle at 25px 25px, #E8E1D4 2%, transparent 0%), radial-gradient(circle at 75px 75px, #E8E1D4 2%, transparent 0%)',
           backgroundSize: '100px 100px',
         }}
       >
         <div tw="flex items-center">
-          <div tw="h-4 w-4 rounded-full bg-green-600 mr-4" />
-          <span tw="text-2xl font-semibold text-neutral-500">adarshm.com</span>
+          <div tw="h-4 w-4 rounded-full bg-[#4F8A8B] mr-4" />
+          <span tw="text-2xl font-semibold text-[#8A8F9C]">adarshm.com</span>
         </div>
         <h2
-          tw="flex text-6xl font-bold tracking-tight text-left text-neutral-900"
+          tw="flex text-6xl font-bold tracking-tight text-left text-[#2A2E3A]"
           style={{ lineHeight: 1.15 }}
         >
           {title}
         </h2>
-        <span tw="text-2xl text-neutral-500">
+        <span tw="text-2xl text-[#8A8F9C]">
           Adarsh M. — Software Engineer
         </span>
       </div>

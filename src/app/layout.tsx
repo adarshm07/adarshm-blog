@@ -72,9 +72,13 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${GeistSans.variable} ${GeistMono.variable} text-black bg-white dark:text-white dark:bg-[#0a0a0a]`}
+      className={`${GeistSans.variable} ${GeistMono.variable} text-ink bg-bg`}
     >
       <body className="antialiased max-w-2xl mx-4 mt-8 lg:mx-auto">
+        <div
+          aria-hidden
+          className="pointer-events-none fixed inset-x-0 top-0 -z-10 h-80 bg-[radial-gradient(70%_100%_at_50%_0%,var(--glow),transparent_70%)]"
+        />
         <main className="flex-auto min-w-0 mt-6 flex flex-col px-2 md:px-0">
           <Navbar />
           {children}

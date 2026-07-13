@@ -18,39 +18,40 @@ export default async function Page({
 
   return (
     <section>
-      <h1 className="mb-3 text-2xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-50">
-        Blog
+      <h1 className="mb-3 text-3xl sm:text-4xl font-bold tracking-tight text-ink">
+        Writing
+        <span className="text-accent">.</span>
       </h1>
-      <p className="mb-6 text-sm text-neutral-500 dark:text-neutral-400">
+      <p className="mb-8 leading-relaxed text-ink/70">
         Notes on data structures & algorithms, system design, and things I
         learn along the way.
       </p>
 
       <Link
         href="/dsa"
-        className="group mb-8 flex items-center justify-between gap-4 rounded-xl border border-neutral-100 dark:border-neutral-800 px-4 py-3 hover:border-green-600/40 dark:hover:border-green-500/40 transition-colors"
+        className="group mb-8 flex items-center justify-between gap-4 rounded-2xl bg-gradient-to-r from-accent to-accent-2 px-5 py-4 text-white shadow-sm hover:shadow-md transition-shadow"
       >
-        <span className="text-sm text-neutral-600 dark:text-neutral-300">
+        <span className="text-sm font-medium">
           Learning DSA?{' '}
-          <span className="text-neutral-500 dark:text-neutral-400">
+          <span className="font-normal text-white/75">
             Follow the structured path — ordered articles from recursion to
             dynamic programming.
           </span>
         </span>
-        <span className="shrink-0 text-sm text-green-600 dark:text-green-400 group-hover:translate-x-0.5 transition-transform">
+        <span className="shrink-0 group-hover:translate-x-0.5 transition-transform">
           →
         </span>
       </Link>
 
       {tags.length > 0 && (
-        <div className="mb-8 flex flex-wrap gap-1">
+        <div className="mb-8 flex flex-wrap gap-2">
           <Link
             href="/blog"
             className={[
-              'px-3 py-1 rounded-md text-xs transition-colors',
+              'px-3 py-1 rounded-full text-xs border transition-colors',
               !tag
-                ? 'text-neutral-900 dark:text-neutral-50 font-medium bg-neutral-100 dark:bg-neutral-800'
-                : 'text-neutral-500 dark:text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-900',
+                ? 'border-accent bg-accent text-white font-medium'
+                : 'border-line bg-surface text-muted hover:border-accent/50 hover:text-ink',
             ].join(' ')}
           >
             All
@@ -60,10 +61,10 @@ export default async function Page({
               key={t}
               href={`/blog?tag=${encodeURIComponent(t)}`}
               className={[
-                'px-3 py-1 rounded-md text-xs transition-colors',
+                'px-3 py-1 rounded-full text-xs border transition-colors',
                 tag === t
-                  ? 'text-neutral-900 dark:text-neutral-50 font-medium bg-neutral-100 dark:bg-neutral-800'
-                  : 'text-neutral-500 dark:text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-900',
+                  ? 'border-accent bg-accent text-white font-medium'
+                  : 'border-line bg-surface text-muted hover:border-accent/50 hover:text-ink',
               ].join(' ')}
             >
               {t}

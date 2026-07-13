@@ -48,10 +48,11 @@ export default function Page() {
 
   return (
     <section>
-      <h1 className="mb-3 text-2xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-50">
+      <h1 className="mb-3 text-3xl sm:text-4xl font-bold tracking-tight text-ink">
         Learn DSA
+        <span className="text-accent">.</span>
       </h1>
-      <p className="mb-8 text-sm text-neutral-500 dark:text-neutral-400">
+      <p className="mb-8 leading-relaxed text-ink/70">
         A structured path through data structures and algorithms. The articles
         build on each other, so follow the order if you&apos;re starting fresh —
         or jump to whatever you want to brush up on. Most posts include

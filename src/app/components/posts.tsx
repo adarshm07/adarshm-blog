@@ -1,5 +1,16 @@
 import Link from 'next/link'
-import { formatDate, getBlogPosts, getReadingTime } from '@/app/blog/utils'
+import { getBlogPosts, getReadingTime } from '@/app/blog/utils'
+
+function shortDate(date: string) {
+  if (!date.includes('T')) {
+    date = `${date}T00:00:00`
+  }
+  return new Date(date).toLocaleString('en-us', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
 
 export function BlogPosts({
   limit,
@@ -19,44 +30,61 @@ export function BlogPosts({
     )
     .slice(0, limit)
 
+  if (!showSummary) {
+    return (
+      <div className="divide-y divide-line">
+        {allBlogs.map((post) => (
+          <Link
+            key={post.slug}
+            href={`/blog/${post.slug}`}
+            className="group flex items-baseline justify-between gap-4 py-3.5"
+          >
+            <span className="font-medium text-ink group-hover:text-accent transition-colors">
+              {post.metadata.title}
+            </span>
+            <span className="shrink-0 text-xs text-muted tabular-nums">
+              {shortDate(post.metadata.publishedAt)}
+            </span>
+          </Link>
+        ))}
+      </div>
+    )
+  }
+
   return (
-    <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
+    <div className="space-y-3">
       {allBlogs.map((post) => (
         <Link
           key={post.slug}
           href={`/blog/${post.slug}`}
-          className="group block py-4 -mx-3 px-3 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-900/50 transition-colors"
+          className="group block rounded-xl border border-line bg-surface px-5 py-4 transition-all hover:border-accent/60 hover:shadow-[0_2px_16px_rgba(42,46,58,0.06)]"
         >
-          <div className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-4">
-            <span className="text-sm text-neutral-400 dark:text-neutral-500 tabular-nums shrink-0">
-              {formatDate(post.metadata.publishedAt, false)}
-            </span>
-            <span className="font-medium text-neutral-800 dark:text-neutral-200 group-hover:text-green-600 dark:group-hover:text-green-400 transition-colors">
+          <div className="flex items-baseline justify-between gap-4">
+            <span className="font-semibold text-ink group-hover:text-accent transition-colors">
               {post.metadata.title}
             </span>
-            {showSummary && (
-              <span className="text-xs text-neutral-400 dark:text-neutral-500 shrink-0 sm:ml-auto">
-                {getReadingTime(post.content)} min read
-              </span>
-            )}
+            <span className="shrink-0 text-xs text-muted tabular-nums">
+              {shortDate(post.metadata.publishedAt)}
+            </span>
           </div>
-          {showSummary && post.metadata.summary && (
-            <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400 line-clamp-2">
+          {post.metadata.summary && (
+            <p className="mt-1.5 text-sm text-muted line-clamp-2">
               {post.metadata.summary}
             </p>
           )}
-          {showSummary && post.metadata.tags && post.metadata.tags.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-2">
-              {post.metadata.tags.map((t) => (
-                <span
-                  key={t}
-                  className="text-xs text-neutral-400 dark:text-neutral-500"
-                >
-                  #{t}
-                </span>
-              ))}
-            </div>
-          )}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {post.metadata.tags?.map((t) => (
+              <span
+                key={t}
+                className="rounded-full bg-bg px-2.5 py-0.5 text-[11px] text-muted"
+              >
+                {t}
+              </span>
+            ))}
+            <span className="ml-auto text-[11px] text-muted">
+              {getReadingTime(post.content)} min read
+            </span>
+          </div>
         </Link>
       ))}
     </div>

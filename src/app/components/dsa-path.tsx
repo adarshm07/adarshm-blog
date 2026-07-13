@@ -84,10 +84,10 @@ export function DsaPath({ phases }: { phases: PathPhase[] }) {
 
   return (
     <div>
-      <div className="mb-10 rounded-xl border border-neutral-100 dark:border-neutral-800 p-4">
+      <div className="mb-10 rounded-xl border border-line bg-surface p-4">
         <div className="flex items-baseline justify-between gap-4">
-          <p className="text-sm text-neutral-600 dark:text-neutral-300">
-            <span className="font-medium text-neutral-900 dark:text-neutral-50 tabular-nums">
+          <p className="text-sm text-ink/80">
+            <span className="font-medium text-ink tabular-nums">
               {hydrated ? completedCount : 0}
             </span>{' '}
             of {readableSlugs.length} articles read
@@ -95,19 +95,19 @@ export function DsaPath({ phases }: { phases: PathPhase[] }) {
           {hydrated && completedCount > 0 && (
             <button
               onClick={reset}
-              className="text-xs text-neutral-400 dark:text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
+              className="text-xs text-muted hover:text-ink transition-colors"
             >
               Reset progress
             </button>
           )}
         </div>
-        <div className="mt-3 h-1.5 rounded-full bg-neutral-100 dark:bg-neutral-800 overflow-hidden">
+        <div className="mt-3 h-1.5 rounded-full bg-line overflow-hidden">
           <div
-            className="h-full rounded-full bg-green-600 dark:bg-green-500 transition-all duration-300"
+            className="h-full rounded-full bg-accent transition-all duration-300"
             style={{ width: `${hydrated ? percent : 0}%` }}
           />
         </div>
-        <p className="mt-2 text-xs text-neutral-400 dark:text-neutral-500">
+        <p className="mt-2 text-xs text-muted">
           Progress is saved in your browser.
         </p>
       </div>
@@ -116,34 +116,34 @@ export function DsaPath({ phases }: { phases: PathPhase[] }) {
         {phases.map((phase, phaseIndex) => (
           <section key={phase.title}>
             <div className="mb-4 flex items-baseline gap-3">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-neutral-100 dark:bg-neutral-800 text-xs font-medium text-neutral-600 dark:text-neutral-300 tabular-nums">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-line bg-surface text-xs font-medium text-muted tabular-nums">
                 {phaseIndex + 1}
               </span>
               <div>
-                <h2 className="text-lg font-semibold tracking-tight text-neutral-900 dark:text-neutral-50">
+                <h2 className="text-lg font-semibold tracking-tight text-ink">
                   {phase.title}
                 </h2>
-                <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+                <p className="mt-1 text-sm text-muted">
                   {phase.description}
                 </p>
               </div>
             </div>
 
-            <ol className="ml-3 border-l border-neutral-100 dark:border-neutral-800 space-y-1">
+            <ol className="ml-3 border-l border-line space-y-1">
               {phase.items.map((item) => {
                 const isDone = hydrated && !!item.slug && done.has(item.slug)
                 return (
                   <li key={item.slug ?? item.title} className="relative pl-6">
                     <span
                       className={[
-                        'absolute -left-[5px] top-5 h-[9px] w-[9px] rounded-full border-2 border-white dark:border-neutral-950',
+                        'absolute -left-[5px] top-5 h-[9px] w-[9px] rounded-full border-2 border-bg',
                         isDone
-                          ? 'bg-green-600 dark:bg-green-500'
-                          : 'bg-neutral-200 dark:bg-neutral-700',
+                          ? 'bg-accent'
+                          : 'bg-line',
                       ].join(' ')}
                     />
                     {item.slug ? (
-                      <div className="group flex items-start gap-3 rounded-lg py-3 px-3 -mx-3 hover:bg-neutral-50 dark:hover:bg-neutral-900/50 transition-colors">
+                      <div className="group flex items-start gap-3 rounded-lg py-3 px-3 -mx-3 hover:bg-surface transition-colors">
                         <button
                           onClick={() => toggle(item.slug!)}
                           aria-label={
@@ -155,8 +155,8 @@ export function DsaPath({ phases }: { phases: PathPhase[] }) {
                           className={[
                             'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-colors',
                             isDone
-                              ? 'border-green-600 dark:border-green-500 bg-green-600 dark:bg-green-500 text-white'
-                              : 'border-neutral-300 dark:border-neutral-600 text-transparent hover:border-green-600 dark:hover:border-green-500',
+                              ? 'border-accent bg-accent text-white'
+                              : 'border-line text-transparent hover:border-accent',
                           ].join(' ')}
                         >
                           <svg
@@ -182,8 +182,8 @@ export function DsaPath({ phases }: { phases: PathPhase[] }) {
                               className={[
                                 'font-medium transition-colors',
                                 isDone
-                                  ? 'text-neutral-400 dark:text-neutral-500 line-through decoration-neutral-300 dark:decoration-neutral-600'
-                                  : 'text-neutral-800 dark:text-neutral-200 group-hover:text-green-600 dark:group-hover:text-green-400',
+                                  ? 'text-muted line-through decoration-line'
+                                  : 'text-ink group-hover:text-accent',
                               ].join(' ')}
                             >
                               {item.title}
@@ -197,29 +197,29 @@ export function DsaPath({ phases }: { phases: PathPhase[] }) {
                               {item.difficulty}
                             </span>
                             {item.readingTime && (
-                              <span className="text-xs text-neutral-400 dark:text-neutral-500">
+                              <span className="text-xs text-muted">
                                 {item.readingTime} min
                               </span>
                             )}
                           </div>
-                          <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+                          <p className="mt-1 text-sm text-muted">
                             {item.note}
                           </p>
                         </div>
                       </div>
                     ) : (
                       <div className="flex items-start gap-3 py-3 px-3 -mx-3 opacity-60">
-                        <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-dashed border-neutral-300 dark:border-neutral-600" />
+                        <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-dashed border-line" />
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                            <span className="font-medium text-neutral-500 dark:text-neutral-400">
+                            <span className="font-medium text-muted">
                               {item.title}
                             </span>
-                            <span className="rounded px-1.5 py-0.5 text-[10px] font-medium text-neutral-500 dark:text-neutral-400 bg-neutral-100 dark:bg-neutral-800">
+                            <span className="rounded px-1.5 py-0.5 text-[10px] font-medium text-muted bg-line/50">
                               Coming soon
                             </span>
                           </div>
-                          <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+                          <p className="mt-1 text-sm text-muted">
                             {item.note}
                           </p>
                         </div>
