@@ -1,0 +1,204 @@
+---
+title: "Structural Typing: Why TypeScript Isn't Nominally Typed"
+publishedAt: "2026-07-18"
+summary: "Java and C# ask 'does this value's declared type match?'. TypeScript asks 'does this value have the right shape?'. That difference — structural typing — explains why unrelated interfaces can be interchangeable, and why it occasionally lets real bugs through."
+tags: "TypeScript"
+---
+
+In Java or C#, a value is only assignable to a type if it was explicitly
+declared to implement that type — `class Dog implements Animal` has to
+say so. TypeScript works differently: it asks whether a value **has the
+right shape**, not whether it declared the right ancestry. Two completely
+unrelated types with identical properties are interchangeable. That's
+**structural typing**, and it's one of the most consequential design
+decisions in the language.
+
+## The core rule: shape, not declaration
+
+```typescript
+interface Point {
+  x: number;
+  y: number;
+}
+
+interface Coordinate {
+  x: number;
+  y: number;
+}
+
+function distance(p: Point) {
+  return Math.sqrt(p.x ** 2 + p.y ** 2);
+}
+
+const coord: Coordinate = { x: 3, y: 4 };
+distance(coord); // fine — Coordinate was never declared to be a Point
+```
+
+`Point` and `Coordinate` share no inheritance relationship whatsoever —
+they're two separately-declared interfaces that happen to describe the
+same shape. TypeScript doesn't care: `coord` has an `x: number` and a
+`y: number`, which is everything `distance` requires, so the call
+type-checks. In a nominally-typed language, this would be a compile
+error unless `Coordinate` explicitly extended or implemented `Point`.
+
+## Excess property checks: the targeted exception
+
+Structural typing alone would let *any* object with at least the required
+properties through, including ones with extra properties. Usually that's
+exactly what you want — but for **object literals assigned directly**,
+TypeScript adds a stricter check specifically to catch typos:
+
+```typescript
+interface Config {
+  timeout: number;
+}
+
+function setup(config: Config) {}
+
+setup({ timeout: 5000, timeuot: 3000 });
+// Error: Object literal may only specify known properties,
+// and 'timeuot' does not exist in type 'Config'.
+
+const obj = { timeout: 5000, timeuot: 3000 };
+setup(obj); // no error — obj is structurally compatible (has a `timeout`)
+```
+
+The second call is legal under pure structural typing: `obj` has
+everything `Config` requires. The first call would *also* be legal under
+pure structural typing — but TypeScript special-cases fresh object
+literals specifically because that's where a typo'd property name is
+almost certainly a mistake, not an intentional extra field. This is a
+deliberate carve-out for catching bugs, not a contradiction of the
+structural model — assigning through a variable first (as in the second
+example) is the well-known way to bypass it when the extra property is
+intentional.
+
+## Structural typing and functions: parameter bivariance
+
+Function types are also compared structurally — a function type is
+assignable to another if its parameters and return type are compatible
+shape-wise, regardless of name:
+
+```typescript
+type Handler = (event: { type: string; timestamp: number }) => void;
+
+const onEvent: Handler = (e) => console.log(e.type);
+// `e`'s inferred type is `{ type: string; timestamp: number }`,
+// even though the parameter is named `e`, not `event`
+
+const simpler: (e: { type: string }) => void = onEvent;
+// legal — a handler that reads MORE fields than required
+// is still safely assignable to a narrower parameter type
+```
+
+A function that accepts a *wider* parameter type (more fields) can stand
+in for one that expects a *narrower* one, because it can safely ignore the
+extra fields it doesn't need — this parameter contravariance falls
+naturally out of structural comparison, without a single explicit
+interface relationship being declared anywhere.
+
+## Where structural typing lets a real bug through
+
+The flexibility has a real cost: two types that happen to share a shape
+but represent genuinely different concepts are freely interchangeable,
+with nothing stopping a mix-up:
+
+```typescript
+interface UserId {
+  value: string;
+}
+
+interface OrderId {
+  value: string;
+}
+
+function getUser(id: UserId) { /* ... */ }
+
+const orderId: OrderId = { value: "ord_123" };
+getUser(orderId); // type-checks! Structurally identical, semantically wrong
+```
+
+Nothing here is a typo — `UserId` and `OrderId` are structurally
+identical, so TypeScript sees no problem. This is the classic motivation
+for **branded (nominal-ish) types**: adding a property whose only purpose
+is to make otherwise-identical shapes structurally distinct.
+
+```typescript
+interface UserId {
+  value: string;
+  readonly __brand: "UserId";
+}
+
+interface OrderId {
+  value: string;
+  readonly __brand: "OrderId";
+}
+
+function getUser(id: UserId) { /* ... */ }
+
+const orderId = { value: "ord_123", __brand: "OrderId" as const };
+getUser(orderId); // now a genuine type error
+```
+
+The `__brand` field exists purely at compile time — there's no runtime
+value that actually carries it — but it's enough to make the two types
+structurally incompatible, simulating nominal typing on top of a
+structural type system when identity, not shape, is what actually
+matters.
+
+## Structural vs nominal, side by side
+
+<table>
+  <thead>
+    <tr>
+      <th></th>
+      <th>Nominal (Java, C#)</th>
+      <th>Structural (TypeScript)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Compatibility rule</td>
+      <td>Declared type/interface hierarchy</td>
+      <td>Shape of properties and methods</td>
+    </tr>
+    <tr>
+      <td>Unrelated types with same shape</td>
+      <td>Incompatible</td>
+      <td>Interchangeable</td>
+    </tr>
+    <tr>
+      <td>Duck-typed JS interop</td>
+      <td>Awkward — needs explicit wrapping</td>
+      <td>Natural fit — matches how JS objects already behave</td>
+    </tr>
+    <tr>
+      <td>Distinguishing semantically different but same-shaped types</td>
+      <td>Automatic (separate declared types)</td>
+      <td>Requires branding</td>
+    </tr>
+  </tbody>
+</table>
+
+## Why TypeScript chose structural typing
+
+TypeScript is a type system layered on top of a language — JavaScript —
+that was always duck-typed: any object with a `.length` and the right
+methods works wherever an array-like is expected, with no formal
+"implements" declaration anywhere. Structural typing is the natural fit
+for describing that existing behavior, rather than forcing every
+JavaScript object literal to nominally declare which interfaces it
+satisfies before it can be used.
+
+## Wrap-up
+
+TypeScript checks whether a value has the right shape, not whether it was
+declared to have the right ancestry — which is what makes plain object
+literals, duck-typed JavaScript patterns, and unrelated-but-matching
+interfaces all work without ceremony. The same flexibility means two
+semantically distinct concepts with identical shapes are freely
+interchangeable unless you deliberately brand them apart. Knowing which
+model you're in explains a lot of TypeScript's behavior that looks
+surprising through a Java or C# lens — and excess property checks on
+fresh object literals exist precisely to catch the most common mistake
+that flexibility would otherwise miss.
