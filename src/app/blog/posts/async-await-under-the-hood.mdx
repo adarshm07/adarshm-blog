@@ -1,0 +1,166 @@
+---
+title: "Async/Await Under the Hood: Promises in Disguise"
+publishedAt: "2026-07-16"
+summary: "async/await isn't a new concurrency model — it's syntax sugar over promises and generators. Understanding the desugared version explains error handling, sequential-looking parallel bugs, and why 'async' functions always return a promise."
+tags: "JavaScript"
+---
+
+`async`/`await` reads like synchronous code, and that's precisely what
+makes it easy to misuse: it *feels* like execution pauses, but nothing
+about the event loop actually changed. Underneath, `async`/`await` is
+syntax sugar over promises — every `async` function is a function that
+returns a promise, and every `await` is a pause point implemented with the
+same mechanism generators use to suspend and resume.
+
+## What async actually does to a function
+
+An `async` function **always returns a promise**, even if the body
+returns a plain value or throws synchronously:
+
+```javascript
+async function getValue() {
+  return 42;
+}
+
+getValue(); // Promise { 42 }, not 42
+
+async function fails() {
+  throw new Error("nope");
+}
+
+fails().catch((e) => console.log(e.message)); // "nope" — the throw became a rejection
+```
+
+That's the whole contract: a plain `return` becomes `Promise.resolve(...)`,
+and a `throw` becomes a rejected promise. Nothing about calling an `async`
+function is actually synchronous from the caller's perspective — you
+always get a promise back, immediately, and the function's body may not
+have finished (or even started past the first `await`) by the time you
+have it.
+
+## What await actually does: suspend, don't block
+
+`await` does **not** block the thread. It suspends the `async` function at
+that point, registers a continuation to resume after the awaited promise
+settles, and immediately hands control back to the caller — the rest of
+the program keeps running on the same single thread. When the awaited
+promise resolves, the continuation is scheduled as a **microtask**.
+
+This is the mental model that clears up most `async`/`await` confusion:
+it desugars to roughly this generator-and-driver pattern.
+
+```javascript
+// Roughly what "async function" compiles down to
+function asyncToGenerator(generatorFn) {
+  return function (...args) {
+    const generator = generatorFn(...args);
+
+    return new Promise((resolve, reject) => {
+      function step(key, arg) {
+        let result;
+        try {
+          result = generator[key](arg); // .next(arg) or .throw(arg)
+        } catch (err) {
+          return reject(err);
+        }
+        const { value, done } = result;
+        if (done) return resolve(value);
+        Promise.resolve(value).then(
+          (val) => step("next", val),
+          (err) => step("throw", err)
+        );
+      }
+      step("next");
+    });
+  };
+}
+```
+
+Each `await expr` is a `yield expr` in the underlying generator: the
+generator pauses, the driver wraps the yielded value in
+`Promise.resolve()`, and resumes the generator (`.next()` or `.throw()`)
+only once that promise settles. That's the entire mechanism — no threads,
+no blocking, just a promise chain with generator syntax on top.
+
+## Why sequential await is slower than it needs to be
+
+Because each `await` genuinely pauses the function until that specific
+promise settles, awaiting independent operations one after another forces
+them to run **sequentially** even when they don't depend on each other:
+
+```javascript
+// Sequential — total time ≈ sum of both
+async function slow() {
+  const user = await fetchUser();     // waits here
+  const posts = await fetchPosts();   // doesn't start until user resolves
+  return { user, posts };
+}
+
+// Concurrent — total time ≈ the slower of the two
+async function fast() {
+  const [user, posts] = await Promise.all([fetchUser(), fetchPosts()]);
+  return { user, posts };
+}
+```
+
+`fetchUser()` and `fetchPosts()` don't depend on each other, so starting
+both before awaiting either lets them run concurrently — the promises are
+created immediately (kicking off the underlying work) and only
+*awaited* together. This is the single most common `async`/`await`
+performance bug: reaching for `await` reflexively on every line, turning
+what should be parallel I/O into an accidental waterfall.
+
+## for await and sequential loops are sometimes the point
+
+Not every sequential `await` is a bug — sometimes the next step
+genuinely depends on the previous one (pagination, rate-limited APIs,
+retries). The tell is whether the *data* has a dependency, not whether the
+code happens to be written as a loop:
+
+```javascript
+// Correct to be sequential — each page's cursor comes from the last
+async function fetchAllPages(url) {
+  const results = [];
+  let cursor = null;
+  do {
+    const page = await fetch(`${url}?cursor=${cursor}`).then((r) => r.json());
+    results.push(...page.items);
+    cursor = page.nextCursor;
+  } while (cursor);
+  return results;
+}
+```
+
+## Error handling: try/catch replaces .catch()
+
+Because `await` unwraps a promise into a value or throws, ordinary
+`try`/`catch` works for async code the same way it works for synchronous
+code — a rejected awaited promise is just a thrown exception at that line:
+
+```javascript
+async function safeFetch(url) {
+  try {
+    const res = await fetch(url);
+    return await res.json();
+  } catch (err) {
+    console.error("Request failed:", err);
+    return null;
+  }
+}
+```
+
+One trap: forgetting `await` on a call inside the `try` block means the
+returned promise's eventual rejection happens **after** the function has
+already returned, outside the `try`/`catch`'s reach — an unhandled
+rejection instead of a caught error.
+
+## Wrap-up
+
+`async`/`await` doesn't introduce a new concurrency primitive — it's
+generator-based syntax sugar over the same promise microtask queue that's
+always been there. `async` guarantees the return value is a promise;
+`await` suspends the function and resumes it as a microtask once the
+awaited promise settles, without ever blocking the thread. Knowing that
+desugared shape is what makes the difference between code that reads
+sequential and code that accidentally *runs* sequential when it didn't
+need to.

@@ -1,0 +1,174 @@
+---
+title: "Segment Trees: Range Queries in O(log n)"
+publishedAt: "2026-07-14"
+summary: "When an array changes and you still need fast range sum, min, or max queries, prefix sums stop working. Segment trees answer both range queries and point updates in logarithmic time."
+tags: "DSA"
+---
+
+Given an array, "what's the sum of elements from index 3 to 7?" is easy
+with a prefix-sum array — O(1) per query after O(n) preprocessing. The
+catch: prefix sums assume the array never changes. The moment updates
+enter the picture — "add 5 to index 4, now answer more range queries" —
+prefix sums fall apart, because a single update forces recomputing every
+prefix after it, O(n) per update. A **segment tree** answers both range
+queries and point updates in O(log n), by paying a little extra on the
+query side to gain a lot on the update side.
+
+## The structure: a binary tree over ranges
+
+A segment tree is a binary tree built over the array where each node
+covers a **contiguous range** and stores an aggregate (sum, min, max —
+anything associative) over that range. The root covers the whole array;
+each node splits its range in half between its two children; leaves cover
+single elements.
+
+```javascript
+class SegmentTree {
+  constructor(arr) {
+    this.n = arr.length;
+    this.tree = new Array(4 * this.n).fill(0); // safe upper bound
+    this.#build(arr, 1, 0, this.n - 1);
+  }
+
+  #build(arr, node, start, end) {
+    if (start === end) {
+      this.tree[node] = arr[start];
+      return;
+    }
+    const mid = (start + end) >> 1;
+    this.#build(arr, 2 * node, start, mid);
+    this.#build(arr, 2 * node + 1, mid + 1, end);
+    this.tree[node] = this.tree[2 * node] + this.tree[2 * node + 1];
+  }
+}
+```
+
+The `4 * n` sizing is the standard conservative bound for an array-backed
+binary tree that isn't guaranteed to be perfectly balanced at every level;
+it's wasteful but simple, and the constant factor rarely matters in
+practice.
+
+## Range query: descend and combine
+
+To query `[l, r]`, walk the tree from the root. At each node:
+
+- If the node's range is **entirely inside** `[l, r]`, its stored
+  aggregate is exactly what's needed — return it without descending
+  further.
+- If the node's range is **entirely outside** `[l, r]`, it contributes
+  nothing — return the identity value (0 for sum, `Infinity` for min).
+- Otherwise the ranges **partially overlap** — recurse into both children
+  and combine.
+
+```javascript
+query(l, r) {
+  return this.#query(1, 0, this.n - 1, l, r);
+}
+
+#query(node, start, end, l, r) {
+  if (r < start || end < l) return 0;               // no overlap
+  if (l <= start && end <= r) return this.tree[node]; // total overlap
+  const mid = (start + end) >> 1;                     // partial overlap
+  return (
+    this.#query(2 * node, start, mid, l, r) +
+    this.#query(2 * node + 1, mid + 1, end, l, r)
+  );
+}
+```
+
+The key insight for the O(log n) bound: any query range decomposes into
+**at most O(log n) fully-covered nodes**, because as you descend, a range
+that partially overlaps a node stops partially overlapping at most two of
+its children (one on each boundary) — everything else in between is
+either fully in or fully out. That bounds the number of nodes visited per
+level to a small constant, and there are O(log n) levels.
+
+## Point update: fix one leaf, patch the path
+
+Updating index `i` only requires walking straight down to that leaf and
+recomputing the aggregate on the way back up — every node touched sits on
+one root-to-leaf path, which is O(log n) nodes.
+
+```javascript
+update(i, value) {
+  this.#update(1, 0, this.n - 1, i, value);
+}
+
+#update(node, start, end, i, value) {
+  if (start === end) {
+    this.tree[node] = value;
+    return;
+  }
+  const mid = (start + end) >> 1;
+  if (i <= mid) this.#update(2 * node, start, mid, i, value);
+  else this.#update(2 * node + 1, mid + 1, end, i, value);
+  this.tree[node] = this.tree[2 * node] + this.tree[2 * node + 1]; // repair on the way back up
+}
+```
+
+## Choosing the right root-to-leaf trade-off
+
+<table>
+  <thead>
+    <tr>
+      <th>Structure</th>
+      <th>Point update</th>
+      <th>Range query</th>
+      <th>Build</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Plain array</td>
+      <td>O(1)</td>
+      <td>O(n)</td>
+      <td>O(n)</td>
+    </tr>
+    <tr>
+      <td>Prefix sum array</td>
+      <td>O(n)</td>
+      <td>O(1)</td>
+      <td>O(n)</td>
+    </tr>
+    <tr>
+      <td>Segment tree</td>
+      <td>O(log n)</td>
+      <td>O(log n)</td>
+      <td>O(n)</td>
+    </tr>
+    <tr>
+      <td>Fenwick tree (BIT)</td>
+      <td>O(log n)</td>
+      <td>O(log n), sum only</td>
+      <td>O(n log n) naive</td>
+    </tr>
+  </tbody>
+</table>
+
+A **Fenwick tree** (Binary Indexed Tree) gets the same asymptotics for
+prefix-sum-style queries with a much smaller constant factor and a
+one-array implementation — reach for it when the aggregate is a sum and
+the query is always a prefix or difference of prefixes. Segment trees earn
+their extra bulk when the aggregate isn't a simple sum (min, max, GCD),
+when queries are arbitrary ranges rather than prefixes, or when you need
+**range updates** (lazy propagation extends a segment tree to update a
+whole range in O(log n) by deferring the write to children until they're
+actually queried).
+
+## Where it shows up
+
+- **Competitive programming**, constantly — "range sum with updates" and
+  its variants (range min, range max, range GCD) are a staple pattern.
+- **Interval scheduling and calendar systems** — checking "is this whole
+  time range free?" is a range-min query over a busy/free array.
+- **Computational geometry** — sweep-line algorithms use segment trees to
+  track which intervals are currently "active" as the sweep progresses.
+
+## Wrap-up
+
+Prefix sums win when the array is static; a segment tree wins the moment
+updates enter the picture, by organizing the array into a binary tree of
+overlapping ranges where any query decomposes into O(log n) precomputed
+pieces and any update only touches one root-to-leaf path. That symmetric
+O(log n) for both operations — instead of choosing which one to make
+O(1) at the other's expense — is the entire reason the structure exists.

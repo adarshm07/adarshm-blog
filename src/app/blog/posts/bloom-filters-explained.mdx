@@ -1,0 +1,159 @@
+---
+title: "Bloom Filters: Probably in the Set, Definitely Not"
+publishedAt: "2026-07-14"
+summary: "A probabilistic data structure that answers set-membership queries in constant space by allowing false positives but never false negatives — and why Chrome, Cassandra, and CDNs all rely on that trade."
+tags: "DSA, System Design"
+---
+
+Suppose you need to check "have I seen this before?" against a set with
+billions of entries — malicious URLs, cached keys, usernames already taken.
+A hash set answers correctly but costs one entry's worth of memory per
+item. A **Bloom filter** answers the same question in a fixed, tiny amount
+of memory, no matter how many items you insert — by accepting a small,
+tunable rate of **false positives** in exchange.
+
+## The core trick: many hashes, one bit array
+
+A Bloom filter is a bit array of size `m`, all zeros to start, plus `k`
+independent hash functions. To **add** an item, hash it `k` ways and set
+those `k` bit positions to 1. To **check membership**, hash it the same
+`k` ways and see if all `k` bits are set.
+
+```javascript
+class BloomFilter {
+  constructor(size = 1000, hashCount = 3) {
+    this.size = size;
+    this.hashCount = hashCount;
+    this.bits = new Uint8Array(size);
+  }
+
+  #hash(item, seed) {
+    let h = seed;
+    for (let i = 0; i < item.length; i++) {
+      h = (Math.imul(h, 31) + item.charCodeAt(i)) | 0;
+    }
+    return Math.abs(h) % this.size;
+  }
+
+  add(item) {
+    for (let i = 0; i < this.hashCount; i++) {
+      this.bits[this.#hash(item, i)] = 1;
+    }
+  }
+
+  mightContain(item) {
+    for (let i = 0; i < this.hashCount; i++) {
+      if (!this.bits[this.#hash(item, i)]) return false; // definitely absent
+    }
+    return true; // probably present
+  }
+}
+```
+
+Notice the asymmetry baked into the name: `mightContain` is honest about
+what it can promise. If *any* of the `k` bits is 0, the item was
+**definitely never added** — no hash function would have skipped setting
+a bit it was supposed to set. But if all `k` bits are 1, that's not proof;
+some other combination of items could have set every one of those bits
+without this exact item ever being inserted. Hence: **no false negatives,
+possible false positives**.
+
+## Why bits collide, and why that's the whole trade-off
+
+Two different items can share a bit position purely by hash collision.
+As more items get added, the bit array fills up with 1s, and the chance
+that an absent item's `k` positions all happen to already be set — a
+false positive — climbs. There's no false-positive-free way around this;
+it's the price of representing unbounded set membership in fixed space.
+
+The false-positive rate is well-approximated by:
+
+```
+p ≈ (1 − e^(−kn/m))^k
+```
+
+where `n` is the number of inserted items, `m` the bit array size, and `k`
+the hash count. Three levers, one trade-off:
+
+- **Bigger `m`** (more bits) → lower `p`, more memory.
+- **More items `n`** → higher `p` for a fixed `m` — the filter degrades as
+  it fills up, it doesn't fail outright.
+- **Tuning `k`** — too few hashes under-spreads the bits, too many
+  saturates the array faster than it needs to. The optimum is
+  `k ≈ (m/n) · ln(2)`, which is where most implementations land.
+
+## Why not just use a hash set?
+
+<table>
+  <thead>
+    <tr>
+      <th></th>
+      <th>Hash set</th>
+      <th>Bloom filter</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Space per item</td>
+      <td>Full key (+ overhead)</td>
+      <td>A handful of bits, regardless of key size</td>
+    </tr>
+    <tr>
+      <td>False positives</td>
+      <td>None</td>
+      <td>Tunable, non-zero</td>
+    </tr>
+    <tr>
+      <td>False negatives</td>
+      <td>None</td>
+      <td>Never</td>
+    </tr>
+    <tr>
+      <td>Deletion</td>
+      <td>O(1)</td>
+      <td>Not supported (unsetting a bit can un-add other items)</td>
+    </tr>
+    <tr>
+      <td>Stores the actual keys</td>
+      <td>Yes</td>
+      <td>No — can't enumerate or retrieve them</td>
+    </tr>
+  </tbody>
+</table>
+
+That last row matters as much as the space savings: a Bloom filter can
+never tell you *what's* in the set, only whether a specific query might
+be. It's a pure membership oracle, not a container.
+
+## Where the "probably" is good enough
+
+- **Chrome's Safe Browsing** used to ship a Bloom filter of known-malicious
+  URLs to the client: a lookup that says "definitely safe" skips a network
+  call entirely; a "might be unsafe" hit triggers one extra round-trip to
+  double-check against the real list. Correctness is never compromised —
+  it just filters out most of the negative case cheaply.
+- **Cassandra, HBase, and other LSM-tree databases** keep a Bloom filter
+  per on-disk file. Before doing an expensive disk read to check if a key
+  exists in that file, they check the filter first — a "definitely not
+  here" answer skips the disk seek entirely, which is the whole reason
+  reads on LSM stores stay fast despite data being spread across many
+  files.
+- **CDNs and caches** use them to avoid caching one-hit-wonders: only
+  promote a resource into the expensive cache tier once the filter has
+  seen it before, filtering out the long tail of URLs that are requested
+  exactly once.
+
+In every case, the pattern is the same: use the Bloom filter as a cheap
+**pre-check** in front of something expensive (a disk read, a network
+call, a cache write), and let it save you from doing that expensive thing
+whenever it can answer "definitely not" with certainty.
+
+## Wrap-up
+
+A Bloom filter trades perfect accuracy for constant, tiny memory: it can
+say "definitely not in the set" with full confidence, and "probably in the
+set" with a tunable error rate — never the reverse. That one-sided
+guarantee is exactly what you want as a gatekeeper in front of an
+expensive lookup, which is why it shows up quietly inside browsers,
+databases, and caches wherever "skip the expensive check most of the time"
+is the goal.

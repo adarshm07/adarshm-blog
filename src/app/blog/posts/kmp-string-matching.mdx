@@ -1,0 +1,181 @@
+---
+title: "KMP String Matching: Search Without Backtracking"
+publishedAt: "2026-07-16"
+summary: "The naive substring search re-checks characters it's already seen and degrades to O(nm) on adversarial input. The Knuth-Morris-Pratt algorithm precomputes a failure table so the search pointer never moves backward, guaranteeing O(n + m)."
+tags: "DSA"
+---
+
+`text.includes(pattern)` looks like a solved problem, but the naive
+algorithm underneath a straightforward implementation has a worst case
+that's easy to trigger by accident: searching for `"aaaaab"` inside
+`"aaaaaaaaaaaaaaaaaaaaaab"` re-scans huge overlapping stretches of the
+text on every failed attempt. The **Knuth-Morris-Pratt (KMP)** algorithm
+fixes this with one idea: when a match fails partway through, use what you
+already learned about the pattern to skip ahead in the text — never
+re-check a character you've already matched.
+
+## Why the naive approach backtracks
+
+The obvious algorithm tries every starting position in the text, and at
+each one, compares characters until a mismatch:
+
+```javascript
+function naiveSearch(text, pattern) {
+  const n = text.length, m = pattern.length;
+  for (let i = 0; i <= n - m; i++) {
+    let j = 0;
+    while (j < m && text[i + j] === pattern[j]) j++;
+    if (j === m) return i; // full match
+  }
+  return -1;
+}
+```
+
+The waste is in what happens on a mismatch: the outer loop advances `i` by
+just **one**, then the inner loop starts comparing from `j = 0` again —
+re-examining text characters that were already confirmed to match the
+pattern's prefix on the previous attempt. On pathological inputs (long
+runs of a repeated character followed by a near-miss), this degrades to
+O(n·m).
+
+## The insight: the pattern tells you where to resume
+
+Say you're matching pattern `"ABABC"` against the text and you've matched
+`"ABAB"` before hitting a mismatch on the 5th character. The naive
+algorithm would restart the whole comparison one position to the right.
+But look at what you already matched: `"ABAB"` has a prefix (`"AB"`) that
+is also a **suffix** of what matched so far. That means the text you just
+scanned already contains `"AB"` positioned exactly where the pattern's
+next attempt would need it — so instead of re-comparing those two
+characters, jump straight to comparing from that point.
+
+This is exactly what KMP precomputes once per pattern, independent of the
+text: for every prefix of the pattern, the length of the longest proper
+prefix that is also a suffix of it. That table is usually called the
+**LPS array** (Longest Proper Prefix which is also Suffix) or the failure
+function.
+
+```javascript
+function buildLPS(pattern) {
+  const m = pattern.length;
+  const lps = new Array(m).fill(0);
+  let len = 0; // length of the current matching prefix-suffix
+  let i = 1;
+
+  while (i < m) {
+    if (pattern[i] === pattern[len]) {
+      lps[i++] = ++len;
+    } else if (len > 0) {
+      len = lps[len - 1]; // fall back to the next-best prefix-suffix, don't reset to 0
+    } else {
+      lps[i++] = 0;
+    }
+  }
+
+  return lps;
+}
+
+buildLPS("ABABC"); // → [0, 0, 1, 2, 0]
+```
+
+Read `lps[i]` as "if the match fails right after matching `pattern[0..i]`,
+resume comparing at `pattern[lps[i]]` instead of `pattern[0]`" — that's
+the entire skip mechanism.
+
+## The search: the text pointer never goes backward
+
+With the LPS table built, the search itself uses it on every mismatch
+instead of restarting:
+
+```javascript
+function kmpSearch(text, pattern) {
+  const n = text.length, m = pattern.length;
+  if (m === 0) return 0;
+  const lps = buildLPS(pattern);
+
+  let i = 0; // text pointer
+  let j = 0; // pattern pointer
+  const matches = [];
+
+  while (i < n) {
+    if (text[i] === pattern[j]) {
+      i++;
+      j++;
+      if (j === m) {
+        matches.push(i - j); // found a match starting here
+        j = lps[j - 1];      // keep searching for overlapping matches
+      }
+    } else if (j > 0) {
+      j = lps[j - 1];        // fall back using the table — i never decreases
+    } else {
+      i++;                   // no partial match to fall back to
+    }
+  }
+
+  return matches;
+}
+```
+
+The property that makes this O(n + m): `i` only ever increases. On a
+mismatch, only `j` (the pattern pointer) falls back, using the
+precomputed table instead of scanning the text again — the text is read
+left to right exactly once.
+
+## Complexity
+
+<table>
+  <thead>
+    <tr>
+      <th>Algorithm</th>
+      <th>Time</th>
+      <th>Space</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Naive search</td>
+      <td>O(n·m) worst case</td>
+      <td>O(1)</td>
+    </tr>
+    <tr>
+      <td>KMP</td>
+      <td>O(n + m) guaranteed</td>
+      <td>O(m) for the LPS table</td>
+    </tr>
+    <tr>
+      <td>Rabin-Karp (rolling hash)</td>
+      <td>O(n + m) average, O(n·m) worst case</td>
+      <td>O(1)</td>
+    </tr>
+  </tbody>
+</table>
+
+**Rabin-Karp** is the other common answer to this problem: hash the
+pattern and every window of the text, comparing hashes instead of raw
+characters, updating the hash incrementally (a rolling hash) as the window
+slides. It's simpler to implement and generalizes nicely to searching for
+*multiple* patterns at once, but a hash collision degrades it back to
+character-by-character comparison, so its worst case isn't as tight as
+KMP's guarantee.
+
+## Where it matters
+
+- **Text editors and `grep`-like tools** — reliable linear-time substring
+  search regardless of input shape.
+- **Network intrusion detection (DPI)** — scanning packet payloads for
+  known malicious byte signatures needs a worst-case guarantee, since an
+  attacker can craft adversarial input specifically to trigger the naive
+  algorithm's slow path.
+- **Bioinformatics** — searching for a DNA/protein motif inside a genome,
+  where sequences are long, highly repetitive, and exactly the kind of
+  input that makes the naive algorithm's worst case realistic rather than
+  theoretical.
+
+## Wrap-up
+
+The naive substring search wastes work by discarding everything it
+learned on a failed attempt and starting over one position later. KMP
+fixes that by precomputing, for every prefix of the pattern, how much of a
+partial match can be reused after a mismatch — so the text pointer never
+moves backward and the whole search finishes in O(n + m), regardless of
+how adversarial the input is.

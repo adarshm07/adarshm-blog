@@ -106,17 +106,17 @@ export const curriculum: CurriculumPhase[] = [
         note: 'A hash map and a doubly linked list working together for O(1) everything — a capstone for phases 1–3.',
       },
       {
-        title: 'Backtracking and pruning',
+        slug: 'backtracking-explained',
         difficulty: 'Advanced',
         note: 'Systematic search over choice trees: permutations, subsets, and constraint problems.',
       },
       {
-        title: 'Union-Find (disjoint sets)',
+        slug: 'union-find-disjoint-set',
         difficulty: 'Advanced',
         note: 'Near-constant-time connectivity queries, and the trick behind Kruskal’s algorithm.',
       },
       {
-        title: 'Shortest paths: Dijkstra and friends',
+        slug: 'dijkstra-shortest-paths',
         difficulty: 'Advanced',
         note: 'Weighted graphs — where BFS stops working and priority queues take over.',
       },
