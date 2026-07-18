@@ -1,0 +1,116 @@
+---
+title: "Longest Substring Without Repeating Characters"
+pattern: "sliding-window"
+order: 202
+difficulty: "Medium"
+leetcode: "https://leetcode.com/problems/longest-substring-without-repeating-characters/"
+gfg: "https://www.geeksforgeeks.org/dsa/length-of-the-longest-substring-without-repeating-characters/"
+summary: "The classic variable-size window: grow the right edge greedily, shrink the left edge only when a character repeats."
+---
+
+## The problem
+
+Given a string, find the length of the **longest substring** (contiguous!) that has no repeating characters.
+
+**Example:** `s = "abcabcbb"`
+
+The answer is `3` — the substring `"abc"`. Note that `"abca"` breaks the rule because `a` repeats, and something like `"abcb..."` can never recover once `b` repeats until we drop the earlier `b`.
+
+Unlike the fixed-window problem, the window size here changes: we want the *largest* window that stays valid (all characters unique).
+
+## Approach 1 — Check every substring
+
+For each pair of start/end positions, check uniqueness with a set.
+
+```js
+function lengthOfLongestSubstring(s) {
+  let best = 0
+  for (let i = 0; i < s.length; i++) {
+    const seen = new Set()
+    for (let j = i; j < s.length; j++) {
+      if (seen.has(s[j])) break
+      seen.add(s[j])
+      best = Math.max(best, j - i + 1)
+    }
+  }
+  return best
+}
+```
+
+**Time:** O(n²). **Space:** O(min(n, alphabet)). The inner loop restarts from scratch for every `i`, re-scanning characters we've already looked at.
+
+## Approach 2 — Sliding window with a Set
+
+Keep a window `[left, right]` containing no duplicates. Move `right` forward one character at a time; if the new character already exists in the window, shrink from the left until it doesn't.
+
+```js
+function lengthOfLongestSubstring(s) {
+  const window = new Set()
+  let left = 0
+  let best = 0
+
+  for (let right = 0; right < s.length; right++) {
+    while (window.has(s[right])) {
+      window.delete(s[left])
+      left++
+    }
+    window.add(s[right])
+    best = Math.max(best, right - left + 1)
+  }
+  return best
+}
+```
+
+**Time:** O(n) — `left` and `right` each move forward at most n times total. **Space:** O(min(n, alphabet)).
+
+## Approach 3 — Jump the left pointer with a map
+
+Instead of shrinking one step at a time, remember each character's last index and jump `left` directly past the previous occurrence.
+
+```js
+function lengthOfLongestSubstring(s) {
+  const lastIndex = new Map()
+  let left = 0
+  let best = 0
+
+  for (let right = 0; right < s.length; right++) {
+    const ch = s[right]
+    if (lastIndex.has(ch) && lastIndex.get(ch) >= left) {
+      left = lastIndex.get(ch) + 1
+    }
+    lastIndex.set(ch, right)
+    best = Math.max(best, right - left + 1)
+  }
+  return best
+}
+```
+
+Same O(n) time, but each character is now processed exactly once with no inner loop. The `>= left` check matters: an old occurrence *behind* the window must not drag `left` backward.
+
+## Dry run
+
+Approach 3 on `s = "abcabcbb"`:
+
+<Table
+  data={{
+    headers: ['right', 'Char', 'Seen before in window?', 'left', 'Window', 'Best'],
+    rows: [
+      ['0', 'a', 'no', '0', 'a', '1'],
+      ['1', 'b', 'no', '0', 'ab', '2'],
+      ['2', 'c', 'no', '0', 'abc', '3'],
+      ['3', 'a', 'yes (index 0)', '1', 'bca', '3'],
+      ['4', 'b', 'yes (index 1)', '2', 'cab', '3'],
+      ['5', 'c', 'yes (index 2)', '3', 'abc', '3'],
+      ['6', 'b', 'yes (index 4)', '5', 'cb', '3'],
+      ['7', 'b', 'yes (index 6)', '7', 'b', '3'],
+    ],
+  }}
+/>
+
+The window slides across the string once, and the best length it ever reaches is `3`.
+
+## Edge cases
+
+- Empty string → `0` (the loop never runs).
+- All identical characters `"bbbb"` → `1`; the window never grows past one character.
+- A string of all-unique characters → the answer is the whole length; the `while`/jump never fires.

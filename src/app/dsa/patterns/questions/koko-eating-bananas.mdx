@@ -1,0 +1,88 @@
+---
+title: "Koko Eating Bananas"
+pattern: "binary-search"
+order: 502
+difficulty: "Medium"
+leetcode: "https://leetcode.com/problems/koko-eating-bananas/"
+gfg: "https://www.geeksforgeeks.org/dsa/koko-eating-bananas/"
+summary: "Binary search on the answer, not the array — when a yes/no condition flips from false to true exactly once, you can search the answer space."
+---
+
+## The problem
+
+Koko has `piles` of bananas and `h` hours. Each hour she picks one pile and eats up to `k` bananas from it (a pile smaller than `k` still consumes the whole hour). Find the **minimum eating speed `k`** that finishes all piles within `h` hours.
+
+**Example:** `piles = [3, 6, 7, 11]`, `h = 8` → answer `4`.
+
+At speed 4, the piles take `ceil(3/4) + ceil(6/4) + ceil(7/4) + ceil(11/4) = 1 + 2 + 2 + 3 = 8` hours — exactly in budget. At speed 3 it would take `1 + 2 + 3 + 4 = 10` hours — too slow.
+
+There's no array to search here. The trick is to notice **monotonicity**: if speed `k` finishes in time, every faster speed does too. So the predicate "can finish at speed k" looks like `false, false, ..., false, true, true, ..., true` — and binary search can find the first `true`.
+
+## Approach 1 — Try every speed
+
+Check `k = 1, 2, 3, ...` until one works.
+
+```js
+function minEatingSpeed(piles, h) {
+  const hoursAt = (k) =>
+    piles.reduce((sum, pile) => sum + Math.ceil(pile / k), 0)
+
+  let k = 1
+  while (hoursAt(k) > h) k++
+  return k
+}
+```
+
+**Time:** O(max(piles) · n) — with piles up to 10⁹ bananas, this is billions of checks. Correct but far too slow.
+
+## Approach 2 — Binary search on the answer
+
+The answer lies between `1` and `max(piles)` (eating faster than the biggest pile changes nothing). Binary search that range for the first speed that finishes in time.
+
+```js
+function minEatingSpeed(piles, h) {
+  const hoursAt = (k) =>
+    piles.reduce((sum, pile) => sum + Math.ceil(pile / k), 0)
+
+  let lo = 1
+  let hi = Math.max(...piles)
+
+  while (lo < hi) {
+    const mid = lo + Math.floor((hi - lo) / 2)
+    if (hoursAt(mid) <= h) {
+      hi = mid        // mid works — the answer is mid or something smaller
+    } else {
+      lo = mid + 1    // mid too slow — answer must be bigger
+    }
+  }
+  return lo
+}
+```
+
+**Time:** O(n · log(max pile)). **Space:** O(1).
+
+Note the template difference from plain binary search: we never return early. When `mid` *works* we keep it in the window (`hi = mid`) because it might be the minimum; the loop runs until the window collapses to a single value.
+
+## Dry run
+
+`piles = [3, 6, 7, 11]`, `h = 8`. Search space `[1, 11]`.
+
+<Table
+  data={{
+    headers: ['Step', 'lo', 'hi', 'mid', 'Hours at mid', 'Fits in 8?', 'Move'],
+    rows: [
+      ['1', '1', '11', '6', '1+1+2+2 = 6', 'yes', 'hi = 6'],
+      ['2', '1', '6', '3', '1+2+3+4 = 10', 'no', 'lo = 4'],
+      ['3', '4', '6', '5', '1+2+2+3 = 8', 'yes', 'hi = 5'],
+      ['4', '4', '5', '4', '1+2+2+3 = 8', 'yes', 'hi = 4'],
+      ['5', 'lo = hi = 4', '—', '—', '—', '—', 'Answer: 4'],
+    ],
+  }}
+/>
+
+## Edge cases
+
+- `h === piles.length` → she has exactly one hour per pile → answer is `max(piles)`.
+- One pile, many hours: `piles = [1000000]`, `h = 1000000` → answer 1; the log factor keeps this instant.
+- Use `Math.ceil(pile / k)` — integer-dividing and adding one "when there's a remainder" is where off-by-one bugs creep in.
+- Same skeleton solves Capacity to Ship Packages (LC 1011) and Split Array Largest Sum (LC 410): define `feasible(x)`, confirm it's monotonic, binary search the answer space.

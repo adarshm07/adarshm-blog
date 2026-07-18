@@ -1,0 +1,92 @@
+---
+title: "Two Sum II — Input Array Is Sorted"
+pattern: "two-pointers"
+order: 101
+difficulty: "Easy"
+leetcode: "https://leetcode.com/problems/two-sum-ii-input-array-is-sorted/"
+gfg: "https://www.geeksforgeeks.org/dsa/two-pointers-technique/"
+summary: "The cleanest introduction to two pointers — use the sorted order to walk in from both ends instead of checking every pair."
+---
+
+## The problem
+
+You're given a **sorted** array of numbers and a target. Return the 1-indexed positions of the two numbers that add up to the target. Exactly one solution exists, and you can't use the same element twice.
+
+**Example:** `numbers = [1, 3, 4, 6, 8, 11]`, `target = 10`
+
+The answer is `[3, 4]` because `numbers[3] = 4` and `numbers[4] = 6` (1-indexed) add up to `10`.
+
+The word to notice is *sorted*. The plain Two Sum problem needs a hash map, but sorted order gives us something better: from any pair, we know which direction to move to make the sum bigger or smaller.
+
+## Approach 1 — Brute force
+
+Check every pair. For each element, scan everything after it.
+
+```js
+function twoSum(numbers, target) {
+  for (let i = 0; i < numbers.length; i++) {
+    for (let j = i + 1; j < numbers.length; j++) {
+      if (numbers[i] + numbers[j] === target) {
+        return [i + 1, j + 1]
+      }
+    }
+  }
+  return []
+}
+```
+
+**Time:** O(n²) — every pair. **Space:** O(1).
+
+This works but completely ignores the fact that the array is sorted.
+
+## Approach 2 — Two pointers
+
+Put one pointer at each end and look at the sum:
+
+- Sum **too big** → we need a smaller number → move `right` inward.
+- Sum **too small** → we need a bigger number → move `left` inward.
+- Sum **equals target** → done.
+
+Each step safely throws away one element, because sorted order guarantees no valid pair can use it.
+
+```js
+function twoSum(numbers, target) {
+  let left = 0
+  let right = numbers.length - 1
+
+  while (left < right) {
+    const sum = numbers[left] + numbers[right]
+    if (sum === target) return [left + 1, right + 1]
+    if (sum < target) left++
+    else right--
+  }
+  return []
+}
+```
+
+**Time:** O(n) — the pointers only ever move toward each other. **Space:** O(1).
+
+## Dry run
+
+`numbers = [1, 3, 4, 6, 8, 11]`, `target = 10`:
+
+<Table
+  data={{
+    headers: ['Step', 'left', 'right', 'Sum', 'Decision'],
+    rows: [
+      ['1', '0 (1)', '5 (11)', '12', 'Too big — move right in'],
+      ['2', '0 (1)', '4 (8)', '9', 'Too small — move left in'],
+      ['3', '1 (3)', '4 (8)', '11', 'Too big — move right in'],
+      ['4', '1 (3)', '3 (6)', '9', 'Too small — move left in'],
+      ['5', '2 (4)', '3 (6)', '10', 'Found — return [3, 4]'],
+    ],
+  }}
+/>
+
+Five comparisons instead of up to fifteen pairs — and the gap grows fast with input size.
+
+## Edge cases
+
+- Negative numbers work unchanged — sorted order is all that matters.
+- Duplicates are fine: if `[3, 3]` sums to the target, `left` and `right` land on the two copies.
+- The `left < right` condition prevents using the same element twice.

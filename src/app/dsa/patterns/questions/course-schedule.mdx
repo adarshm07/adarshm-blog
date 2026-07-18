@@ -1,0 +1,113 @@
+---
+title: "Course Schedule"
+pattern: "graphs"
+order: 902
+difficulty: "Medium"
+leetcode: "https://leetcode.com/problems/course-schedule/"
+gfg: "https://www.geeksforgeeks.org/dsa/topological-sorting-indegree-based-solution-kahns-algorithm/"
+summary: "Prerequisites form a directed graph — you can finish all courses exactly when that graph has no cycle. Enter topological sort."
+---
+
+## The problem
+
+There are `numCourses` courses labeled `0` to `numCourses - 1`, and a list of pairs `[a, b]` meaning *you must take course `b` before course `a`*. Return whether it's possible to finish all courses.
+
+**Example 1:** `numCourses = 2`, `prerequisites = [[1, 0]]` → `true` (take 0, then 1).
+
+**Example 2:** `numCourses = 2`, `prerequisites = [[1, 0], [0, 1]]` → `false` — each course requires the other. Deadlock.
+
+Model it as a directed graph: an edge `b → a` for each pair. A valid order exists **iff the graph has no cycle** — and finding such an order is called a topological sort.
+
+## Approach 1 — Kahn's algorithm (BFS by in-degree)
+
+A course with **in-degree 0** (no unmet prerequisites) can be taken right now. Take it, which "removes" its outgoing edges, possibly freeing other courses. If we can take all n courses this way, there's no cycle; if we stall, the leftover courses form a cycle.
+
+```js
+function canFinish(numCourses, prerequisites) {
+  const graph = Array.from({ length: numCourses }, () => [])
+  const inDegree = new Array(numCourses).fill(0)
+
+  for (const [course, prereq] of prerequisites) {
+    graph[prereq].push(course)
+    inDegree[course]++
+  }
+
+  const queue = []
+  for (let i = 0; i < numCourses; i++) {
+    if (inDegree[i] === 0) queue.push(i)
+  }
+
+  let taken = 0
+  while (queue.length > 0) {
+    const course = queue.shift()
+    taken++
+    for (const next of graph[course]) {
+      inDegree[next]--
+      if (inDegree[next] === 0) queue.push(next)
+    }
+  }
+  return taken === numCourses
+}
+```
+
+**Time:** O(V + E) — each course enters the queue once, each edge is relaxed once. **Space:** O(V + E) for the adjacency list.
+
+## Approach 2 — DFS cycle detection (three colors)
+
+DFS from every node, tracking each node's state: **unvisited**, **in the current path** (being explored), or **done**. Meeting an "in the current path" node again means we've looped back — a cycle.
+
+```js
+function canFinish(numCourses, prerequisites) {
+  const graph = Array.from({ length: numCourses }, () => [])
+  for (const [course, prereq] of prerequisites) {
+    graph[prereq].push(course)
+  }
+
+  const state = new Array(numCourses).fill(0) // 0 new, 1 in path, 2 done
+
+  function hasCycle(node) {
+    if (state[node] === 1) return true  // back edge — cycle
+    if (state[node] === 2) return false // already fully explored
+    state[node] = 1
+    for (const next of graph[node]) {
+      if (hasCycle(next)) return true
+    }
+    state[node] = 2
+    return false
+  }
+
+  for (let i = 0; i < numCourses; i++) {
+    if (hasCycle(i)) return false
+  }
+  return true
+}
+```
+
+Same O(V + E). The three-state distinction is essential: a plain `visited` boolean can't tell "ancestor in my current path" (cycle) from "explored earlier via another route" (fine).
+
+## Dry run
+
+Kahn's algorithm with `numCourses = 4`, `prerequisites = [[1, 0], [2, 0], [3, 1], [3, 2]]` (edges 0→1, 0→2, 1→3, 2→3):
+
+In-degrees to start: `[0, 1, 1, 2]`.
+
+<Table
+  data={{
+    headers: ['Step', 'Queue', 'Take', 'Edges relaxed', 'In-degrees after', 'taken'],
+    rows: [
+      ['1', '[0]', '0', '1 and 2 drop to 0', '[-, 0, 0, 2]', '1'],
+      ['2', '[1, 2]', '1', '3 drops to 1', '[-, -, 0, 1]', '2'],
+      ['3', '[2]', '2', '3 drops to 0', '[-, -, -, 0]', '3'],
+      ['4', '[3]', '3', 'none', 'all taken', '4'],
+    ],
+  }}
+/>
+
+`taken === 4 === numCourses` → `true`. Add the edge 3→0 and step 1 would find *no* course with in-degree 0 — the queue starts empty, `taken` stays 0, and the answer is `false`.
+
+## Edge cases
+
+- No prerequisites → every in-degree is 0 → trivially `true`.
+- A self-prerequisite `[a, a]` is a 1-node cycle; both approaches catch it.
+- Disconnected groups of courses are fine — the outer loop (or the initial queue fill) covers every component.
+- The follow-up, Course Schedule II, is the same code returning the order in which courses were taken.

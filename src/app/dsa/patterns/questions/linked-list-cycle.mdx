@@ -1,0 +1,85 @@
+---
+title: "Linked List Cycle"
+pattern: "fast-slow-pointers"
+order: 301
+difficulty: "Easy"
+leetcode: "https://leetcode.com/problems/linked-list-cycle/"
+gfg: "https://www.geeksforgeeks.org/dsa/detect-loop-in-a-linked-list/"
+summary: "Floyd's tortoise and hare — detect a cycle with two pointers and zero extra memory, instead of remembering every node you've seen."
+---
+
+## The problem
+
+Given the head of a linked list, return `true` if the list contains a cycle — that is, if following `next` pointers ever revisits a node — and `false` if the list terminates in `null`.
+
+**Example:** `3 → 2 → 0 → -4`, where the `-4` node's `next` points back to the `2` node. This list has a cycle, so the answer is `true`.
+
+The catch: you can't just walk the list and wait for `null`, because in a cyclic list you'll loop forever.
+
+## Approach 1 — Remember visited nodes
+
+Walk the list and store each **node reference** (not value — values can repeat) in a set. Seeing a node twice means a cycle.
+
+```js
+function hasCycle(head) {
+  const visited = new Set()
+  let node = head
+  while (node !== null) {
+    if (visited.has(node)) return true
+    visited.add(node)
+    node = node.next
+  }
+  return false
+}
+```
+
+**Time:** O(n). **Space:** O(n) — the set can grow to hold every node. Correct, but the follow-up asks for constant memory.
+
+## Approach 2 — Floyd's fast & slow pointers
+
+Move `slow` one step and `fast` two steps at a time.
+
+- If the list ends, `fast` hits `null` → no cycle.
+- If there's a cycle, both pointers eventually enter it, and inside the cycle `fast` gains on `slow` by exactly one node per step — so it must land on `slow` rather than skip over it.
+
+```js
+function hasCycle(head) {
+  let slow = head
+  let fast = head
+
+  while (fast !== null && fast.next !== null) {
+    slow = slow.next
+    fast = fast.next.next
+    if (slow === fast) return true
+  }
+  return false
+}
+```
+
+**Time:** O(n) — slow never completes two laps before being caught. **Space:** O(1). Two pointers, nothing else.
+
+## Dry run
+
+List: `3 → 2 → 0 → -4`, with `-4 → 2` closing the cycle.
+
+<Table
+  data={{
+    headers: ['Step', 'slow at', 'fast at', 'Met?'],
+    rows: [
+      ['start', '3', '3', '—'],
+      ['1', '2', '0', 'no'],
+      ['2', '0', '2', 'no'],
+      ['3', '-4', '-4', 'yes — cycle detected'],
+    ],
+  }}
+/>
+
+For a cycle-free list like `1 → 2 → 3 → null`, `fast` would reach `null` on step 2 and the function returns `false`.
+
+## Edge cases
+
+- Empty list or single node with `next = null` → the loop guard fails immediately → `false`.
+- Single node pointing to itself → step 1 puts both pointers on that node → `true`.
+- The loop condition checks `fast` **and** `fast.next` — dropping either causes a null-pointer error on odd-length lists.
+
+**Bonus:** to find *where* the cycle starts (Linked List Cycle II), reset one pointer to `head` after the meeting and advance both one step at a time; they meet at the cycle's entry node.

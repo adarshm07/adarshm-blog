@@ -1,0 +1,97 @@
+---
+title: "Binary Search"
+pattern: "binary-search"
+order: 501
+difficulty: "Easy"
+leetcode: "https://leetcode.com/problems/binary-search/"
+gfg: "https://www.geeksforgeeks.org/dsa/binary-search/"
+summary: "The template everything else builds on — get the loop condition, midpoint, and boundary updates right once, and reuse them forever."
+---
+
+## The problem
+
+Given a **sorted** array of distinct integers and a target, return the target's index, or `-1` if it's not present — in O(log n) time.
+
+**Example:** `nums = [-1, 0, 3, 5, 9, 12]`, `target = 9` → answer `4`.
+
+The O(log n) requirement is the giveaway: each comparison must eliminate half the remaining candidates.
+
+## Approach 1 — Linear scan
+
+```js
+function search(nums, target) {
+  for (let i = 0; i < nums.length; i++) {
+    if (nums[i] === target) return i
+  }
+  return -1
+}
+```
+
+**Time:** O(n). Fine for tiny arrays, but it ignores the sorted order entirely — every comparison eliminates just one candidate.
+
+## Approach 2 — Binary search
+
+Keep a window `[lo, hi]` that must contain the target if it exists. Compare the middle element:
+
+- `nums[mid] === target` → found.
+- `nums[mid] < target` → target must be right of mid → `lo = mid + 1`.
+- `nums[mid] > target` → target must be left of mid → `hi = mid - 1`.
+
+```js
+function search(nums, target) {
+  let lo = 0
+  let hi = nums.length - 1
+
+  while (lo <= hi) {
+    const mid = lo + Math.floor((hi - lo) / 2)
+    if (nums[mid] === target) return mid
+    if (nums[mid] < target) lo = mid + 1
+    else hi = mid - 1
+  }
+  return -1
+}
+```
+
+**Time:** O(log n). **Space:** O(1).
+
+Three details carry all the correctness:
+
+1. **`lo <= hi`**, not `lo < hi` — with `<` you'd skip checking the final one-element window.
+2. **`mid ± 1`**, never `mid` — mid has been checked; keeping it in the window can loop forever.
+3. **`lo + (hi - lo) / 2`** — same value as `(lo + hi) / 2` but overflow-safe in fixed-width languages (harmless habit in JavaScript).
+
+## Dry run
+
+`nums = [-1, 0, 3, 5, 9, 12]`, `target = 9`:
+
+<Table
+  data={{
+    headers: ['Step', 'lo', 'hi', 'mid', 'nums[mid]', 'Decision'],
+    rows: [
+      ['1', '0', '5', '2', '3', '3 < 9 → search right half, lo = 3'],
+      ['2', '3', '5', '4', '9', 'Found → return 4'],
+    ],
+  }}
+/>
+
+And a **miss**, `target = 2`:
+
+<Table
+  data={{
+    headers: ['Step', 'lo', 'hi', 'mid', 'nums[mid]', 'Decision'],
+    rows: [
+      ['1', '0', '5', '2', '3', '3 > 2 → hi = 1'],
+      ['2', '0', '1', '0', '-1', '-1 < 2 → lo = 1'],
+      ['3', '1', '1', '1', '0', '0 < 2 → lo = 2'],
+      ['4', '2 > hi = 1', '—', '—', '—', 'Window empty → return -1'],
+    ],
+  }}
+/>
+
+Two to four steps for six elements; a million elements would take at most twenty.
+
+## Edge cases
+
+- Empty array → `hi = -1`, loop never runs, return `-1`.
+- Target smaller/larger than everything → window shrinks off the left/right edge cleanly.
+- Duplicates: this template returns *an* occurrence, not necessarily the first — finding first/last occurrence is the lower/upper-bound variant (LeetCode 34).

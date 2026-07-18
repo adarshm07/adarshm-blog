@@ -1,0 +1,103 @@
+---
+title: "Valid Parentheses"
+pattern: "stack"
+order: 601
+difficulty: "Easy"
+leetcode: "https://leetcode.com/problems/valid-parentheses/"
+gfg: "https://www.geeksforgeeks.org/dsa/check-for-balanced-parentheses-in-an-expression/"
+summary: "The purest stack problem: every closer must match the most recently opened bracket — last in, first out."
+---
+
+## The problem
+
+Given a string containing only `()[]{}`, decide whether it's valid: every opener is closed by the same type of bracket, and brackets close in the correct order.
+
+**Examples:**
+
+- `"()[]{}"` → `true`
+- `"([{}])"` → `true` — nesting is fine
+- `"(]"` → `false` — wrong type
+- `"([)]"` → `false` — right types, wrong **order**: the `(` must wait until `[` closes
+
+The order requirement is the key. When we hit a closing bracket, the opener it must match is the **most recent unclosed one** — "most recent first" is exactly what a stack gives you.
+
+## Approach 1 — Repeatedly delete matched pairs
+
+Any valid string must contain an innermost pair like `()`, `[]`, or `{}` sitting adjacent. Delete matched pairs until nothing changes; valid strings shrink to empty.
+
+```js
+function isValid(s) {
+  let prev = null
+  while (prev !== s) {
+    prev = s
+    s = s.replaceAll('()', '').replaceAll('[]', '').replaceAll('{}', '')
+  }
+  return s.length === 0
+}
+```
+
+**Time:** O(n²) — each pass scans the string and removes as little as one pair. A neat mental model, not a real solution.
+
+## Approach 2 — Stack
+
+Push every opener. For a closer, the top of the stack must be its partner — pop it. Anything else (wrong partner, or an empty stack) means invalid. At the end, the stack must be empty.
+
+```js
+function isValid(s) {
+  const stack = []
+  const pairs = { ')': '(', ']': '[', '}': '{' }
+
+  for (const ch of s) {
+    if (ch === '(' || ch === '[' || ch === '{') {
+      stack.push(ch)
+    } else {
+      if (stack.pop() !== pairs[ch]) return false
+    }
+  }
+  return stack.length === 0
+}
+```
+
+**Time:** O(n) — one push or pop per character. **Space:** O(n) worst case (all openers, e.g. `"((((("`).
+
+Note `stack.pop()` on an empty array returns `undefined`, which never equals an opener — so the "closer with nothing open" case falls out of the same comparison for free.
+
+## Dry run
+
+`s = "([)]"` — the tricky wrong-order case:
+
+<Table
+  data={{
+    headers: ['Char', 'Action', 'Stack after'],
+    rows: [
+      ['(', 'opener — push', '('],
+      ['[', 'opener — push', '( ['],
+      [')', 'closer — pop [ but need (', 'mismatch → false'],
+    ],
+  }}
+/>
+
+And `s = "([{}])"` — valid nesting:
+
+<Table
+  data={{
+    headers: ['Char', 'Action', 'Stack after'],
+    rows: [
+      ['(', 'push', '('],
+      ['[', 'push', '( ['],
+      ['{', 'push', '( [ {'],
+      ['}', 'pop { — match', '( ['],
+      [']', 'pop [ — match', '('],
+      [')', 'pop ( — match', '(empty)'],
+    ],
+  }}
+/>
+
+Stack empty at the end → `true`.
+
+## Edge cases
+
+- Empty string → valid (nothing to match).
+- Odd length → always invalid; you can return `false` immediately as a micro-optimization.
+- Leftover openers like `"(("` → matched nothing wrong, but the final `stack.length === 0` check catches them.
+- `"]"` alone → pop on empty stack → `undefined !== '['` → false, no special-casing needed.

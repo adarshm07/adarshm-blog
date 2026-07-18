@@ -1,0 +1,91 @@
+---
+title: "GCD of Two Numbers (Euclid's Algorithm)"
+pattern: "math"
+order: 1203
+difficulty: "Easy"
+leetcode: "https://leetcode.com/problems/find-greatest-common-divisor-of-array/"
+gfg: "https://www.geeksforgeeks.org/dsa/euclidean-algorithms-basic-and-extended/"
+summary: "The oldest algorithm still in daily use — replace the bigger number with a remainder until one hits zero."
+---
+
+## The problem
+
+Compute the **greatest common divisor** of two non-negative integers — the largest number that divides both. It's the building block behind fraction reduction, LCM, GCD-of-array problems (like the linked LeetCode one), and rotation tricks.
+
+**Example:** `gcd(48, 18) = 6`, since 6 divides both and nothing larger does.
+
+## Approach 1 — Try every candidate
+
+```js
+function gcd(a, b) {
+  let best = 1
+  for (let d = 1; d <= Math.min(a, b); d++) {
+    if (a % d === 0 && b % d === 0) best = d
+  }
+  return best
+}
+```
+
+**Time:** O(min(a, b)). Fine for small inputs, useless for 18-digit numbers.
+
+## Approach 2 — Euclid's algorithm
+
+The insight (circa 300 BC): **any common divisor of `a` and `b` also divides `a mod b`** — because `a mod b = a - k·b` for some integer k. So the pair `(a, b)` and the pair `(b, a mod b)` have exactly the same set of common divisors, hence the same GCD. Shrink until one number becomes 0; the other is the answer.
+
+```js
+function gcd(a, b) {
+  while (b !== 0) {
+    ;[a, b] = [b, a % b]
+  }
+  return a
+}
+```
+
+Or recursively, closer to how it's usually stated:
+
+```js
+function gcd(a, b) {
+  return b === 0 ? a : gcd(b, a % b)
+}
+```
+
+**Time:** O(log min(a, b)) — the remainder at least halves every *two* steps (worst case: consecutive Fibonacci numbers). **Space:** O(1) iterative.
+
+## Dry run
+
+`gcd(48, 18)`:
+
+<Table
+  data={{
+    headers: ['Step', 'a', 'b', 'a mod b'],
+    rows: [
+      ['1', '48', '18', '48 mod 18 = 12'],
+      ['2', '18', '12', '18 mod 12 = 6'],
+      ['3', '12', '6', '12 mod 6 = 0'],
+      ['4', '6', '0', 'b = 0 → answer 6'],
+    ],
+  }}
+/>
+
+Three modulo operations. The brute-force loop would have tested 18 candidates — and for 12-digit inputs the gap becomes billions vs. about 50.
+
+## Using it: LCM and GCD of an array
+
+The two classic one-liners built on top:
+
+```js
+// lcm·gcd = a·b — divide FIRST to avoid overflow in fixed-width languages
+const lcm = (a, b) => (a / gcd(a, b)) * b
+
+// GCD is associative — fold it across the array
+const gcdOfArray = (nums) => nums.reduce((acc, x) => gcd(acc, x))
+```
+
+The linked LeetCode problem (GCD of smallest and largest array element) is just `gcd(Math.min(...nums), Math.max(...nums))`.
+
+## Edge cases
+
+- `gcd(a, 0) = a` — the loop's exit condition encodes this convention.
+- `gcd(0, 0)` is conventionally 0; the code returns that naturally.
+- Order doesn't matter: `gcd(18, 48)` spends its first step swapping into `(48 mod 18)` territory anyway.
+- Negative inputs: take absolute values first — a GCD is defined as non-negative.

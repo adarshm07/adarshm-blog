@@ -1,0 +1,97 @@
+---
+title: "Happy Number"
+pattern: "fast-slow-pointers"
+order: 302
+difficulty: "Easy"
+leetcode: "https://leetcode.com/problems/happy-number/"
+gfg: "https://www.geeksforgeeks.org/dsa/happy-number/"
+summary: "Fast & slow pointers without a linked list — any process that feeds a value back into itself forms an implicit chain you can cycle-detect."
+---
+
+## The problem
+
+A number is **happy** if repeatedly replacing it with the sum of the squares of its digits eventually reaches `1`. If the process loops forever without hitting `1`, the number is unhappy. Return whether `n` is happy.
+
+**Example:** `n = 19` → `1² + 9² = 82` → `8² + 2² = 68` → `6² + 8² = 100` → `1² + 0² + 0² = 1`. So `19` is happy.
+
+An unhappy number like `2` falls into the famous cycle `4 → 16 → 37 → 58 → 89 → 145 → 42 → 20 → 4 → ...` and never reaches `1`.
+
+The insight: each number has exactly one successor, so the process traces a linked-list-shaped chain — and "never reaches 1" means "the chain has a cycle". That's the same problem as Linked List Cycle.
+
+First, the shared helper:
+
+```js
+function sumOfSquaredDigits(n) {
+  let sum = 0
+  while (n > 0) {
+    const digit = n % 10
+    sum += digit * digit
+    n = Math.floor(n / 10)
+  }
+  return sum
+}
+```
+
+## Approach 1 — Track seen values in a set
+
+Iterate, and stop when we hit `1` (happy) or a repeated value (cycle → unhappy).
+
+```js
+function isHappy(n) {
+  const seen = new Set()
+  while (n !== 1 && !seen.has(n)) {
+    seen.add(n)
+    n = sumOfSquaredDigits(n)
+  }
+  return n === 1
+}
+```
+
+**Time:** effectively O(log n) per step, bounded chain length. **Space:** O(number of values seen) for the set.
+
+## Approach 2 — Floyd's fast & slow pointers
+
+No set needed. Run `slow` one step and `fast` two steps along the implicit chain. If they meet at `1`, happy; if they meet anywhere else, we're inside a cycle.
+
+```js
+function isHappy(n) {
+  let slow = n
+  let fast = sumOfSquaredDigits(n)
+
+  while (fast !== 1 && slow !== fast) {
+    slow = sumOfSquaredDigits(slow)
+    fast = sumOfSquaredDigits(sumOfSquaredDigits(fast))
+  }
+  return fast === 1
+}
+```
+
+**Time:** same order as approach 1. **Space:** O(1) — this is the reason to know the trick.
+
+## Dry run
+
+`n = 2`, whose chain is `2 → 4 → 16 → 37 → 58 → 89 → 145 → 42 → 20 → 4 → ...`
+
+<Table
+  data={{
+    headers: ['Step', 'slow', 'fast', 'Note'],
+    rows: [
+      ['start', '2', '4', 'slow moves 1 link, fast moves 2'],
+      ['1', '4', '37', ''],
+      ['2', '16', '89', ''],
+      ['3', '37', '42', ''],
+      ['4', '58', '4', 'fast has lapped into the cycle'],
+      ['5', '89', '37', ''],
+      ['6', '145', '89', ''],
+      ['7', '42', '42', 'Met at 42 ≠ 1 → unhappy'],
+    ],
+  }}
+/>
+
+For `n = 19`, `fast` reaches `1` after two steps (`19 → 82 → 68 → 100 → 1` chain, fast jumps two at a time) and the loop exits with `fast === 1` → happy.
+
+## Edge cases
+
+- `n = 1` → the loop guard `fast !== 1` fails immediately → `true`.
+- Why can't the chain grow forever instead of cycling? A 3-digit number maps to at most `3 × 81 = 243`, so every chain is eventually trapped below 244 — with finitely many values, it must repeat.
+- The same two-pointer idea works for any "apply f repeatedly, detect a loop" problem — see also Find the Duplicate Number (LeetCode 287).

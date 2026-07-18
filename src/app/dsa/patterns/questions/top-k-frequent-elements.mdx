@@ -1,0 +1,104 @@
+---
+title: "Top K Frequent Elements"
+pattern: "heap-top-k"
+order: 702
+difficulty: "Medium"
+leetcode: "https://leetcode.com/problems/top-k-frequent-elements/"
+gfg: "https://www.geeksforgeeks.org/dsa/find-k-numbers-occurrences-given-array/"
+summary: "Count with a map, then pick the top k — by sorting, by heap, or in O(n) with the bucket trick."
+---
+
+## The problem
+
+Given an integer array and `k`, return the `k` most frequent elements (any order; the answer is guaranteed unique).
+
+**Example:** `nums = [1, 1, 1, 2, 2, 3]`, `k = 2` → answer `[1, 2]` (1 appears 3 times, 2 appears twice, 3 once).
+
+Every approach starts the same way — count frequencies with a hash map. The approaches differ in how they extract the top k from those counts.
+
+```js
+function countFrequencies(nums) {
+  const freq = new Map()
+  for (const num of nums) {
+    freq.set(num, (freq.get(num) ?? 0) + 1)
+  }
+  return freq
+}
+```
+
+## Approach 1 — Count, then sort by frequency
+
+```js
+function topKFrequent(nums, k) {
+  const freq = countFrequencies(nums)
+  return [...freq.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, k)
+    .map(([num]) => num)
+}
+```
+
+**Time:** O(u log u) where u = number of distinct values. **Space:** O(u). Simple and usually what you'd write in production — but sorting *all* distinct values is more than the question asks for.
+
+## Approach 2 — Min-heap of size k
+
+Same trick as Kth Largest: stream over the `(value, count)` pairs keeping a min-heap (ordered by count) of size k. Each pair costs O(log k) instead of O(log u).
+
+**Time:** O(u log k). Worth it when k is much smaller than the number of distinct values, or when counts arrive as a stream.
+
+## Approach 3 — Bucket sort by count (O(n))
+
+A frequency can only be `1` to `n`. So make `n + 1` buckets, where `buckets[c]` holds every value that occurs exactly `c` times — then read buckets from the high end until you've collected k values. No comparisons, no log factor.
+
+```js
+function topKFrequent(nums, k) {
+  const freq = countFrequencies(nums)
+
+  const buckets = Array.from({ length: nums.length + 1 }, () => [])
+  for (const [num, count] of freq) {
+    buckets[count].push(num)
+  }
+
+  const result = []
+  for (let count = buckets.length - 1; count >= 0 && result.length < k; count--) {
+    result.push(...buckets[count])
+  }
+  return result.slice(0, k)
+}
+```
+
+**Time:** O(n). **Space:** O(n). The rare case where you beat the heap — because the "keys" (counts) live in a small known range.
+
+## Dry run
+
+Approach 3 on `nums = [1, 1, 1, 2, 2, 3]`, `k = 2`:
+
+**Step 1 — count:** `1 → 3`, `2 → 2`, `3 → 1`.
+
+**Step 2 — bucket by count** (n = 6, so 7 buckets):
+
+<Table
+  data={{
+    headers: ['Bucket (count)', '0', '1', '2', '3', '4', '5', '6'],
+    rows: [['Values', '—', '3', '2', '1', '—', '—', '—']],
+  }}
+/>
+
+**Step 3 — collect from the top:**
+
+<Table
+  data={{
+    headers: ['Reading bucket', 'Found', 'Result', 'Have k = 2?'],
+    rows: [
+      ['6, 5, 4', 'nothing', '[]', 'no'],
+      ['3', '1', '[1]', 'no'],
+      ['2', '2', '[1, 2]', 'yes — stop'],
+    ],
+  }}
+/>
+
+## Edge cases
+
+- `k` equals the number of distinct values → return everything.
+- One bucket can hold several values (ties): `[1, 1, 2, 2]`, k = 1 — either answer is accepted by the problem, and the final `slice(0, k)` keeps the size right.
+- All elements identical → one non-empty bucket at index n.

@@ -1,0 +1,91 @@
+---
+title: "Count Primes (Sieve of Eratosthenes)"
+pattern: "math"
+order: 1201
+difficulty: "Medium"
+leetcode: "https://leetcode.com/problems/count-primes/"
+gfg: "https://www.geeksforgeeks.org/dsa/sieve-of-eratosthenes/"
+summary: "Checking each number for primality is too slow — the 2,300-year-old sieve crosses out composites in near-linear time."
+---
+
+## The problem
+
+Count the prime numbers **strictly less than** `n`.
+
+**Example:** `n = 20` → answer `8`. The primes below 20 are 2, 3, 5, 7, 11, 13, 17, 19.
+
+## Approach 1 — Test each number individually
+
+A number `x` is prime if nothing from 2 to `√x` divides it (a divisor pair always has one member at or below the square root).
+
+```js
+function isPrime(x) {
+  if (x < 2) return false
+  for (let d = 2; d * d <= x; d++) {
+    if (x % d === 0) return false
+  }
+  return true
+}
+
+function countPrimes(n) {
+  let count = 0
+  for (let x = 2; x < n; x++) {
+    if (isPrime(x)) count++
+  }
+  return count
+}
+```
+
+**Time:** O(n√n) — with n = 5,000,000 (LeetCode's limit) that's billions of divisions. Too slow.
+
+## Approach 2 — Sieve of Eratosthenes
+
+Flip the direction: instead of asking "is x prime?", let each prime **cross out its own multiples**. What survives is prime.
+
+```js
+function countPrimes(n) {
+  if (n < 3) return 0
+  const isPrime = new Array(n).fill(true)
+  isPrime[0] = isPrime[1] = false
+
+  for (let p = 2; p * p < n; p++) {
+    if (!isPrime[p]) continue
+    for (let multiple = p * p; multiple < n; multiple += p) {
+      isPrime[multiple] = false
+    }
+  }
+  return isPrime.filter(Boolean).length
+}
+```
+
+**Time:** O(n log log n) — effectively linear. **Space:** O(n) for the boolean array.
+
+Two optimizations hiding in plain sight:
+
+- Outer loop stops at `p * p < n`: any composite below n has a prime factor at most √n, so bigger primes have nothing new to cross out.
+- Inner loop starts at `p * p`, not `2p`: smaller multiples like `3p` or `5p` were already crossed out by the smaller primes 3 and 5.
+
+## Dry run
+
+`n = 20`. Start with 2…19 all marked prime.
+
+<Table
+  data={{
+    headers: ['Prime p', 'Crosses out (from p²)', 'Still prime after'],
+    rows: [
+      ['2', '4, 6, 8, 10, 12, 14, 16, 18', '2 3 5 7 9 11 13 15 17 19'],
+      ['3', '9, 12, 15, 18', '2 3 5 7 11 13 17 19'],
+      ['4', 'skipped — already crossed out', '—'],
+      ['5', '5² = 25 ≥ 20 → outer loop ends', '—'],
+    ],
+  }}
+/>
+
+Survivors: 2, 3, 5, 7, 11, 13, 17, 19 → **8 primes**. Notice 12 and 18 get crossed twice (once by 2, once by 3) — harmless, and the log log factor comes from exactly this overlap.
+
+## Edge cases
+
+- `n = 0, 1, 2` → 0 (there are no primes *below* 2 — "strictly less than" is easy to misread).
+- `n = 3` → 1 (just the prime 2).
+- 1 is not prime — forgetting `isPrime[1] = false` inflates the count by one.
+- Memory matters at scale: for huge n, a bit-packed array (or `Uint8Array` in JavaScript) keeps the sieve cache-friendly.
