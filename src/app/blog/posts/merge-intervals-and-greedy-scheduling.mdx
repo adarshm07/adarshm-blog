@@ -1,0 +1,190 @@
+---
+title: "Merge Intervals and Greedy Interval Scheduling"
+publishedAt: "2026-07-15"
+summary: "Calendar conflicts, meeting rooms, and 'maximum non-overlapping tasks' are all interval problems that collapse into a single sort-then-scan pattern once you pick the right key to sort by."
+tags: "DSA"
+---
+
+A surprising number of scheduling problems — "does this meeting conflict
+with that one," "merge these overlapping bookings," "what's the maximum
+number of non-overlapping tasks I can fit" — reduce to the same shape:
+a list of `[start, end]` intervals. The trick that makes all of them
+tractable is the same in every case: **sort first**, so overlap becomes a
+simple adjacent-pair comparison instead of an all-pairs check.
+
+## Merging overlapping intervals
+
+Given a pile of intervals in arbitrary order, merge every group that
+overlaps into a single interval.
+
+```javascript
+function mergeIntervals(intervals) {
+  if (intervals.length <= 1) return intervals;
+
+  const sorted = [...intervals].sort((a, b) => a[0] - b[0]);
+  const merged = [sorted[0]];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const [start, end] = sorted[i];
+    const last = merged[merged.length - 1];
+
+    if (start <= last[1]) {
+      last[1] = Math.max(last[1], end); // overlaps — extend in place
+    } else {
+      merged.push([start, end]);        // no overlap — new group
+    }
+  }
+
+  return merged;
+}
+
+mergeIntervals([[1, 3], [2, 6], [8, 10], [15, 18]]);
+// → [[1, 6], [8, 10], [15, 18]]
+```
+
+Sorting by **start time** is what makes the single left-to-right scan
+correct: once intervals are in start order, the only interval that can
+possibly overlap the current group is the *next* one in line — anything
+further out starts even later. Without sorting, an overlap could hide
+anywhere in the list, forcing an O(n²) all-pairs check; with it, one pass
+suffices, for O(n log n) total dominated by the sort.
+
+## Detecting any conflict at all
+
+"Can I attend all these meetings?" is the merge check without the
+merging — sort by start, then see if any interval starts before the
+previous one ends:
+
+```javascript
+function canAttendAll(intervals) {
+  const sorted = [...intervals].sort((a, b) => a[0] - b[0]);
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i][0] < sorted[i - 1][1]) return false; // overlap found
+  }
+  return true;
+}
+```
+
+## The maximum non-overlapping subset — sort by the other key
+
+Here's the one that trips people up: "given overlapping intervals, what's
+the largest subset where none of them overlap?" (equivalently: "what's the
+minimum number to remove so none overlap?"). The instinct is to sort by
+start time again — but that's the wrong key for this problem.
+
+Sort by **end time** instead, then greedily keep any interval whose start
+is at or after the end of the last interval kept:
+
+```javascript
+function maxNonOverlapping(intervals) {
+  const sorted = [...intervals].sort((a, b) => a[1] - b[1]); // by END time
+  let count = 0;
+  let lastEnd = -Infinity;
+
+  for (const [start, end] of sorted) {
+    if (start >= lastEnd) {
+      count++;
+      lastEnd = end;
+    }
+  }
+
+  return count;
+}
+```
+
+**Why end time, not start time:** the greedy proof rests on always picking
+the interval that frees up the calendar **soonest**, leaving maximum room
+for everything after it. Among all intervals that could go first, the one
+ending earliest is never a worse choice than any alternative — any
+solution that picked a later-ending interval first could be swapped for
+the earliest-ending one without losing any options, so greedy-by-end-time
+never does worse than optimal. Sorting by start time doesn't have that
+property: a long interval that starts earliest can block out far more of
+the calendar than a short one, so committing to it first can strictly
+reduce how many intervals fit overall.
+
+## Inserting a new interval into a sorted, merged list
+
+A variant worth knowing: given an already-merged, sorted list of
+intervals, insert one new interval and re-merge only where necessary —
+without re-sorting everything.
+
+```javascript
+function insertInterval(intervals, newInterval) {
+  const result = [];
+  let [start, end] = newInterval;
+  let i = 0;
+
+  while (i < intervals.length && intervals[i][1] < start) {
+    result.push(intervals[i++]); // entirely before newInterval
+  }
+  while (i < intervals.length && intervals[i][0] <= end) {
+    start = Math.min(start, intervals[i][0]); // overlaps — absorb it
+    end = Math.max(end, intervals[i][1]);
+    i++;
+  }
+  result.push([start, end]);
+  while (i < intervals.length) {
+    result.push(intervals[i++]); // entirely after newInterval
+  }
+
+  return result;
+}
+```
+
+Three linear passes over an already-sorted list keep this O(n) — no sort
+needed, because the input's order is already the invariant being
+preserved.
+
+## Picking the right sort key: the general lesson
+
+<table>
+  <thead>
+    <tr>
+      <th>Question</th>
+      <th>Sort by</th>
+      <th>Scan rule</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Merge all overlaps</td>
+      <td>Start time</td>
+      <td>Extend current group if next start ≤ current end</td>
+    </tr>
+    <tr>
+      <td>Any conflict at all?</td>
+      <td>Start time</td>
+      <td>Fail if next start &lt; previous end</td>
+    </tr>
+    <tr>
+      <td>Max non-overlapping subset</td>
+      <td>End time</td>
+      <td>Keep if start ≥ last kept end</td>
+    </tr>
+  </tbody>
+</table>
+
+The pattern across all of interval scheduling: identify what "conflict"
+means for the specific question, then choose the sort key that turns the
+greedy first choice into a provably safe one. Getting that key wrong is
+the most common bug in this whole family — the code still runs, it just
+returns a plausible-looking wrong answer.
+
+## Where it shows up
+
+- **Calendar apps** — "find a free slot," "does this booking conflict,"
+  "merge my availability across calendars" are all this pattern.
+- **CPU/resource scheduling** — the maximum non-overlapping subset is
+  literally "activity selection," a classic OS scheduling problem.
+- **Genomics and log analysis** — merging overlapping read ranges or log
+  time windows before further processing.
+
+## Wrap-up
+
+Interval problems look combinatorial but collapse into a single
+sort-then-linear-scan pattern once you sort by the right field: start time
+for merging and conflict detection, end time for maximizing a
+non-overlapping subset. The sort is what turns an O(n²) all-pairs
+comparison into an O(n log n) one, and picking the correct sort key is
+what turns a greedy guess into a provably optimal algorithm.

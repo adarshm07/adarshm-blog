@@ -1,0 +1,169 @@
+---
+title: "Caching Strategies: Cache-Aside, Write-Through, and Write-Back"
+publishedAt: "2026-07-18"
+summary: "Adding a cache in front of a database is easy. Deciding when the cache gets populated and how writes stay consistent with the source of truth is where cache-aside, write-through, and write-back diverge — each trading latency against staleness risk differently."
+tags: "System Design"
+---
+
+"Just add a cache" is the easy part of scaling a read-heavy system. The
+hard part is deciding **when** the cache gets filled and **how** it stays
+consistent with the database once writes happen — and different answers
+to that question produce genuinely different systems, not just
+implementation details. The three dominant strategies — cache-aside,
+write-through, and write-back — each make a different trade between
+write latency, read latency, and the risk of serving stale data.
+
+## Cache-aside (lazy loading): the application drives the cache
+
+The application checks the cache first; on a **miss**, it reads from the
+database and populates the cache for next time. The cache never talks to
+the database directly — it's the application code that owns the whole
+flow.
+
+```javascript
+async function getUser(id) {
+  let user = await cache.get(`user:${id}`);
+  if (user) return user; // cache hit
+
+  user = await db.query("SELECT * FROM users WHERE id = ?", [id]);
+  await cache.set(`user:${id}`, user, { ttl: 300 }); // populate for next time
+  return user;
+}
+
+async function updateUser(id, changes) {
+  await db.update("users", id, changes);
+  await cache.delete(`user:${id}`); // invalidate — don't try to update the cache in place
+}
+```
+
+**Invalidate, don't update, on writes.** The tempting alternative —
+writing the new value directly into the cache after a database update —
+is a race-condition trap: two concurrent writes can interleave such that
+the cache ends up holding the *older* value even though the database has
+the newer one. Deleting the key and letting the next read repopulate it
+from the database sidesteps that race entirely, at the cost of one extra
+cache miss.
+
+- **Pro:** only requested data ever enters the cache — no wasted memory on
+  data nobody reads. Cache failure degrades gracefully to "every request
+  hits the database," rather than breaking writes.
+- **Con:** the first request for any key always misses (cold-cache
+  latency), and there's a window between a write and the next read where
+  a naive read-through-cache-only client could serve stale data if
+  invalidation is missed or delayed.
+
+## Write-through: the cache is updated in lockstep with the database
+
+Every write goes through the cache, which updates itself and the database
+**synchronously**, together, before the write is considered complete.
+
+```javascript
+async function updateUserWriteThrough(id, changes) {
+  const updated = await db.update("users", id, changes);
+  await cache.set(`user:${id}`, updated); // cache and DB updated together, in the write path
+  return updated;
+}
+```
+
+- **Pro:** the cache is never stale — a read right after a write always
+  sees the new value, because the cache was updated as part of the write
+  itself.
+- **Con:** every write now pays the latency of **two** operations (cache
+  write plus database write) instead of one, and data that's written but
+  never read still occupies cache space — write-through caches everything
+  that's written, not just what's requested.
+
+## Write-back (write-behind): the cache absorbs writes, the database catches up later
+
+Writes go to the cache **only**, immediately returning success, and the
+cache asynchronously flushes changes to the database later — either on a
+timer or when a slot needs to evict.
+
+```javascript
+async function updateUserWriteBack(id, changes) {
+  await cache.set(`user:${id}`, { ...changes, dirty: true });
+  return { success: true }; // returns before the DB write happens
+  // a background worker periodically flushes dirty entries to the database
+}
+```
+
+- **Pro:** write latency is as fast as the cache itself — the database's
+  latency is completely removed from the write's critical path. This also
+  lets you **batch and coalesce** writes: ten rapid updates to the same
+  key become one database write instead of ten.
+- **Con:** genuinely risky — if the cache crashes or the process dies
+  before the flush happens, unflushed writes are **lost**, because the
+  cache was the only place they existed. This strategy is only appropriate
+  when the cache has its own durability (persistence, replication) or the
+  data can tolerate loss.
+
+## Comparing the three
+
+<table>
+  <thead>
+    <tr>
+      <th></th>
+      <th>Cache-aside</th>
+      <th>Write-through</th>
+      <th>Write-back</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Write latency</td>
+      <td>Fast (cache untouched on write)</td>
+      <td>Slow (cache + DB, synchronously)</td>
+      <td>Fastest (cache only, DB deferred)</td>
+    </tr>
+    <tr>
+      <td>Read-after-write consistency</td>
+      <td>Risk of stale read if invalidation lags</td>
+      <td>Always fresh</td>
+      <td>Always fresh (reads hit the cache)</td>
+    </tr>
+    <tr>
+      <td>Data loss risk</td>
+      <td>None — DB is always the source of truth</td>
+      <td>None — DB updated synchronously</td>
+      <td>Real, if the cache fails before flushing</td>
+    </tr>
+    <tr>
+      <td>Wasted cache space</td>
+      <td>None — only requested keys cached</td>
+      <td>Yes — everything written gets cached</td>
+      <td>Yes — everything written gets cached</td>
+    </tr>
+  </tbody>
+</table>
+
+## Picking one
+
+- **Cache-aside** is the default for most read-heavy web applications —
+  Redis or Memcached in front of a relational database, populated
+  on-demand. It's forgiving of cache outages and doesn't cache data nobody
+  asked for.
+- **Write-through** earns its extra write latency when read-after-write
+  freshness matters more than write speed — session state, user-facing
+  data where "I just saved this and it shows the old value" is a visible
+  bug.
+- **Write-back** is reserved for cases where write throughput is the
+  bottleneck and the cache itself is durable enough to trust — CPU cache
+  layers, some storage engines, and systems explicitly built with
+  replication or a write-ahead log underneath the cache tier to eliminate
+  the data-loss risk.
+
+They're also not mutually exclusive within one system — it's common to
+use cache-aside for most entities and write-through specifically for the
+handful of fields where staleness would be user-visible.
+
+## Wrap-up
+
+The question a caching strategy actually answers isn't "should I cache
+this," it's "when does the cache get populated, and what happens to the
+database on a write." Cache-aside keeps writes cheap and the cache lean at
+the cost of occasional stale reads; write-through keeps the cache always
+fresh at the cost of slower writes; write-back makes writes nearly free by
+deferring the database entirely, at the cost of real data-loss risk if the
+cache fails first. None of the three is universally "correct" — the right
+one depends on whether your system can tolerate stale reads, slow writes,
+or occasional loss, in that order of severity.

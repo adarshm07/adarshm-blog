@@ -1,0 +1,165 @@
+---
+title: "Dijkstra's Algorithm: Shortest Paths With a Priority Queue"
+publishedAt: "2026-07-15"
+summary: "BFS finds shortest paths when every edge costs the same. Dijkstra's algorithm generalizes that to weighted graphs by always expanding the closest unvisited node next — the algorithm behind every routing map you've used."
+tags: "DSA"
+---
+
+BFS finds the shortest path in an **unweighted** graph by exploring nodes
+in layers — everything one hop away, then two hops, and so on. That
+breaks the moment edges have different costs: a 1-hop path costing 100
+isn't shorter than a 3-hop path costing 3. **Dijkstra's algorithm** is
+BFS's generalization to weighted graphs (with the restriction that weights
+must be non-negative), and it's the algorithm underneath every
+"shortest route" feature in mapping software and network routing.
+
+## The greedy idea
+
+Dijkstra maintains a running "best known distance" to every node, starts
+at the source with distance 0 (everything else infinity), and repeatedly:
+
+1. Pick the **unvisited** node with the smallest known distance.
+2. Mark it visited — its distance is now final and will never improve.
+3. **Relax** its edges: for each neighbor, check if going through the
+   current node beats the neighbor's current best distance, and update if
+   so.
+
+Step 1 is why a **priority queue** (min-heap) is the right tool — "pick
+the smallest" is exactly what it's built for, in O(log n) instead of the
+O(n) a plain array scan would cost.
+
+```javascript
+function dijkstra(graph, source) {
+  // graph: Map<node, Array<[neighbor, weight]>>
+  const dist = new Map([[source, 0]]);
+  const visited = new Set();
+  const pq = new MinHeap(); // [distance, node]
+  pq.push([0, source]);
+
+  while (!pq.isEmpty()) {
+    const [d, node] = pq.pop();
+    if (visited.has(node)) continue;   // stale entry, see below
+    visited.add(node);
+
+    for (const [neighbor, weight] of graph.get(node) ?? []) {
+      const candidate = d + weight;
+      if (candidate < (dist.get(neighbor) ?? Infinity)) {
+        dist.set(neighbor, candidate);
+        pq.push([candidate, neighbor]);
+      }
+    }
+  }
+
+  return dist; // shortest distance from source to every reachable node
+}
+```
+
+## Why non-negative weights matter
+
+The whole algorithm rests on one guarantee: when a node is popped from the
+priority queue, its distance is **final** — nothing found later can beat
+it, because everything still in the queue has distance ≥ the one just
+popped, and adding a non-negative edge weight can only make a path
+*longer or equal*, never shorter.
+
+A negative edge breaks that guarantee outright: a node could be finalized
+with distance 10, then later a path through a `-5` edge reaches it in 3.
+Dijkstra has already moved on and won't revisit it — the negative edge
+poisons the greedy assumption. That's exactly the case **Bellman-Ford**
+exists for: it tolerates negative weights (and detects negative cycles) by
+relaxing every edge repeatedly instead of trusting a greedy pop, at the
+cost of O(V·E) instead of Dijkstra's O(E log V).
+
+## The stale-entry trick
+
+Notice the `if (visited.has(node)) continue;` line. Rather than
+*decreasing* a key already in the heap (which most binary heap
+implementations don't support directly), this implementation just pushes
+a fresh, better entry whenever a shorter distance is found, leaving the
+old, now-stale entry sitting in the heap. When that stale entry eventually
+gets popped, the `visited` check throws it away for free. It costs a bit
+of extra heap space but avoids implementing a decrease-key operation —
+the standard practical trade in a language without a built-in
+indexed-priority-queue.
+
+## Complexity
+
+<table>
+  <thead>
+    <tr>
+      <th>Implementation</th>
+      <th>Time</th>
+      <th>Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Array scan for the minimum</td>
+      <td>O(V²)</td>
+      <td>Fine for dense graphs, simple to write</td>
+    </tr>
+    <tr>
+      <td>Binary heap priority queue</td>
+      <td>O((V + E) log V)</td>
+      <td>The standard choice for sparse graphs</td>
+    </tr>
+    <tr>
+      <td>Fibonacci heap</td>
+      <td>O(E + V log V)</td>
+      <td>Theoretically optimal; rarely worth the implementation cost</td>
+    </tr>
+  </tbody>
+</table>
+
+`E log V` dominates for sparse graphs (roads, most real networks), which
+is why the binary-heap version is the one you'll actually write.
+
+## Reconstructing the path, not just the distance
+
+Dijkstra as written only returns distances. To recover the actual
+shortest **path**, track a `previous` pointer whenever an edge relaxes a
+neighbor's distance, then walk it backward from destination to source:
+
+```javascript
+if (candidate < (dist.get(neighbor) ?? Infinity)) {
+  dist.set(neighbor, candidate);
+  previous.set(neighbor, node);   // remember how we got here
+  pq.push([candidate, neighbor]);
+}
+
+function reconstructPath(previous, target) {
+  const path = [target];
+  while (previous.has(path[path.length - 1])) {
+    path.push(previous.get(path[path.length - 1]));
+  }
+  return path.reverse();
+}
+```
+
+## Where it runs in production
+
+- **Map and routing software** — road networks are weighted graphs
+  (distance or travel time), and Dijkstra (or heavily optimized variants
+  like A*, contraction hierarchies, and bidirectional search) computes the
+  route.
+- **Network routing protocols** — OSPF (Open Shortest Path First) runs
+  Dijkstra over link costs to build each router's forwarding table.
+- **Game AI and level design** — pathfinding on a weighted grid (where
+  terrain has different movement costs) uses Dijkstra or its
+  heuristic-guided cousin A*.
+
+**A\*** is worth naming explicitly: it's Dijkstra plus a heuristic
+(straight-line distance to the goal, typically) that biases the search
+toward the destination instead of expanding uniformly in every direction —
+same correctness guarantee, usually far fewer nodes visited when there's a
+clear notion of "closer to the goal."
+
+## Wrap-up
+
+Dijkstra's algorithm is BFS's answer to weighted graphs: instead of
+exploring in uniform layers, always expand the unvisited node with the
+smallest known distance, using a priority queue to make "smallest" a cheap
+operation. It's correct exactly as long as weights stay non-negative — the
+moment a negative edge appears, reach for Bellman-Ford instead. Between
+maps, network routing, and pathfinding, it's one of the most-executed
+algorithms in the world, quietly running behind "get directions."

@@ -1,0 +1,186 @@
+---
+title: "Proxy and Reflect: Intercepting JavaScript Objects"
+publishedAt: "2026-07-17"
+summary: "Proxy lets you intercept fundamental operations on an object — get, set, delete, has — before they happen. It's the mechanism behind Vue's reactivity, ORMs, and API validation layers."
+tags: "JavaScript"
+---
+
+Most JavaScript object access — `obj.prop`, `obj.prop = x`, `delete
+obj.prop`, `"prop" in obj` — happens directly against the object with no
+hook for you to observe or change it. `Proxy` changes that: it wraps a
+target object and lets you supply **traps**, functions that intercept
+these fundamental operations before they reach the target. It's how Vue 3
+implements reactivity, how many ORMs build query builders that look like
+plain object access, and how validation layers enforce schemas
+transparently.
+
+## The basic shape
+
+`new Proxy(target, handler)` returns an object that behaves like `target`
+in every way you don't explicitly intercept, and runs your trap for every
+way you do:
+
+```javascript
+const user = { name: "Ada", age: 30 };
+
+const logged = new Proxy(user, {
+  get(target, prop, receiver) {
+    console.log(`reading ${String(prop)}`);
+    return Reflect.get(target, prop, receiver);
+  },
+  set(target, prop, value, receiver) {
+    console.log(`writing ${String(prop)} = ${value}`);
+    return Reflect.set(target, prop, value, receiver);
+  },
+});
+
+logged.name;        // logs "reading name", returns "Ada"
+logged.age = 31;     // logs "writing age = 31", actually sets it
+```
+
+The proxy is transparent to consumers — `logged.name` looks and behaves
+exactly like reading a normal property. That transparency is the whole
+point: existing code that doesn't know about the proxy still works
+unmodified, while the traps run underneath.
+
+## Reflect: the default behavior, callable
+
+Every trap has a matching `Reflect` method that performs the operation's
+*default* behavior — `Reflect.get`, `Reflect.set`, `Reflect.has`,
+`Reflect.deleteProperty`, and so on. Inside a trap, calling the matching
+`Reflect` method (rather than touching `target` directly) is the standard
+pattern for "do the normal thing, but I got to look first":
+
+```javascript
+const validated = new Proxy({}, {
+  set(target, prop, value) {
+    if (prop === "age" && typeof value !== "number") {
+      throw new TypeError("age must be a number");
+    }
+    return Reflect.set(target, prop, value); // falls through to normal assignment
+  },
+});
+
+validated.age = 30;    // fine
+validated.age = "old"; // throws TypeError
+```
+
+Two reasons to prefer `Reflect.set(target, ...)` over `target[prop] =
+value` inside the trap: it correctly forwards the `receiver` argument
+(important for correctness with inheritance and getters/setters further
+up a prototype chain), and it **returns a boolean** indicating success
+instead of silently failing in non-strict mode — the `set` trap is
+required to return that boolean so `Proxy` can decide whether to throw on
+the caller's behalf.
+
+## The traps that matter most
+
+<table>
+  <thead>
+    <tr>
+      <th>Trap</th>
+      <th>Intercepts</th>
+      <th>Common use</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>get</code></td>
+      <td><code>obj.prop</code></td>
+      <td>Reactivity tracking, lazy computed properties, logging</td>
+    </tr>
+    <tr>
+      <td><code>set</code></td>
+      <td><code>obj.prop = x</code></td>
+      <td>Validation, reactivity change detection, read-only enforcement</td>
+    </tr>
+    <tr>
+      <td><code>has</code></td>
+      <td><code>"prop" in obj</code></td>
+      <td>Hiding private-ish properties from enumeration checks</td>
+    </tr>
+    <tr>
+      <td><code>deleteProperty</code></td>
+      <td><code>delete obj.prop</code></td>
+      <td>Protecting required fields, cascading cleanup</td>
+    </tr>
+    <tr>
+      <td><code>apply</code></td>
+      <td>Calling a proxied function</td>
+      <td>Argument logging, memoization wrappers, access control</td>
+    </tr>
+  </tbody>
+</table>
+
+## Reactivity: how Vue 3 tracks changes
+
+Vue 3's reactivity system (and similar libraries) is a thin `get`/`set`
+trap pair: reading a property inside a component's render function
+records "this component depends on this property"; writing to it later
+re-runs everything that recorded a dependency on it.
+
+```javascript
+function reactive(target, onChange) {
+  return new Proxy(target, {
+    get(obj, prop, receiver) {
+      track(obj, prop);                      // record: current effect reads this
+      return Reflect.get(obj, prop, receiver);
+    },
+    set(obj, prop, value, receiver) {
+      const result = Reflect.set(obj, prop, value, receiver);
+      trigger(obj, prop);                     // re-run everything that read this
+      return result;
+    },
+  });
+}
+```
+
+This is exactly why Vue 3 dropped `Object.defineProperty`-based
+reactivity (used in Vue 2): `Proxy` intercepts property **addition** and
+**deletion** too — operations `defineProperty` can't retroactively hook
+for keys that don't exist yet — and it works on arrays and `Map`/`Set`
+without special-casing index assignment or method calls.
+
+## Access control and API wrappers
+
+A `get` trap that throws on unknown properties turns silent `undefined`
+bugs (typo'd property names) into immediate errors — useful for
+enforcing a schema at the object boundary:
+
+```javascript
+function strict(target) {
+  return new Proxy(target, {
+    get(obj, prop, receiver) {
+      if (!(prop in obj)) {
+        throw new ReferenceError(`Unknown property: ${String(prop)}`);
+      }
+      return Reflect.get(obj, prop, receiver);
+    },
+  });
+}
+
+const config = strict({ timeout: 5000 });
+config.timeout;  // 5000
+config.timeuot;  // throws immediately instead of silently returning undefined
+```
+
+## What Proxy can't do
+
+`Proxy` can't intercept operations on **primitives** (numbers, strings,
+booleans aren't objects), and it can't make identity checks
+(`proxy === target`) return `true` — a proxy is a genuinely distinct
+object, which occasionally surprises code that relies on reference
+equality. It also carries a real performance cost versus direct property
+access, since every trapped operation is a function call — fine for
+config objects and reactivity systems, worth benchmarking before using in
+a hot loop over large datasets.
+
+## Wrap-up
+
+`Proxy` intercepts the fundamental operations JavaScript performs on
+objects — get, set, has, delete, and more — before they reach the real
+object, and `Reflect` gives you the matching default implementation to
+fall through to once your trap has done its job. Together they're the
+mechanism behind reactive frameworks, validation layers, and ORMs that
+make remote or computed data look like plain property access —
+interception without the caller ever needing to know.

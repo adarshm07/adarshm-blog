@@ -1,0 +1,195 @@
+---
+title: "WeakMap and WeakSet: Memory-Safe References in JavaScript"
+publishedAt: "2026-07-17"
+summary: "A regular Map keeps its keys alive forever, which turns 'metadata keyed by object' into a memory leak. WeakMap holds weak references instead, letting the garbage collector reclaim entries the rest of the program has already forgotten."
+tags: "JavaScript"
+---
+
+Attach some metadata to a DOM node, or cache a computed value keyed by an
+object, and a regular `Map` seems like the obvious tool. It has a hidden
+cost: a `Map` holds a **strong reference** to every key, which means as
+long as the map exists, none of its keys can ever be garbage collected —
+even after every other part of the program has stopped using them. On a
+long-lived map, that's a slow, silent memory leak. `WeakMap` (and its
+sibling `WeakSet`) exist specifically to avoid it.
+
+## Strong references: why a plain Map leaks
+
+```javascript
+const cache = new Map();
+
+function attachMetadata(el) {
+  cache.set(el, { clickCount: 0 });
+}
+
+let button = document.createElement("button");
+attachMetadata(button);
+
+button = null; // the only other reference to this element is gone...
+// ...but cache.get(button) is still holding it alive. The DOM node
+// and its metadata object can never be garbage collected while
+// `cache` exists, no matter how long the page stays open.
+```
+
+Every entry added to `cache` stays there until explicitly deleted. If the
+lifetime of the keys is tied to something transient — DOM nodes that get
+removed, request-scoped objects, component instances that unmount — the
+map keeps growing indefinitely unless you remember to clean up every
+entry by hand.
+
+## WeakMap: keys the garbage collector can still reclaim
+
+`WeakMap` holds its keys **weakly**: a key being in a `WeakMap` does not
+prevent it from being garbage collected. Once nothing else in the program
+references that key, the engine is free to reclaim it — and the
+`WeakMap` entry disappears along with it, automatically, with no cleanup
+code required.
+
+```javascript
+const cache = new WeakMap();
+
+function attachMetadata(el) {
+  cache.set(el, { clickCount: 0 });
+}
+
+let button = document.createElement("button");
+attachMetadata(button);
+
+button = null; // now nothing else references the element...
+// ...so it (and its WeakMap entry) becomes eligible for garbage
+// collection. No leak, no manual cleanup.
+```
+
+Same API shape as `Map` for `get`/`set`/`has`/`delete`, but with
+constraints that follow directly from the weak-reference guarantee:
+
+- **Keys must be objects** (or, as of recent JS, registered `Symbol`s) —
+  primitives like strings and numbers can't be weakly referenced, since
+  they're not tracked by identity.
+- **Not iterable** — no `.keys()`, `.values()`, `.entries()`, no `size`.
+  If the collection *were* enumerable, iterating it would itself be a
+  reference keeping every key alive, defeating the purpose. This is a
+  deliberate API restriction, not a missing feature.
+
+## WeakSet: the same idea for a set of objects
+
+`WeakSet` is to `Set` what `WeakMap` is to `Map` — weakly-held object
+membership, useful for "have I already processed this object?"-style
+tracking that shouldn't itself keep the object alive:
+
+```javascript
+const processed = new WeakSet();
+
+function process(obj) {
+  if (processed.has(obj)) return; // already handled
+  processed.add(obj);
+  // ... do work ...
+}
+```
+
+Once `obj` is no longer referenced anywhere else, it's collected and
+silently drops out of `processed` — there's no way to leak memory by
+forgetting to remove entries, because there's no removal to forget.
+
+## When to reach for the weak version
+
+<table>
+  <thead>
+    <tr>
+      <th>Use case</th>
+      <th>Map/Set</th>
+      <th>WeakMap/WeakSet</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Metadata attached to DOM nodes or object instances</td>
+      <td>Leaks if nodes are removed</td>
+      <td>Auto-cleans when the node is gone</td>
+    </tr>
+    <tr>
+      <td>Private fields (pre-<code>#field</code> syntax pattern)</td>
+      <td>Not private — enumerable</td>
+      <td>Genuinely inaccessible outside the module</td>
+    </tr>
+    <tr>
+      <td>Need to iterate all entries</td>
+      <td>Yes</td>
+      <td>Not possible — use Map</td>
+    </tr>
+    <tr>
+      <td>Keys are primitives (strings, numbers)</td>
+      <td>Yes</td>
+      <td>Not allowed — use Map</td>
+    </tr>
+    <tr>
+      <td>Memoizing a pure function keyed by object argument</td>
+      <td>Leaks the arguments forever</td>
+      <td>Cache entry dies with the argument</td>
+    </tr>
+  </tbody>
+</table>
+
+## A concrete pattern: object-keyed memoization
+
+A memoization cache keyed by object identity is the textbook `WeakMap`
+use case — it should never be the reason an argument object outlives its
+natural lifetime:
+
+```javascript
+const memoCache = new WeakMap();
+
+function expensiveComputation(configObject) {
+  if (memoCache.has(configObject)) {
+    return memoCache.get(configObject);
+  }
+  const result = /* ... heavy work using configObject ... */ compute(configObject);
+  memoCache.set(configObject, result);
+  return result;
+}
+```
+
+If `configObject` is created fresh per request and discarded afterward, a
+regular `Map` here would mean the cache — and every config object ever
+passed in — lives for the lifetime of the process. `WeakMap` makes the
+cache lifetime automatically match the argument's lifetime instead.
+
+## Private state before class private fields
+
+Before `#privateField` syntax existed, `WeakMap` was the standard
+technique for genuinely private instance state — external code has no
+handle to the map, so there's no way to read or enumerate the "private"
+data at all:
+
+```javascript
+const _private = new WeakMap();
+
+class Counter {
+  constructor() {
+    _private.set(this, { count: 0 });
+  }
+  increment() {
+    _private.get(this).count++;
+  }
+  get value() {
+    return _private.get(this).count;
+  }
+}
+```
+
+Modern code should generally prefer `#count` class fields for this — it's
+built-in syntax with the same privacy guarantee and none of the
+boilerplate — but the pattern explains itself once you understand *why*
+`WeakMap` was chosen: an instance's private state should not outlive the
+instance.
+
+## Wrap-up
+
+A regular `Map` or `Set` holds strong references to its keys, so anything
+used as a key is guaranteed to survive as long as the collection does —
+exactly wrong when the collection's job is to attach transient metadata to
+objects with their own independent lifetime. `WeakMap` and `WeakSet` hold
+their entries weakly, letting the garbage collector reclaim a key (and its
+associated entry) the moment nothing else references it, at the cost of
+losing iteration — a trade that's usually exactly what you want for
+caches, metadata, and private state tied to an object's lifetime.

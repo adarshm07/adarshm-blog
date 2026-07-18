@@ -1,0 +1,156 @@
+---
+title: "The CAP Theorem and Eventual Consistency, Explained"
+publishedAt: "2026-07-18"
+summary: "Every distributed database quietly picks a side in a trade-off it can't escape: when the network partitions, you serve either possibly-stale data or an error. CAP theorem names that choice — and explains why 'eventual consistency' is a deliberate design, not a bug."
+tags: "System Design"
+---
+
+Every distributed database's marketing page eventually mentions
+"consistency," "availability," or "partition tolerance" — and usually
+implies it has all three. It can't. The **CAP theorem** states that a
+distributed system can guarantee at most two of the three simultaneously,
+and in practice, one of those three isn't optional, which reduces the real
+choice to just one axis.
+
+## The three properties
+
+- **Consistency (C):** every read receives the most recent write, or an
+  error. All nodes see the same data at the same time — there's no such
+  thing as "node A already has the update, node B doesn't yet."
+- **Availability (A):** every request to a non-failing node receives a
+  response (not an error), though not necessarily the *most recent* data.
+- **Partition tolerance (P):** the system keeps operating even when
+  network failures split it into groups of nodes that can't communicate
+  with each other.
+
+## Why P isn't actually optional
+
+Network partitions — a switch failing, a link dropping, a data center
+losing connectivity — **will happen** in any real distributed system;
+it's not a design choice you get to opt out of, it's a physical certainty
+over a long enough timeline. That leaves only two real options once a
+partition occurs, which is why CAP is usually phrased not as "pick 2 of
+3" but as "**when a partition happens, pick C or A**":
+
+- **Choose consistency (CP):** during the partition, nodes that can't
+  confirm they have the latest data **refuse to serve requests** (or
+  return an error) rather than risk serving something stale or
+  conflicting. The system sacrifices availability to protect correctness.
+- **Choose availability (AP):** every node keeps answering requests during
+  the partition, even if it can't confirm it has the latest write —
+  meaning different nodes may return different, temporarily inconsistent
+  answers. The system sacrifices strict consistency to stay responsive.
+
+Outside of a partition, a well-designed system can be both consistent and
+available — the trade-off only bites during the partition itself. CAP is
+a statement about what you're forced to give up under failure, not a
+permanent handicap.
+
+## What real databases choose
+
+<table>
+  <thead>
+    <tr>
+      <th>System</th>
+      <th>Typical choice</th>
+      <th>Behavior during a partition</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Traditional RDBMS (single primary)</td>
+      <td>CP-leaning</td>
+      <td>Writes fail or block if the primary is unreachable</td>
+    </tr>
+    <tr>
+      <td>etcd, ZooKeeper, Consul</td>
+      <td>CP</td>
+      <td>Refuses writes without quorum — correctness over uptime, by design (they're used for coordination)</td>
+    </tr>
+    <tr>
+      <td>Cassandra, DynamoDB</td>
+      <td>AP (tunable)</td>
+      <td>Every reachable node answers; conflicts resolved later</td>
+    </tr>
+    <tr>
+      <td>MongoDB (default)</td>
+      <td>CP-leaning</td>
+      <td>Reads/writes route through the primary; secondaries can lag</td>
+    </tr>
+  </tbody>
+</table>
+
+Many modern databases don't hardcode the choice — they expose it as a
+tunable per-operation setting. Cassandra's consistency level (`ONE`,
+`QUORUM`, `ALL`) and DynamoDB's choice between eventually-consistent and
+strongly-consistent reads let *you* pick the trade-off per query instead
+of the database imposing one globally.
+
+## Eventual consistency: AP's actual promise
+
+Choosing availability doesn't mean giving up on consistency forever — it
+means deferring it. **Eventual consistency** is the guarantee that *if no
+new writes occur*, all replicas will eventually converge to the same
+value — "eventually," not "immediately." During the gap, different nodes
+can legitimately disagree.
+
+```javascript
+// Simplified: an AP-style key-value store during a partition
+// Node A (reachable by client 1):
+nodeA.set("cart:42", { items: 3 }); // accepted immediately
+
+// Node B (reachable by client 2, partitioned from A):
+nodeB.get("cart:42"); // might still return the OLD value, or nothing
+
+// Once the partition heals, replication catches up and both
+// nodes converge — "eventually" consistent.
+```
+
+The system remains **available** (both nodes answered) but was not
+**consistent** (they answered differently) during the partition — exactly
+the AP trade being made explicit.
+
+## Resolving conflicts once the partition heals
+
+Eventually-consistent systems need a rule for what happens when two
+replicas that diverged during a partition need to merge back into one
+value. Common approaches:
+
+- **Last-write-wins (LWW):** attach a timestamp to every write, keep the
+  newest. Simple, but can silently discard a legitimate concurrent write
+  if clocks aren't perfectly synchronized.
+- **Vector clocks:** track causality per replica so the system can detect
+  *"these two writes were genuinely concurrent, not one following the
+  other"* and surface the conflict instead of guessing — this is how
+  Amazon's original Dynamo paper handled shopping cart merges.
+- **CRDTs (Conflict-free Replicated Data Types):** data structures
+  specifically designed so that merging two divergent replicas always
+  produces a well-defined, consistent result with no manual conflict
+  resolution — a counter that only increments, or a set that only grows,
+  can always be merged unambiguously regardless of the order updates
+  arrive in.
+
+## Choosing CP or AP for your own system
+
+The right choice depends on what an inconsistency actually costs versus
+what an outage costs:
+
+- **Banking, inventory counts, anything where overselling or double
+  spending is the failure mode** → CP. A rejected request is recoverable;
+  a wrong balance is not.
+- **Social media feeds, product catalogs, shopping carts, view/like
+  counters** → AP. A slightly stale feed or an eventually-corrected cart
+  is a far better user experience than an error page during a network
+  blip.
+
+## Wrap-up
+
+CAP theorem isn't a checklist of features to pursue — it's a statement
+about an unavoidable trade-off during a network partition, which will
+happen. Partition tolerance isn't optional in any real distributed system,
+which leaves one genuine decision: refuse to answer when you can't
+guarantee freshness (CP), or answer anyway and let replicas reconcile
+afterward (AP, backed by eventual consistency and a conflict-resolution
+strategy like LWW, vector clocks, or CRDTs). Neither choice is universally
+right — it depends entirely on whether a stale answer or a failed request
+is the cheaper mistake for your system to make.
