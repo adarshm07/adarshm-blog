@@ -1,0 +1,108 @@
+---
+title: "Kth Largest Element in an Array"
+pattern: "heap-top-k"
+order: 701
+difficulty: "Medium"
+leetcode: "https://leetcode.com/problems/kth-largest-element-in-an-array/"
+gfg: "https://www.geeksforgeeks.org/dsa/kth-smallest-largest-element-in-unsorted-array/"
+summary: "Keep a min-heap of the k largest seen so far — the heap's smallest element is always your current answer."
+---
+
+## The problem
+
+Find the k-th largest element in an unsorted array (k-th in **sorted order**, not k-th distinct value).
+
+**Example:** `nums = [3, 2, 1, 5, 6, 4]`, `k = 2` → answer `5` (sorted descending: 6, **5**, 4, 3, 2, 1).
+
+## Approach 1 — Sort
+
+```js
+function findKthLargest(nums, k) {
+  return [...nums].sort((a, b) => b - a)[k - 1]
+}
+```
+
+**Time:** O(n log n). **Space:** O(n) for the copy. Perfectly fine in practice — but it sorts all n elements when we only care about the top k.
+
+## Approach 2 — Min-heap of size k
+
+Stream through the array keeping a **min-heap** with at most k elements — the k largest seen so far. Counterintuitively, a *min*-heap: its root is the smallest of the current top-k, i.e. the current k-th largest, and it's the element to evict when something bigger arrives.
+
+JavaScript has no built-in heap, so here's a minimal one (in an interview, say so and ask if you can assume one):
+
+```js
+class MinHeap {
+  constructor() { this.a = [] }
+  size() { return this.a.length }
+  peek() { return this.a[0] }
+  push(v) {
+    this.a.push(v)
+    let i = this.a.length - 1
+    while (i > 0) {
+      const p = (i - 1) >> 1
+      if (this.a[p] <= this.a[i]) break
+      ;[this.a[p], this.a[i]] = [this.a[i], this.a[p]]
+      i = p
+    }
+  }
+  pop() {
+    const top = this.a[0]
+    const last = this.a.pop()
+    if (this.a.length > 0) {
+      this.a[0] = last
+      let i = 0
+      while (true) {
+        const l = 2 * i + 1, r = 2 * i + 2
+        let smallest = i
+        if (l < this.a.length && this.a[l] < this.a[smallest]) smallest = l
+        if (r < this.a.length && this.a[r] < this.a[smallest]) smallest = r
+        if (smallest === i) break
+        ;[this.a[smallest], this.a[i]] = [this.a[i], this.a[smallest]]
+        i = smallest
+      }
+    }
+    return top
+  }
+}
+
+function findKthLargest(nums, k) {
+  const heap = new MinHeap()
+  for (const num of nums) {
+    heap.push(num)
+    if (heap.size() > k) heap.pop() // evict the smallest — it can't be top-k
+  }
+  return heap.peek()
+}
+```
+
+**Time:** O(n log k) — n pushes/pops on a heap that never exceeds k+1 elements. **Space:** O(k). This beats sorting when k is small, and it works on **streams** where you can't hold all of n in memory.
+
+## Approach 3 — Quickselect (average O(n))
+
+Partition around a pivot as in quicksort, but recurse into only the side containing the k-th position. Average O(n), worst case O(n²) with bad pivots; great to mention, and worth coding if the interviewer pushes for linear time.
+
+## Dry run
+
+Approach 2 on `nums = [3, 2, 1, 5, 6, 4]`, `k = 2`:
+
+<Table
+  data={{
+    headers: ['Element', 'Heap after push', 'Size > 2?', 'Evict', 'Heap (k largest so far)'],
+    rows: [
+      ['3', '[3]', 'no', '—', '[3]'],
+      ['2', '[2, 3]', 'no', '—', '[2, 3]'],
+      ['1', '[1, 3, 2]', 'yes', '1', '[2, 3]'],
+      ['5', '[2, 3, 5]', 'yes', '2', '[3, 5]'],
+      ['6', '[3, 5, 6]', 'yes', '3', '[5, 6]'],
+      ['4', '[4, 6, 5]', 'yes', '4', '[5, 6]'],
+    ],
+  }}
+/>
+
+Heap root at the end: `5` — the 2nd largest. Notice how `[5, 6]` are exactly the top-2, and the *min* of them is the answer.
+
+## Edge cases
+
+- `k = 1` → heap of size 1 tracking the max; `k = n` → tracking the min.
+- Duplicates count separately: in `[3, 3, 3]` the 2nd largest is `3`.
+- Negative numbers need no special handling — comparisons do all the work.

@@ -1,0 +1,75 @@
+---
+title: "Non-overlapping Intervals"
+pattern: "merge-intervals"
+order: 402
+difficulty: "Medium"
+leetcode: "https://leetcode.com/problems/non-overlapping-intervals/"
+gfg: "https://www.geeksforgeeks.org/dsa/activity-selection-problem-greedy-algo-1/"
+summary: "Interval scheduling in disguise — sort by end time and greedily keep the interval that frees up the timeline soonest."
+---
+
+## The problem
+
+Given intervals `[start, end]`, return the **minimum number of intervals to remove** so that the rest don't overlap. Intervals that only touch (like `[1, 2]` and `[2, 3]`) do *not* count as overlapping.
+
+**Example:** `intervals = [[1, 2], [2, 3], [3, 4], [1, 3]]`
+
+The answer is `1`: remove `[1, 3]` and the remaining `[1, 2], [2, 3], [3, 4]` are pairwise non-overlapping.
+
+Flip the question: removing the minimum is the same as **keeping the maximum** number of non-overlapping intervals — which is the classic activity-selection problem.
+
+## Approach 1 — Try every subset (why it's hopeless)
+
+Conceptually you could test every subset of intervals for validity and keep the largest — that's O(2ⁿ) subsets. Even smarter DP over sorted intervals (longest chain) costs O(n²). Both are far more work than needed, because a greedy choice is provably safe here.
+
+## Approach 2 — Greedy by earliest end time
+
+Sort by **end** time. Sweep left to right, always keeping the first interval that starts at or after the end of the last kept one.
+
+Why end time? Among all intervals we could keep next, the one that *ends earliest* leaves the most room for future intervals — choosing it can never make the solution worse.
+
+```js
+function eraseOverlapIntervals(intervals) {
+  intervals.sort((a, b) => a[1] - b[1])
+
+  let removed = 0
+  let lastEnd = -Infinity
+
+  for (const [start, end] of intervals) {
+    if (start >= lastEnd) {
+      lastEnd = end     // keep it — no overlap with what we kept
+    } else {
+      removed++         // overlaps the kept set — remove it
+    }
+  }
+  return removed
+}
+```
+
+**Time:** O(n log n) for the sort. **Space:** O(1).
+
+## Dry run
+
+`intervals = [[1, 2], [2, 3], [3, 4], [1, 3]]`
+
+After sorting by end: `[[1, 2], [2, 3], [1, 3], [3, 4]]`.
+
+<Table
+  data={{
+    headers: ['Interval', 'lastEnd', 'start >= lastEnd?', 'Decision', 'removed'],
+    rows: [
+      ['[1, 2]', '-∞', 'yes', 'keep, lastEnd = 2', '0'],
+      ['[2, 3]', '2', '2 >= 2 yes', 'keep, lastEnd = 3', '0'],
+      ['[1, 3]', '3', '1 >= 3 no', 'remove', '1'],
+      ['[3, 4]', '3', '3 >= 3 yes', 'keep, lastEnd = 4', '1'],
+    ],
+  }}
+/>
+
+One removal — matching the expected answer.
+
+## Edge cases
+
+- Touching intervals: the comparison is `start >= lastEnd`, so `[1, 2]` then `[2, 3]` are both kept. If the problem counted touching as overlap, this would become `>`.
+- Sorting by **start** instead of end breaks the greedy: with `[[1, 100], [2, 3], [4, 5]]`, start-order keeps `[1, 100]` first and removes two, while end-order keeps `[2, 3], [4, 5]` and removes one.
+- All identical intervals `[[1, 2], [1, 2], [1, 2]]` → keep one, remove two.

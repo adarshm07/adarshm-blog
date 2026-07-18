@@ -1,0 +1,90 @@
+---
+title: "Factorial Trailing Zeroes"
+pattern: "math"
+order: 1204
+difficulty: "Medium"
+leetcode: "https://leetcode.com/problems/factorial-trailing-zeroes/"
+gfg: "https://www.geeksforgeeks.org/dsa/count-trailing-zeroes-factorial-number/"
+summary: "You can't compute 100! — but you don't need to. Trailing zeros come from factors of 5, and you can count those directly."
+---
+
+## The problem
+
+Given an integer `n`, return the number of trailing zeroes in `n!` (n factorial).
+
+**Example:** `n = 10` → `10! = 3,628,800` → answer `2`.
+
+## Approach 1 — Compute the factorial (and why you can't)
+
+```js
+// Breaks past n = 18
+function trailingZeroes(n) {
+  let f = 1
+  for (let i = 2; i <= n; i++) f *= i
+  let count = 0
+  while (f % 10 === 0) {
+    count++
+    f /= 10
+  }
+  return count
+}
+```
+
+`21!` already exceeds `Number.MAX_SAFE_INTEGER`; `100!` has 158 digits. `BigInt` technically works but does enormous arithmetic for a question whose answer is a small count. The number itself was never the point.
+
+## Approach 2 — Count factors of 5
+
+A trailing zero is a factor of 10 = 2 × 5. In `n! = 1 × 2 × ... × n`, factors of 2 are everywhere (every second number), factors of 5 are scarce (every fifth) — so **the 5s are the bottleneck**, and the answer is simply how many times 5 divides into n!.
+
+Count them with Legendre's formula: multiples of 5 each give one 5, multiples of 25 give a *second* one, multiples of 125 a third...
+
+`zeroes = floor(n/5) + floor(n/25) + floor(n/125) + ...`
+
+```js
+function trailingZeroes(n) {
+  let count = 0
+  for (let p = 5; p <= n; p *= 5) {
+    count += Math.floor(n / p)
+  }
+  return count
+}
+```
+
+Equivalently, divide n by 5 repeatedly:
+
+```js
+function trailingZeroes(n) {
+  let count = 0
+  while (n > 0) {
+    n = Math.floor(n / 5)
+    count += n
+  }
+  return count
+}
+```
+
+**Time:** O(log₅ n) — a handful of divisions even for n in the billions. **Space:** O(1).
+
+## Dry run
+
+`n = 100`:
+
+<Table
+  data={{
+    headers: ['Power of 5', 'floor(100 / p)', 'What it counts', 'Running total'],
+    rows: [
+      ['5', '20', '5, 10, 15, …, 100 — one 5 each', '20'],
+      ['25', '4', '25, 50, 75, 100 — a second 5 each', '24'],
+      ['125', '0', '125 > 100 — loop ends', '24'],
+    ],
+  }}
+/>
+
+So `100!` ends in **24** zeros — without ever computing its 158 digits. Sanity-check with `n = 10`: `floor(10/5) = 2`, matching the `3,628,800` example.
+
+## Edge cases
+
+- `n = 0` → `0!` = 1 → zero trailing zeroes; the loop never runs.
+- `n < 5` → 0 (no factor of 5 exists yet).
+- The double-counting trap: naively counting only multiples of 5 gives `zeroes(25) = 5`, but 25 contributes **two** fives — the correct answer is 6. The 25/125/625 terms exist precisely for this.
+- Why not count 2s as well? `floor(n/2) + floor(n/4) + ...` is always ≥ the count of 5s, so `min(twos, fives) = fives` — worth stating in an interview.

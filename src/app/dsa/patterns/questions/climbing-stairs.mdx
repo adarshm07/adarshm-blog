@@ -1,0 +1,113 @@
+---
+title: "Climbing Stairs"
+pattern: "dynamic-programming"
+order: 1101
+difficulty: "Easy"
+leetcode: "https://leetcode.com/problems/climbing-stairs/"
+gfg: "https://www.geeksforgeeks.org/dsa/count-ways-reach-nth-stair/"
+summary: "The gateway DP problem — watch naive recursion explode, then fix it with memoization, a table, and finally two variables."
+---
+
+## The problem
+
+You're climbing a staircase with `n` steps. Each move you climb **1 or 2** steps. How many distinct ways can you reach the top?
+
+**Example:** `n = 4` → answer `5`:
+
+`1+1+1+1`, `1+1+2`, `1+2+1`, `2+1+1`, `2+2`.
+
+The key recurrence: to stand on step `n`, your last move came from step `n-1` (a 1-step) or step `n-2` (a 2-step). Those two groups don't overlap and cover everything, so
+
+`ways(n) = ways(n-1) + ways(n-2)` — Fibonacci in disguise.
+
+## Approach 1 — Plain recursion (exponential)
+
+```js
+function climbStairs(n) {
+  if (n <= 2) return n
+  return climbStairs(n - 1) + climbStairs(n - 2)
+}
+```
+
+**Time:** O(2ⁿ). `climbStairs(5)` computes `climbStairs(3)` twice, `climbStairs(2)` three times — the same subproblems over and over. At n = 45 this takes billions of calls.
+
+That repeated work is the **overlapping subproblems** signal: the moment you spot it, DP applies.
+
+## Approach 2 — Memoization (top-down DP)
+
+Cache each result the first time it's computed.
+
+```js
+function climbStairs(n, memo = new Map()) {
+  if (n <= 2) return n
+  if (memo.has(n)) return memo.get(n)
+  const ways = climbStairs(n - 1, memo) + climbStairs(n - 2, memo)
+  memo.set(n, ways)
+  return ways
+}
+```
+
+**Time:** O(n) — each subproblem solved once. **Space:** O(n) for the cache and recursion stack.
+
+## Approach 3 — Tabulation (bottom-up DP)
+
+Fill an array from the base cases upward — same recurrence, no recursion.
+
+```js
+function climbStairs(n) {
+  if (n <= 2) return n
+  const dp = new Array(n + 1)
+  dp[1] = 1
+  dp[2] = 2
+  for (let i = 3; i <= n; i++) {
+    dp[i] = dp[i - 1] + dp[i - 2]
+  }
+  return dp[n]
+}
+```
+
+**Time:** O(n). **Space:** O(n).
+
+## Approach 4 — Two variables (space-optimized)
+
+`dp[i]` only ever reads the previous two cells, so keep just those.
+
+```js
+function climbStairs(n) {
+  if (n <= 2) return n
+  let prev2 = 1 // ways(1)
+  let prev1 = 2 // ways(2)
+  for (let i = 3; i <= n; i++) {
+    const current = prev1 + prev2
+    prev2 = prev1
+    prev1 = current
+  }
+  return prev1
+}
+```
+
+**Time:** O(n). **Space:** O(1). This four-stage progression — recursion → memo → table → rolling variables — is the standard playbook for most 1-D DP problems.
+
+## Dry run
+
+Approach 4 with `n = 6`:
+
+<Table
+  data={{
+    headers: ['i', 'prev2 (ways i-2)', 'prev1 (ways i-1)', 'current = prev1 + prev2'],
+    rows: [
+      ['3', '1', '2', '3'],
+      ['4', '2', '3', '5'],
+      ['5', '3', '5', '8'],
+      ['6', '5', '8', '13'],
+    ],
+  }}
+/>
+
+`climbStairs(6) = 13`. And the `n = 4` row confirms our hand-count of 5 from the example.
+
+## Edge cases
+
+- `n = 1` → 1, `n = 2` → 2 — both handled by the early return (and note `ways(2) = 2`, not 1: `1+1` and `2`).
+- Results grow like Fibonacci — beyond n ≈ 78 they exceed `Number.MAX_SAFE_INTEGER`; use `BigInt` if the problem's n went that high (LeetCode's doesn't).
+- Same recurrence family: House Robber, Min Cost Climbing Stairs, Fibonacci Number — recognize one, solve them all.

@@ -1,0 +1,99 @@
+---
+title: "Pow(x, n) — Fast Exponentiation"
+pattern: "math"
+order: 1202
+difficulty: "Medium"
+leetcode: "https://leetcode.com/problems/powx-n/"
+gfg: "https://www.geeksforgeeks.org/dsa/write-a-c-program-to-calculate-powxn/"
+summary: "Multiplying x by itself n times is O(n) — squaring your way there is O(log n), the same halving idea as binary search."
+---
+
+## The problem
+
+Implement `pow(x, n)`: compute `x` raised to the integer power `n`. The exponent can be **negative**.
+
+**Examples:** `pow(2, 10) = 1024`, `pow(2, -2) = 0.25`.
+
+## Approach 1 — Multiply in a loop
+
+```js
+function myPow(x, n) {
+  const e = Math.abs(n)
+  let result = 1
+  for (let i = 0; i < e; i++) result *= x
+  return n < 0 ? 1 / result : result
+}
+```
+
+**Time:** O(|n|). With n up to ±2³¹, that's two billion multiplications — and on LeetCode this times out. The waste: computing `x⁶⁴` this way ignores that we passed `x³²` along the way, which is just one squaring from the answer.
+
+## Approach 2 — Binary exponentiation (recursive)
+
+Halve the exponent instead of decrementing it:
+
+- `x²ᵏ = (xᵏ)²` — one recursive call plus one squaring
+- `x²ᵏ⁺¹ = x · (xᵏ)²` — same, times one extra `x`
+
+```js
+function myPow(x, n) {
+  if (n < 0) return 1 / myPow(x, -n)
+
+  function fastPow(base, e) {
+    if (e === 0) return 1
+    const half = fastPow(base, Math.floor(e / 2))
+    return e % 2 === 0 ? half * half : half * half * base
+  }
+  return fastPow(x, n)
+}
+```
+
+**Time:** O(log n) — the exponent halves every call. **Space:** O(log n) stack.
+
+The crucial detail: compute `half` **once** and square it. Writing `fastPow(e/2) * fastPow(e/2)` recurses twice and collapses right back to O(n).
+
+## Approach 3 — Iterative (binary digits of the exponent)
+
+Read the exponent's bits from least significant to most: keep squaring `base`, and multiply it into the result whenever the current bit is 1. This is the version used everywhere in practice (modular arithmetic, crypto, matrix powers).
+
+```js
+function myPow(x, n) {
+  let e = Math.abs(n)
+  let base = x
+  let result = 1
+
+  while (e > 0) {
+    if (e % 2 === 1) result *= base
+    base *= base
+    e = Math.floor(e / 2)
+  }
+  return n < 0 ? 1 / result : result
+}
+```
+
+Same O(log n), O(1) space.
+
+## Dry run
+
+Approach 3 with `x = 2`, `n = 10` (binary `1010`):
+
+<Table
+  data={{
+    headers: ['e', 'Bit odd?', 'result', 'base (squares each step)'],
+    rows: [
+      ['10', 'no', '1', '2 → 4'],
+      ['5', 'yes', '1 × 4 = 4', '4 → 16'],
+      ['2', 'no', '4', '16 → 256'],
+      ['1', 'yes', '4 × 256 = 1024', '256 → 65536'],
+      ['0', '—', '1024 — done', ''],
+    ],
+  }}
+/>
+
+Four loop iterations instead of ten multiplications; for n = 10⁹ it's thirty instead of a billion.
+
+## Edge cases
+
+- `n = 0` → 1, for any x (even 0 by this problem's convention).
+- Negative exponent → invert once at the end (or up front); done per-step it compounds floating-point error.
+- In fixed-width languages, negating `INT_MIN` overflows — the classic fix is computing with the exponent as a wider/positive type. JavaScript's numbers dodge this, but say it out loud in interviews.
+- `x = 0` with negative n is division by zero — mention it, LeetCode promises it away.

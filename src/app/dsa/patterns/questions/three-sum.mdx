@@ -1,0 +1,113 @@
+---
+title: "3Sum"
+pattern: "two-pointers"
+order: 102
+difficulty: "Medium"
+leetcode: "https://leetcode.com/problems/3sum/"
+gfg: "https://www.geeksforgeeks.org/dsa/find-a-triplet-that-sum-to-a-given-value/"
+summary: "Fix one number, then run Two Sum II on the rest — plus the duplicate-skipping trick that trips everyone up the first time."
+---
+
+## The problem
+
+Given an integer array, return **all unique triplets** `[a, b, c]` such that `a + b + c = 0`. The same triplet must not appear twice in the output.
+
+**Example:** `nums = [-1, 0, 1, 2, -1, -4]`
+
+The answer is `[[-1, -1, 2], [-1, 0, 1]]`. Note that `[-1, 0, 1]` appears only once even though there are two `-1`s in the input.
+
+Two things make this harder than Two Sum: there are three numbers, and duplicates in the input can produce duplicate triplets in the output.
+
+## Approach 1 — Brute force
+
+Three nested loops, and a set to deduplicate sorted triplets.
+
+```js
+function threeSum(nums) {
+  const seen = new Set()
+  const result = []
+  for (let i = 0; i < nums.length; i++) {
+    for (let j = i + 1; j < nums.length; j++) {
+      for (let k = j + 1; k < nums.length; k++) {
+        if (nums[i] + nums[j] + nums[k] === 0) {
+          const triplet = [nums[i], nums[j], nums[k]].sort((a, b) => a - b)
+          const key = triplet.join(',')
+          if (!seen.has(key)) {
+            seen.add(key)
+            result.push(triplet)
+          }
+        }
+      }
+    }
+  }
+  return result
+}
+```
+
+**Time:** O(n³). **Space:** O(n) for deduplication. Too slow for n in the thousands.
+
+## Approach 2 — Sort + two pointers
+
+Sort the array. Then for each index `i`, the problem becomes: *find two numbers to the right of `i` that sum to `-nums[i]`* — which is exactly Two Sum II.
+
+Sorting also solves deduplication: equal values sit next to each other, so we skip a value if it equals the one we just processed.
+
+```js
+function threeSum(nums) {
+  nums.sort((a, b) => a - b)
+  const result = []
+
+  for (let i = 0; i < nums.length - 2; i++) {
+    if (nums[i] > 0) break                      // rest are positive, no zero sum possible
+    if (i > 0 && nums[i] === nums[i - 1]) continue // skip duplicate anchors
+
+    let left = i + 1
+    let right = nums.length - 1
+    while (left < right) {
+      const sum = nums[i] + nums[left] + nums[right]
+      if (sum < 0) {
+        left++
+      } else if (sum > 0) {
+        right--
+      } else {
+        result.push([nums[i], nums[left], nums[right]])
+        while (left < right && nums[left] === nums[left + 1]) left++
+        while (left < right && nums[right] === nums[right - 1]) right--
+        left++
+        right--
+      }
+    }
+  }
+  return result
+}
+```
+
+**Time:** O(n²) — n anchors × linear two-pointer scan (sorting's O(n log n) is dominated). **Space:** O(1) beyond the output.
+
+## Dry run
+
+After sorting: `nums = [-4, -1, -1, 0, 1, 2]`.
+
+<Table
+  data={{
+    headers: ['Anchor i', 'left', 'right', 'Sum', 'Action'],
+    rows: [
+      ['0 (-4)', '1 (-1)', '5 (2)', '-3', 'Too small — left++'],
+      ['0 (-4)', '2 (-1)', '5 (2)', '-3', 'Too small — left++'],
+      ['0 (-4)', '3 (0)', '5 (2)', '-2', 'Too small — left++'],
+      ['0 (-4)', '4 (1)', '5 (2)', '-1', 'Too small — left++, window closes'],
+      ['1 (-1)', '2 (-1)', '5 (2)', '0', 'Found [-1, -1, 2] — move both in'],
+      ['1 (-1)', '3 (0)', '4 (1)', '0', 'Found [-1, 0, 1] — move both in, window closes'],
+      ['2 (-1)', '—', '—', '—', 'Same as previous anchor — skipped'],
+      ['3 (0)', '4 (1)', '5 (2)', '3', 'Too big — right--, window closes'],
+    ],
+  }}
+/>
+
+The duplicate `-1` at index 2 is skipped as an anchor — that's what keeps `[-1, 0, 1]` from appearing twice.
+
+## Edge cases
+
+- Fewer than 3 elements → return `[]`.
+- All zeros `[0, 0, 0, 0]` → exactly one triplet `[0, 0, 0]`; the inner duplicate-skips handle it.
+- The `nums[i] > 0` early exit matters: once the anchor is positive, three positives can never sum to zero.

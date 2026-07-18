@@ -1,0 +1,80 @@
+---
+title: "Maximum Average Subarray I"
+pattern: "sliding-window"
+order: 201
+difficulty: "Easy"
+leetcode: "https://leetcode.com/problems/maximum-average-subarray-i/"
+gfg: "https://www.geeksforgeeks.org/dsa/window-sliding-technique/"
+summary: "The canonical fixed-size window: slide by adding one element and removing another, instead of re-summing k elements every time."
+---
+
+## The problem
+
+Given an array `nums` and an integer `k`, find the contiguous subarray of length **exactly k** with the maximum average, and return that average.
+
+**Example:** `nums = [1, 12, -5, -6, 50, 3]`, `k = 4`
+
+The answer is `12.75`, from the window `[12, -5, -6, 50]` whose sum is `51` and average `51 / 4 = 12.75`.
+
+Since `k` is fixed, maximizing the average is the same as maximizing the window **sum** — divide once at the end.
+
+## Approach 1 — Recompute every window
+
+For each starting index, sum the next `k` elements.
+
+```js
+function findMaxAverage(nums, k) {
+  let best = -Infinity
+  for (let i = 0; i + k <= nums.length; i++) {
+    let sum = 0
+    for (let j = i; j < i + k; j++) sum += nums[j]
+    best = Math.max(best, sum)
+  }
+  return best / k
+}
+```
+
+**Time:** O(n · k) — adjacent windows share `k - 1` elements, and we re-add all of them every time. **Space:** O(1).
+
+## Approach 2 — Sliding window
+
+Adjacent windows differ by exactly two elements: the one entering on the right and the one leaving on the left. So keep a running sum and update it in O(1) per slide:
+
+```js
+function findMaxAverage(nums, k) {
+  let windowSum = 0
+  for (let i = 0; i < k; i++) windowSum += nums[i]
+
+  let best = windowSum
+  for (let i = k; i < nums.length; i++) {
+    windowSum += nums[i] - nums[i - k] // add entering, drop leaving
+    best = Math.max(best, windowSum)
+  }
+  return best / k
+}
+```
+
+**Time:** O(n) — each element enters the window once and leaves once. **Space:** O(1).
+
+## Dry run
+
+`nums = [1, 12, -5, -6, 50, 3]`, `k = 4`. First window `[1, 12, -5, -6]` sums to `2`.
+
+<Table
+  data={{
+    headers: ['Window', 'Enters', 'Leaves', 'Window sum', 'Best so far'],
+    rows: [
+      ['[1, 12, -5, -6]', '—', '—', '2', '2'],
+      ['[12, -5, -6, 50]', '50', '1', '2 + 50 - 1 = 51', '51'],
+      ['[-5, -6, 50, 3]', '3', '12', '51 + 3 - 12 = 42', '51'],
+    ],
+  }}
+/>
+
+Final answer: `51 / 4 = 12.75`. Two additions per slide, no matter how large `k` is.
+
+## Edge cases
+
+- `k === nums.length` → one window, the loop body never runs, and the initial sum is the answer.
+- Negative numbers are why `best` starts at the first window's sum (or `-Infinity`), never at `0`.
+- Overflow isn't a concern in JavaScript here, but in other languages the running sum should be a 64-bit type.

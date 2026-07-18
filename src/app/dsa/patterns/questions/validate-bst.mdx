@@ -1,0 +1,103 @@
+---
+title: "Validate Binary Search Tree"
+pattern: "tree-bfs-dfs"
+order: 802
+difficulty: "Medium"
+leetcode: "https://leetcode.com/problems/validate-binary-search-tree/"
+gfg: "https://www.geeksforgeeks.org/dsa/a-program-to-check-if-a-binary-tree-is-bst-or-not/"
+summary: "The classic trap: checking each node against its children isn't enough — you must carry min/max bounds down the tree."
+---
+
+## The problem
+
+Given the root of a binary tree, determine whether it's a valid **binary search tree**: every node's left subtree contains only values *less than* the node, the right subtree only values *greater*, and both subtrees are themselves BSTs.
+
+**Example of the trap:** this tree is **not** a valid BST, even though every parent-child pair looks fine locally:
+
+```
+      5
+     / \
+    1   6
+       / \
+      3   8
+```
+
+`6 > 5` ✓ and `3 < 6` ✓ — but `3` sits in the **right subtree of 5**, and `3 < 5`. The BST property is about entire subtrees, not just direct children.
+
+## Approach 1 — Check children only (the wrong answer)
+
+```js
+// WRONG — accepts the tree above
+function isValidBST(root) {
+  if (!root) return true
+  if (root.left && root.left.val >= root.val) return false
+  if (root.right && root.right.val <= root.val) return false
+  return isValidBST(root.left) && isValidBST(root.right)
+}
+```
+
+Worth writing out because interviewers *expect* you to know why it fails: the check never learns that everything under `5.right` must also stay above 5.
+
+## Approach 2 — DFS with min/max bounds
+
+Pass down the open interval each node must lie in. The root can be anything; going left tightens the upper bound, going right tightens the lower bound.
+
+```js
+function isValidBST(root) {
+  function valid(node, low, high) {
+    if (!node) return true
+    if (node.val <= low || node.val >= high) return false
+    return (
+      valid(node.left, low, node.val) &&
+      valid(node.right, node.val, high)
+    )
+  }
+  return valid(root, -Infinity, Infinity)
+}
+```
+
+**Time:** O(n) — each node checked once. **Space:** O(h) recursion depth.
+
+## Approach 3 — In-order traversal must be sorted
+
+In-order traversal of a BST (left, node, right) visits values in strictly increasing order. So traverse in-order and verify each value exceeds the previous one.
+
+```js
+function isValidBST(root) {
+  let prev = -Infinity
+  function inorder(node) {
+    if (!node) return true
+    if (!inorder(node.left)) return false
+    if (node.val <= prev) return false
+    prev = node.val
+    return inorder(node.right)
+  }
+  return inorder(root)
+}
+```
+
+Same O(n) / O(h), and a nice reminder that "in-order of a BST is sorted" is a reusable fact (it's also how you solve Kth Smallest in a BST).
+
+## Dry run
+
+Approach 2 on the trap tree (`5`, left `1`, right `6` with children `3` and `8`):
+
+<Table
+  data={{
+    headers: ['Node', 'Allowed range', 'In range?', 'Result'],
+    rows: [
+      ['5', '(-∞, ∞)', 'yes', 'recurse'],
+      ['1', '(-∞, 5)', 'yes', 'leaf — true'],
+      ['6', '(5, ∞)', 'yes', 'recurse'],
+      ['3', '(5, 6)', '3 <= 5 — NO', 'false bubbles up'],
+    ],
+  }}
+/>
+
+The bound `(5, 6)` is the information Approach 1 never had: `3` must be greater than its grandparent `5`, not just less than its parent `6`.
+
+## Edge cases
+
+- Empty tree and single node → valid.
+- **Duplicates are invalid** under this problem's definition — hence `<=` / `>=` in the bound checks, not `<` / `>`.
+- Node values at integer extremes: using `-Infinity`/`Infinity` (or `null` sentinels) avoids the classic bug where `Number.MIN_SAFE_INTEGER` bounds reject legitimate extreme values.

@@ -1,0 +1,97 @@
+---
+title: "Daily Temperatures"
+pattern: "stack"
+order: 602
+difficulty: "Medium"
+leetcode: "https://leetcode.com/problems/daily-temperatures/"
+gfg: "https://www.geeksforgeeks.org/dsa/next-greater-element/"
+summary: "The monotonic stack in its natural habitat — every 'next greater element' question is this problem wearing a costume."
+---
+
+## The problem
+
+Given daily temperatures, return an array where `answer[i]` is the number of days you must wait after day `i` for a **warmer** temperature. If no warmer day comes, `answer[i] = 0`.
+
+**Example:** `temperatures = [73, 74, 75, 71, 69, 72, 76, 73]`
+
+The answer is `[1, 1, 4, 2, 1, 1, 0, 0]`. Day 2 (75°) waits 4 days because 71, 69, and 72 are all cooler — the next warmer day is day 6 (76°).
+
+This is "next greater element to the right" with distances instead of values.
+
+## Approach 1 — Scan forward for each day
+
+```js
+function dailyTemperatures(temperatures) {
+  const n = temperatures.length
+  const answer = new Array(n).fill(0)
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (temperatures[j] > temperatures[i]) {
+        answer[i] = j - i
+        break
+      }
+    }
+  }
+  return answer
+}
+```
+
+**Time:** O(n²) — a decreasing sequence like `[80, 79, 78, ...]` makes every inner scan run to the end. **Space:** O(1).
+
+## Approach 2 — Monotonic stack
+
+Walk the array once, keeping a stack of indices whose warmer day hasn't been found yet. Invariant: temperatures at stacked indices are **strictly decreasing** from bottom to top.
+
+When a new temperature arrives, it *is* the answer for every stacked index that's cooler — pop them all, record their distances, then push the new index.
+
+```js
+function dailyTemperatures(temperatures) {
+  const answer = new Array(temperatures.length).fill(0)
+  const stack = [] // indices with unresolved answers, temps decreasing
+
+  for (let i = 0; i < temperatures.length; i++) {
+    while (
+      stack.length > 0 &&
+      temperatures[i] > temperatures[stack[stack.length - 1]]
+    ) {
+      const j = stack.pop()
+      answer[j] = i - j
+    }
+    stack.push(i)
+  }
+  return answer
+}
+```
+
+**Time:** O(n) — despite the nested `while`, each index is pushed once and popped at most once, so total work is 2n. **Space:** O(n) for the stack.
+
+## Dry run
+
+`temperatures = [73, 74, 75, 71, 69, 72, 76, 73]`
+
+<Table
+  data={{
+    headers: ['i', 'Temp', 'Pops (index: distance)', 'Stack after (indices)'],
+    rows: [
+      ['0', '73', '—', '0'],
+      ['1', '74', '0: 1', '1'],
+      ['2', '75', '1: 1', '2'],
+      ['3', '71', '—', '2, 3'],
+      ['4', '69', '—', '2, 3, 4'],
+      ['5', '72', '4: 1, then 3: 2', '2, 5'],
+      ['6', '76', '5: 1, then 2: 4', '6'],
+      ['7', '73', '—', '6, 7'],
+    ],
+  }}
+/>
+
+Indices 6 and 7 never get popped — their answers stay `0`, meaning no warmer day exists.
+
+Result: `[1, 1, 4, 2, 1, 1, 0, 0]`.
+
+## Edge cases
+
+- Strictly decreasing input → nothing ever pops; all zeros, and the stack holds every index.
+- Strictly increasing input → every element pops exactly one predecessor; all ones.
+- Equal temperatures don't pop (the comparison is strict `>`), which is correct — "warmer" means strictly greater.
+- Flip the comparison and/or direction of travel, and the same skeleton solves Next Greater Element, Largest Rectangle in Histogram, and stock-span problems.

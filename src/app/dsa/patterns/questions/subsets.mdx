@@ -1,0 +1,94 @@
+---
+title: "Subsets"
+pattern: "backtracking"
+order: 1001
+difficulty: "Medium"
+leetcode: "https://leetcode.com/problems/subsets/"
+gfg: "https://www.geeksforgeeks.org/dsa/power-set/"
+summary: "The hello-world of backtracking: at each element, branch on include vs. exclude — and learn why you push, recurse, then pop."
+---
+
+## The problem
+
+Given an array of **unique** integers, return every possible subset (the power set), in any order.
+
+**Example:** `nums = [1, 2, 3]` → `[[], [1], [2], [3], [1, 2], [1, 3], [2, 3], [1, 2, 3]]` — 2³ = 8 subsets.
+
+Each element is either *in* or *out* of a subset, independently. That's 2ⁿ combinations, and the job is to enumerate them without duplicates or misses.
+
+## Approach 1 — Backtracking (include / exclude as you go)
+
+Build one subset in a shared `path` array. At position `start`, loop over each candidate element, and for each: **choose** it (push), **explore** (recurse with the next start), **unchoose** (pop). Recording `path` at every node of the recursion — not just the leaves — captures all subsets.
+
+```js
+function subsets(nums) {
+  const result = []
+  const path = []
+
+  function backtrack(start) {
+    result.push([...path]) // snapshot — path keeps mutating!
+
+    for (let i = start; i < nums.length; i++) {
+      path.push(nums[i])   // choose
+      backtrack(i + 1)     // explore everything that starts this way
+      path.pop()           // unchoose — restore state for the next branch
+    }
+  }
+
+  backtrack(0)
+  return result
+}
+```
+
+**Time:** O(n · 2ⁿ) — 2ⁿ subsets, each copied in up to O(n). **Space:** O(n) recursion depth (beyond the output).
+
+Two lines carry all the meaning:
+
+- `result.push([...path])` — the **copy** is mandatory; pushing `path` itself would fill the result with references to one repeatedly-emptied array.
+- `path.pop()` — the **backtrack**. Without it, choices leak from one branch into its siblings.
+
+## Approach 2 — Iterative doubling
+
+Start with `[[]]`. For each number, extend every existing subset with it, keeping both versions.
+
+```js
+function subsets(nums) {
+  let result = [[]]
+  for (const num of nums) {
+    result = result.concat(result.map((set) => [...set, num]))
+  }
+  return result
+}
+```
+
+Same O(n · 2ⁿ). Elegant — and worth pairing with the observation that subset k corresponds to the **bitmask** of k: bit i set means take `nums[i]` (a third approach, useful when n ≤ 20).
+
+## Dry run
+
+Backtracking on `[1, 2, 3]`. Each row is a call or an action inside one:
+
+<Table
+  data={{
+    headers: ['Action', 'path', 'Recorded so far'],
+    rows: [
+      ['enter backtrack(0), record []', '[]', '8 total: []'],
+      ['choose 1, enter backtrack(1), record', '[1]', '…, [1]'],
+      ['choose 2, enter backtrack(2), record', '[1, 2]', '…, [1, 2]'],
+      ['choose 3, enter backtrack(3), record', '[1, 2, 3]', '…, [1, 2, 3]'],
+      ['pop 3, pop 2 — back in backtrack(1)', '[1]', ''],
+      ['choose 3, enter backtrack(3), record', '[1, 3]', '…, [1, 3]'],
+      ['pop 3, pop 1 — back in backtrack(0)', '[]', ''],
+      ['choose 2, enter backtrack(2), record', '[2]', '…, [2]'],
+      ['choose 3, enter backtrack(3), record', '[2, 3]', '…, [2, 3]'],
+      ['pop 3, pop 2, choose 3, record', '[3]', '…, [3]'],
+    ],
+  }}
+/>
+
+The push → recurse → pop rhythm visits each of the 8 subsets exactly once, in depth-first order.
+
+## Edge cases
+
+- Empty input → `[[]]` — the empty set is always a subset.
+- If the input can contain **duplicates** (Subsets II, LC 90): sort first, then inside the loop skip `nums[i] === nums[i - 1]` when `i > start`. Same skeleton, one guard line.
+- Output size is exponential by nature — no algorithm does better than O(2ⁿ) here, so don't chase it.
