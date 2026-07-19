@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 
 type Step = { array: number[]; active: number[]; sorted: number[] }
 type Algorithm = 'bubble' | 'selection' | 'insertion' | 'merge' | 'quick' | 'heap'
@@ -216,18 +216,16 @@ export function SortVisualizer({ algorithm }: { algorithm: Algorithm }) {
   const [playing, setPlaying] = useState(false)
   const step = steps[index]
   const max = Math.max(...step.array)
+  const atEnd = index >= steps.length - 1
+  const isPlaying = playing && !atEnd
 
   useEffect(() => {
-    if (!playing) return
+    if (!isPlaying) return
     const id = setInterval(() => {
       setIndex((i) => Math.min(i + 1, steps.length - 1))
     }, 450)
     return () => clearInterval(id)
-  }, [playing, steps])
-
-  useEffect(() => {
-    if (index >= steps.length - 1) setPlaying(false)
-  }, [index, steps])
+  }, [isPlaying, steps])
 
   function reset(newSteps?: Step[]) {
     setPlaying(false)
@@ -263,10 +261,17 @@ export function SortVisualizer({ algorithm }: { algorithm: Algorithm }) {
       <div className="mt-4 flex items-center gap-2 text-xs">
         <button
           type="button"
-          onClick={() => setPlaying((p) => !p)}
+          onClick={() => {
+            if (atEnd) {
+              setIndex(0)
+              setPlaying(true)
+            } else {
+              setPlaying((p) => !p)
+            }
+          }}
           className="px-3 py-1.5 rounded-md bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-200 hover:bg-neutral-200 dark:hover:bg-neutral-700 transition-colors"
         >
-          {playing ? 'Pause' : index >= steps.length - 1 ? 'Replay' : 'Play'}
+          {isPlaying ? 'Pause' : atEnd ? 'Replay' : 'Play'}
         </button>
         <button
           type="button"

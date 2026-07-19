@@ -16,6 +16,7 @@ export function TableOfContents() {
     const elements = Array.from(
       document.querySelectorAll<HTMLElement>('article h2, article h3')
     )
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- headings only exist in the rendered DOM, so they must be read after mount
     setHeadings(
       elements.map((el) => ({
         id: el.id,

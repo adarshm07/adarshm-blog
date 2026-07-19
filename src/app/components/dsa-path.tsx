@@ -45,6 +45,7 @@ export function DsaPath({ phases }: { phases: PathPhase[] }) {
   const [hydrated, setHydrated] = useState(false)
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration-safe localStorage read: server renders the default, client syncs after mount
     setDone(loadProgress())
     setHydrated(true)
   }, [])

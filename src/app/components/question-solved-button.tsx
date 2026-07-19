@@ -22,6 +22,7 @@ export function QuestionSolvedButton({ slug }: { slug: string }) {
   const [hydrated, setHydrated] = useState(false)
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration-safe localStorage read: server renders the default, client syncs after mount
     setSolved(loadProgress().has(slug))
     setHydrated(true)
   }, [slug])

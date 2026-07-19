@@ -10,16 +10,16 @@ type Metadata = {
 }
 
 function parseFrontmatter(fileContent: string) {
-  let frontmatterRegex = /---\s*([\s\S]*?)\s*---/
-  let match = frontmatterRegex.exec(fileContent)
-  let frontMatterBlock = match![1]
-  let content = fileContent.replace(frontmatterRegex, '').trim()
-  let frontMatterLines = frontMatterBlock.trim().split('\n')
-  let metadata: Partial<Metadata> = {}
+  const frontmatterRegex = /---\s*([\s\S]*?)\s*---/
+  const match = frontmatterRegex.exec(fileContent)
+  const frontMatterBlock = match![1]
+  const content = fileContent.replace(frontmatterRegex, '').trim()
+  const frontMatterLines = frontMatterBlock.trim().split('\n')
+  const metadata: Partial<Metadata> = {}
 
   frontMatterLines.forEach((line) => {
-    let [key, ...valueArr] = line.split(': ')
-    let trimmedKey = key.trim()
+    const [key, ...valueArr] = line.split(': ')
+    const trimmedKey = key.trim()
     let value = valueArr.join(': ').trim()
     value = value.replace(/^['"](.*)['"]$/, '$1') // Remove quotes
 
@@ -41,15 +41,15 @@ function getMDXFiles(dir: fs.PathLike) {
 }
 
 function readMDXFile(filePath: fs.PathOrFileDescriptor) {
-  let rawContent = fs.readFileSync(filePath, 'utf-8')
+  const rawContent = fs.readFileSync(filePath, 'utf-8')
   return parseFrontmatter(rawContent)
 }
 
 function getMDXData(dir: string) {
-  let mdxFiles = getMDXFiles(dir)
+  const mdxFiles = getMDXFiles(dir)
   return mdxFiles.map((file) => {
-    let { metadata, content } = readMDXFile(path.join(dir, file))
-    let slug = path.basename(file, path.extname(file))
+    const { metadata, content } = readMDXFile(path.join(dir, file))
+    const slug = path.basename(file, path.extname(file))
 
     return {
       metadata,
@@ -64,20 +64,20 @@ export function getBlogPosts() {
 }
 
 export function getAllTags() {
-  let posts = getBlogPosts()
-  let tags = new Set<string>()
+  const posts = getBlogPosts()
+  const tags = new Set<string>()
   posts.forEach((post) => post.metadata.tags?.forEach((tag) => tags.add(tag)))
   return Array.from(tags).sort()
 }
 
 export function getReadingTime(content: string) {
-  let words = content.trim().split(/\s+/).length
+  const words = content.trim().split(/\s+/).length
   return Math.max(1, Math.round(words / 200))
 }
 
 export function getRelatedPosts(slug: string, limit = 3) {
-  let posts = getBlogPosts()
-  let current = posts.find((post) => post.slug === slug)
+  const posts = getBlogPosts()
+  const current = posts.find((post) => post.slug === slug)
   if (!current?.metadata.tags?.length) return []
 
   return posts
@@ -100,15 +100,15 @@ export function getRelatedPosts(slug: string, limit = 3) {
 }
 
 export function formatDate(date: string, includeRelative = false) {
-  let currentDate = new Date()
+  const currentDate = new Date()
   if (!date.includes('T')) {
     date = `${date}T00:00:00`
   }
-  let targetDate = new Date(date)
+  const targetDate = new Date(date)
 
-  let yearsAgo = currentDate.getFullYear() - targetDate.getFullYear()
-  let monthsAgo = currentDate.getMonth() - targetDate.getMonth()
-  let daysAgo = currentDate.getDate() - targetDate.getDate()
+  const yearsAgo = currentDate.getFullYear() - targetDate.getFullYear()
+  const monthsAgo = currentDate.getMonth() - targetDate.getMonth()
+  const daysAgo = currentDate.getDate() - targetDate.getDate()
 
   let formattedDate = ''
 
@@ -122,7 +122,7 @@ export function formatDate(date: string, includeRelative = false) {
     formattedDate = 'Today'
   }
 
-  let fullDate = targetDate.toLocaleString('en-us', {
+  const fullDate = targetDate.toLocaleString('en-us', {
     month: 'long',
     day: 'numeric',
     year: 'numeric',

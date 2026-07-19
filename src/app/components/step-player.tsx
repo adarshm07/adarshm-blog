@@ -13,18 +13,16 @@ export function StepPlayer({
 }) {
   const [index, setIndex] = useState(0)
   const [playing, setPlaying] = useState(false)
+  const atEnd = index >= length - 1
+  const isPlaying = playing && !atEnd
 
   useEffect(() => {
-    if (!playing) return
+    if (!isPlaying) return
     const id = setInterval(() => {
       setIndex((i) => Math.min(i + 1, length - 1))
     }, interval)
     return () => clearInterval(id)
-  }, [playing, length, interval])
-
-  useEffect(() => {
-    if (index >= length - 1) setPlaying(false)
-  }, [index, length])
+  }, [isPlaying, length, interval])
 
   return (
     <div className="not-prose my-6 rounded-xl border border-neutral-100 dark:border-neutral-800 p-4">
@@ -32,10 +30,17 @@ export function StepPlayer({
       <div className="mt-3 flex items-center gap-2 text-xs">
         <button
           type="button"
-          onClick={() => setPlaying((p) => !p)}
+          onClick={() => {
+            if (atEnd) {
+              setIndex(0)
+              setPlaying(true)
+            } else {
+              setPlaying((p) => !p)
+            }
+          }}
           className="px-3 py-1.5 rounded-md bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-200 hover:bg-neutral-200 dark:hover:bg-neutral-700 transition-colors"
         >
-          {playing ? 'Pause' : index >= length - 1 ? 'Replay' : 'Play'}
+          {isPlaying ? 'Pause' : atEnd ? 'Replay' : 'Play'}
         </button>
         <button
           type="button"

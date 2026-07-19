@@ -3,7 +3,6 @@
 import { StepNote, StepPlayer } from '@/app/components/step-player'
 
 const ARRAY = [2, 1, 5, 1, 3, 2]
-const K = 3
 
 type Step = {
   start: number
