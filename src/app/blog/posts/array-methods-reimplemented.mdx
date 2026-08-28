@@ -1,0 +1,164 @@
+---
+title: "map, filter, and reduce: Reimplementing Array Methods From Scratch"
+publishedAt: "2026-07-18"
+summary: "map and filter are both just reduce wearing a costume. Reimplementing the core array methods from first principles explains why chaining them can be wasteful, and when reduce is genuinely the right tool instead of a code-golf trick."
+tags: "JavaScript"
+---
+
+`array.map(fn)` and `array.filter(fn)` feel like fundamentally different
+operations, but underneath they're both special cases of the same more
+general idea: fold the array down to a single accumulated result, one
+element at a time. That general idea is `reduce`. Reimplementing all
+three from scratch makes their relationship, and their real cost, obvious
+in a way the built-in methods hide.
+
+## reduce: the primitive underneath the other two
+
+```javascript
+Array.prototype.myReduce = function (callback, initialValue) {
+  let acc = initialValue;
+  let startIndex = 0;
+
+  if (acc === undefined) {
+    acc = this[0];     // no initial value → seed with the first element
+    startIndex = 1;
+  }
+
+  for (let i = startIndex; i < this.length; i++) {
+    acc = callback(acc, this[i], i, this);
+  }
+
+  return acc;
+};
+
+[1, 2, 3, 4].myReduce((sum, n) => sum + n, 0); // 10
+```
+
+Every other array-folding method — `map`, `filter`, `some`, `every`,
+`find`, even `join` — can be expressed as a `reduce` with a specific
+accumulator shape and combining rule. That's not a coincidence; it's the
+whole point of `reduce` existing as a primitive.
+
+## map, in terms of reduce
+
+`map` accumulates into a **new array** the same length as the input,
+transforming each element on the way:
+
+```javascript
+Array.prototype.myMap = function (callback) {
+  return this.myReduce((acc, value, i, arr) => {
+    acc.push(callback(value, i, arr));
+    return acc;
+  }, []);
+};
+
+[1, 2, 3].myMap((n) => n * 2); // [2, 4, 6]
+```
+
+Or written directly, without going through `reduce`, which is how the
+native implementation actually works for performance reasons:
+
+```javascript
+Array.prototype.myMapDirect = function (callback) {
+  const result = new Array(this.length);
+  for (let i = 0; i < this.length; i++) {
+    result[i] = callback(this[i], i, this);
+  }
+  return result;
+};
+```
+
+Both versions preserve the invariant that defines `map`: **the output is
+always the same length as the input** — one transformed value per
+original element, with nothing dropped and nothing added.
+
+## filter, in terms of reduce
+
+`filter` also accumulates into a new array, but conditionally pushes —
+the output length depends on how many elements pass the predicate:
+
+```javascript
+Array.prototype.myFilter = function (predicate) {
+  return this.myReduce((acc, value, i, arr) => {
+    if (predicate(value, i, arr)) acc.push(value);
+    return acc;
+  }, []);
+};
+
+[1, 2, 3, 4, 5].myFilter((n) => n % 2 === 0); // [2, 4]
+```
+
+Side by side, the pattern is unmistakable: `map` and `filter` differ only
+in *what gets pushed into the accumulator array* — everything else about
+the fold is identical. That's why libraries like Ramda and lodash/fp can
+express both as thin wrappers over one transducer concept.
+
+## Why chaining map/filter/reduce can be wasteful
+
+`arr.filter(f).map(g).reduce(h)` is readable, but each method call walks
+the **entire array** and allocates a **new intermediate array** before
+the next method starts:
+
+```javascript
+const result = data
+  .filter((x) => x.active)   // full pass, new array #1
+  .map((x) => x.value)        // full pass, new array #2
+  .reduce((sum, v) => sum + v, 0); // full pass, no array
+```
+
+For a large array, that's three full passes and two throwaway arrays,
+purely for the sake of readable chaining. A single hand-written loop (or
+one combined `reduce`) does the same work in one pass with no
+intermediate allocation:
+
+```javascript
+let sum = 0;
+for (const x of data) {
+  if (x.active) sum += x.value; // filter + map + reduce, fused into one pass
+}
+```
+
+This is the trade every chained pipeline is making: readability and
+composability against extra passes and allocations. For most arrays at
+most sizes it's the right trade — three passes over a few thousand items
+is not where your program's time is going. It stops being the right trade
+on hot paths over large datasets, which is exactly when reaching for a
+manual loop (or a fused `reduce`) earns its loss of readability.
+
+## some, every, and find are early-exit folds
+
+Not every array method needs to visit every element — `some`, `every`,
+and `find` all short-circuit, which is something a naive `reduce`-based
+implementation can't do without an explicit escape hatch:
+
+```javascript
+Array.prototype.mySome = function (predicate) {
+  for (let i = 0; i < this.length; i++) {
+    if (predicate(this[i], i, this)) return true; // stop at the first match
+  }
+  return false;
+};
+
+Array.prototype.myEvery = function (predicate) {
+  for (let i = 0; i < this.length; i++) {
+    if (!predicate(this[i], i, this)) return false; // stop at the first failure
+  }
+  return true;
+};
+```
+
+This is a real, measurable difference from `map`/`filter`/`reduce`, which
+always visit every element: `[huge array].some(matchesFirstElement)`
+returns after one check, while `.filter(...).length > 0` for the same
+condition would walk the entire array regardless.
+
+## Wrap-up
+
+`map` and `filter` aren't primitives of their own — they're `reduce` with
+a fixed shape of accumulator and a specific combining rule, which is why
+every array-folding method in the language can be expressed in terms of
+one general fold. That relationship also explains the real cost of
+chaining several of them together: each one is a full pass with its own
+allocation, a fine default until the array is large enough or the
+operation hot enough that fusing them into a single loop actually
+matters.
