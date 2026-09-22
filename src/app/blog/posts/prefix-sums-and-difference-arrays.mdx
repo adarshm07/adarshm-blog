@@ -1,0 +1,170 @@
+---
+title: "Prefix Sums and Difference Arrays: Trading Space for Constant-Time Queries"
+publishedAt: "2026-09-13"
+summary: "Precompute once, answer range queries in O(1). How prefix sums work, the sentinel zero that removes every edge case, difference arrays for range updates, and the 2D version."
+tags: "DSA"
+---
+
+You have an array of a million numbers and a hundred thousand questions of
+the form "what's the sum between index i and j?". Answering each one with a
+loop is a hundred billion additions. Answering each one with a subtraction
+is a hundred thousand.
+
+The gap between those two numbers is one precomputed array.
+
+## The running total
+
+A prefix sum array stores the sum of everything up to each position:
+
+```
+prefix[k] = nums[0] + nums[1] + ... + nums[k-1]
+```
+
+Note the `k-1`: `prefix[k]` covers the *first k elements*, so `prefix[0] = 0`
+covers nothing. That sentinel zero is not decoration — it's what makes the
+query formula work for every range, including ones that start at index 0.
+
+<PrefixSumVisualizer />
+
+The query is one line of arithmetic:
+
+```
+sum(i..j) = prefix[j + 1] - prefix[i]
+```
+
+Everything before `i` appears in both terms and cancels. The width of the
+range is irrelevant — summing ten elements and summing a million both cost
+one subtraction.
+
+```javascript
+function buildPrefix(nums) {
+  const prefix = new Array(nums.length + 1).fill(0);
+  for (let i = 0; i < nums.length; i++) {
+    prefix[i + 1] = prefix[i] + nums[i];
+  }
+  return prefix;
+}
+
+const rangeSum = (prefix, i, j) => prefix[j + 1] - prefix[i];
+```
+
+O(n) to build, O(n) extra space, O(1) per query. It pays for itself the
+moment you have more than a couple of queries — and it only works if the
+array doesn't change between them.
+
+## Subarray sums equal to K
+
+The formula also runs backwards, and that's where prefix sums stop being
+bookkeeping and start solving problems.
+
+A subarray `(i..j)` sums to `k` exactly when
+`prefix[j+1] - prefix[i] === k`, i.e. when
+`prefix[i] === prefix[j+1] - k`. So as you sweep left to right, you don't
+need to look for subarrays — you need to count how many earlier prefix
+values equal `current - k`. That's a hash map:
+
+```javascript
+function subarraySum(nums, k) {
+  const seen = new Map([[0, 1]]);   // the empty prefix, seen once
+  let running = 0, count = 0;
+
+  for (const n of nums) {
+    running += n;
+    count += seen.get(running - k) ?? 0;   // how many valid starts
+    seen.set(running, (seen.get(running) ?? 0) + 1);
+  }
+  return count;
+}
+```
+
+O(n) time, and it handles negative numbers — which is exactly where the
+sliding-window approach breaks down, because a window's sum is no longer
+monotonic when it grows.
+
+The `[[0, 1]]` seed is the sentinel zero again: it's what lets a subarray
+starting at index 0 be counted.
+
+## Difference arrays: the mirror image
+
+Prefix sums make range *queries* cheap. The mirror trick makes range
+*updates* cheap.
+
+Say you need to add 5 to every element between i and j, many times over, and
+only read the array at the end. Instead of touching `j - i + 1` elements per
+update, record the change at the boundaries:
+
+```javascript
+function rangeAdd(diff, i, j, val) {
+  diff[i] += val;        // from here on, everything is val higher
+  diff[j + 1] -= val;    // ...until here, where it goes back
+}
+
+// one final O(n) pass turns the deltas into real values
+function materialize(diff) {
+  const out = [];
+  let running = 0;
+  for (const d of diff) { running += d; out.push(running); }
+  return out;
+}
+```
+
+Each update is O(1); one O(n) pass at the end reconstructs everything. And
+that final pass is literally a prefix sum — the difference array is the
+inverse operation, the same way differentiation inverts integration.
+
+This is the standard solution to the "corporate flight bookings" and "car
+pooling" style problems, and to any "apply N interval updates, then report
+the result" task.
+
+## Two dimensions
+
+The same idea extends to grids. Build `prefix[r][c]` as the sum of the
+rectangle from the origin to `(r-1, c-1)`, and any submatrix sum comes out of
+inclusion–exclusion:
+
+```javascript
+// sum of the rectangle (r1,c1)..(r2,c2), inclusive
+const total =
+    prefix[r2 + 1][c2 + 1]
+  - prefix[r1][c2 + 1]      // strip above
+  - prefix[r2 + 1][c1]      // strip to the left
+  + prefix[r1][c1];         // that corner was subtracted twice
+```
+
+Four lookups, constant time, regardless of the rectangle's size. Building it
+is the same pattern:
+
+```javascript
+prefix[r + 1][c + 1] =
+  grid[r][c] + prefix[r][c + 1] + prefix[r + 1][c] - prefix[r][c];
+```
+
+## When not to use it
+
+Prefix sums assume a **static array**. One update to `nums[i]` invalidates
+every prefix entry from `i` onwards, costing O(n) to repair. If reads and
+writes are interleaved, you want a structure built for both:
+
+<Table
+  data={{
+    headers: ['Workload', 'Structure', 'Query', 'Update'],
+    rows: [
+      ['Many queries, no updates', 'Prefix sum', 'O(1)', 'O(n)'],
+      ['Many updates, one read', 'Difference array', 'O(n)', 'O(1)'],
+      ['Both interleaved', 'Fenwick / segment tree', 'O(log n)', 'O(log n)'],
+    ],
+  }}
+/>
+
+If you need range *minimum* or *maximum* rather than sums, prefix arrays
+don't apply at all — subtraction has no equivalent for min, because you
+can't "remove" a value from a minimum. That's [segment tree](/blog/segment-trees-range-queries)
+territory.
+
+## The habit worth forming
+
+Before writing a loop that recomputes an aggregate over a range, ask whether
+the aggregate is *invertible*. Sums, counts, and XORs are — you can subtract
+the part you don't want. Minimums and maximums are not. When it is
+invertible, one precomputed array collapses the whole query loop into
+arithmetic.

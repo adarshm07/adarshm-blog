@@ -1,0 +1,163 @@
+---
+title: "Web Workers: Getting Heavy Work Off the Main Thread"
+publishedAt: "2026-09-21"
+summary: "The main thread paints your UI and runs your JavaScript, and it can only do one at a time. What workers can and can't do, the cost of postMessage, and when the copy is worse than the work."
+tags: "JavaScript"
+---
+
+The browser's main thread has one job list and everything on it: running
+your JavaScript, calculating styles, laying out, painting, and handling
+input. It works through that list one item at a time. A function that takes
+200ms to run isn't just slow — for those 200ms the page cannot paint a
+frame, cannot respond to a click, cannot even spin a CSS animation driven by
+the main thread.
+
+The [event loop](/blog/javascript-event-loop) explains *why* that happens.
+Web Workers are the way around it.
+
+## What blocking actually looks like
+
+At 60fps the browser has about 16ms per frame. Anything longer than that and
+frames start dropping:
+
+<WorkerThreadVisualizer />
+
+The work is identical in both timelines. The only difference is which thread
+runs it — and that decides whether the page is responsive while it happens.
+
+## Starting a worker
+
+```javascript
+// main.js
+const worker = new Worker(new URL('./heavy.worker.js', import.meta.url), {
+  type: 'module',
+});
+
+worker.postMessage({ type: 'parse', payload: bigArray });
+
+worker.onmessage = (e) => {
+  render(e.data.result);     // runs on the main thread, between frames
+};
+
+worker.onerror = (e) => {
+  console.error('worker failed:', e.message);
+};
+```
+
+```javascript
+// heavy.worker.js
+self.onmessage = (e) => {
+  if (e.data.type === 'parse') {
+    const result = expensiveComputation(e.data.payload);
+    self.postMessage({ result });
+  }
+};
+```
+
+That's the whole API. The `new URL(..., import.meta.url)` form is what lets
+bundlers find and build the worker file; a bare string path works at runtime
+but usually breaks the build.
+
+## What a worker cannot do
+
+A worker runs in its own global scope with no access to:
+
+- **The DOM.** No `document`, no elements, no reading `getBoundingClientRect`.
+- **`window`** and most things hanging off it, including `localStorage`.
+- **Your page's variables.** Separate realm, separate memory. Nothing is
+  shared implicitly.
+
+What it does have: `fetch`, `WebSocket`, `IndexedDB`, `crypto`, timers,
+`OffscreenCanvas`, and WebAssembly. Enough for computation, parsing,
+encryption, compression, and network orchestration — and nothing that
+touches the UI directly.
+
+The restriction isn't arbitrary. Making the DOM accessible from multiple
+threads would require locking every DOM operation, which would slow down the
+single-threaded case that 99% of pages actually run.
+
+## postMessage copies, and that copy is not free
+
+Data crossing the boundary is serialized with the **structured clone
+algorithm**. It handles more than JSON — `Map`, `Set`, `Date`, `RegExp`,
+`ArrayBuffer`, `Blob`, cyclic references — but not functions, DOM nodes,
+class identity (prototypes are lost; a `User` instance arrives as a plain
+object), or anything holding a closure.
+
+The cost is proportional to the size of the data, and it's paid *on the
+sending thread*. Shipping 50MB to a worker blocks the main thread while it
+serializes — which can cost more than the computation you were trying to
+offload.
+
+**Transferables** avoid the copy by moving ownership instead:
+
+```javascript
+const buffer = new ArrayBuffer(50_000_000);
+
+worker.postMessage({ buffer }, [buffer]);   // ← transfer list
+
+console.log(buffer.byteLength);   // 0 — this thread no longer owns it
+```
+
+Near-instant regardless of size, because only a pointer changes hands. The
+sender loses access, which is exactly the trade you want for "here, you deal
+with this".
+
+For genuinely shared state there's `SharedArrayBuffer` with `Atomics` — real
+shared memory, real race conditions, and cross-origin isolation headers
+required. Worth it for WebAssembly threading and little else.
+
+## When a worker is worth it
+
+Good candidates:
+
+- Parsing or transforming large JSON/CSV payloads
+- Image and video processing, compression, encryption
+- Search indexing and fuzzy matching over a big local dataset
+- Physics, pathfinding, or simulation loops
+- Diffing or syncing large local datasets
+
+Bad candidates:
+
+- Tasks under a few milliseconds — the round trip costs more than the work
+- Anything DOM-heavy, since the worker can't touch the DOM anyway
+- Large payloads that can't be transferred, where cloning dominates
+
+A rough rule: if the work is under ~5ms, keep it on the main thread. If it's
+over ~50ms, it belongs in a worker. In between, measure — and remember the
+serialization cost counts as main-thread time.
+
+## The alternative for merely-long work
+
+If the work is chunkable and doesn't need a worker's isolation, yielding to
+the event loop is simpler:
+
+```javascript
+async function processInChunks(items, fn, chunkSize = 200) {
+  for (let i = 0; i < items.length; i += chunkSize) {
+    items.slice(i, i + chunkSize).forEach(fn);
+    await new Promise((r) => setTimeout(r, 0));   // let the browser breathe
+  }
+}
+```
+
+This keeps the page responsive without a worker, at the cost of running
+slower overall. Newer browsers expose `scheduler.yield()` for the same
+purpose with better priority handling.
+
+Chunking is the right tool when the work is a loop over independent items.
+A worker is the right tool when it's one indivisible computation, or when
+you want it running *while* the UI does something else rather than
+interleaved with it.
+
+## A note on the other workers
+
+- **Web Worker** — what this post is about: a background thread for one page.
+- **Service Worker** — a network proxy for a whole origin, for offline and
+  caching. Not a place for computation; it's shut down aggressively when
+  idle.
+- **Worklet** — tiny, specialised hooks into the rendering pipeline
+  (audio, paint, animation) that run in their own context.
+
+Same word, three unrelated jobs. If you want a thread, you want a Web
+Worker.

@@ -1,0 +1,180 @@
+---
+title: "The Circuit Breaker: Failing Fast on Purpose"
+publishedAt: "2026-09-17"
+summary: "When a dependency is down, the worst thing you can do is keep waiting for it. Three states, the thresholds that matter, and how a breaker stops one slow service from taking down everything upstream."
+tags: "System Design"
+---
+
+A service you depend on goes down. Every call to it now takes 30 seconds to
+time out. Each of those calls holds a thread, a connection, and a slice of
+your request budget for the full 30 seconds — so your own service runs out
+of threads, starts timing out on requests that have nothing to do with the
+broken dependency, and the outage spreads upstream.
+
+Nothing in your code is wrong. You just kept politely waiting for a service
+that was never going to answer. The circuit breaker is the pattern that
+stops waiting.
+
+## Three states
+
+<CircuitBreakerVisualizer />
+
+**Closed** — normal operation. Calls pass through and the breaker counts
+failures.
+
+**Open** — the failure threshold was crossed. Calls fail *immediately*
+without touching the network. The caller gets an error in microseconds
+instead of seconds, and the struggling dependency gets no traffic at all.
+
+**Half-open** — after a cooldown, the breaker lets a single trial request
+through. Success closes it; failure sends it straight back to open with a
+longer cooldown.
+
+That half-open state is what makes the pattern practical. Without it,
+recovery means either flooding a recovering service with all your held-back
+traffic at once, or requiring a human to flip the switch back.
+
+## A minimal implementation
+
+```javascript
+class CircuitBreaker {
+  constructor(fn, { threshold = 5, cooldown = 30_000 } = {}) {
+    this.fn = fn;
+    this.threshold = threshold;
+    this.cooldown = cooldown;
+    this.state = 'closed';
+    this.failures = 0;
+    this.openedAt = 0;
+  }
+
+  async call(...args) {
+    if (this.state === 'open') {
+      if (Date.now() - this.openedAt < this.cooldown) {
+        throw new Error('circuit open');     // fail fast, no network call
+      }
+      this.state = 'half-open';              // time to try one request
+    }
+
+    try {
+      const result = await this.fn(...args);
+      this.onSuccess();
+      return result;
+    } catch (err) {
+      this.onFailure();
+      throw err;
+    }
+  }
+
+  onSuccess() {
+    this.failures = 0;
+    this.state = 'closed';
+  }
+
+  onFailure() {
+    this.failures++;
+    if (this.state === 'half-open' || this.failures >= this.threshold) {
+      this.state = 'open';
+      this.openedAt = Date.now();
+    }
+  }
+}
+```
+
+Note that a failure in half-open trips the breaker immediately, regardless
+of the counter. One failed trial is all the evidence needed.
+
+## One breaker per dependency
+
+This matters more than the thresholds. A breaker wraps *one* downstream
+dependency — ideally one endpoint of one service. Share a breaker across
+several dependencies and a broken payment provider will short-circuit your
+perfectly healthy search service.
+
+The corollary: a breaker is stateful per instance. Across a fleet, each pod
+learns independently, which is usually fine — each one only needs to protect
+itself. Distributed breaker state adds a shared dependency to the very code
+path meant to survive dependency failures.
+
+## Choosing thresholds
+
+A fixed count of consecutive failures is easy to reason about and poor under
+mixed traffic: a busy endpoint can have 30% of calls failing and never see
+five consecutive failures. Production implementations usually trip on a
+**failure rate over a rolling window**, with a minimum-volume guard:
+
+```
+trip if (failures / total) > 50%
+       within the last 10 seconds
+       and total >= 20 requests
+```
+
+That volume guard matters. Without it, one failure out of the two requests
+you received at 3am trips the breaker at a 50% failure rate.
+
+Starting points, to be tuned against real traffic:
+
+<Table
+  data={{
+    headers: ['Knob', 'Typical', 'Effect if too low', 'Effect if too high'],
+    rows: [
+      ['Failure rate', '50%', 'Trips on normal noise', 'Waits out the whole outage'],
+      ['Window', '10s', 'Jumpy, over-reactive', 'Slow to notice a real failure'],
+      ['Min volume', '20 req', 'Trips on tiny samples', 'Never trips on low traffic'],
+      ['Cooldown', '30s', 'Hammers a recovering service', 'Stays down after recovery'],
+    ],
+  }}
+/>
+
+## Timeouts come first
+
+A breaker that trips on failures is useless if calls never fail — they just
+hang. The pattern only works on top of an aggressive timeout:
+
+```javascript
+const withTimeout = (promise, ms) =>
+  Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('timeout')), ms)),
+  ]);
+```
+
+Set the timeout from the dependency's p99 latency, not from hope. A 30-second
+timeout on a service that normally answers in 50ms means you spend 30 seconds
+discovering something you could have known in 200 milliseconds.
+
+## What to do when it's open
+
+Failing fast is only half the value; the other half is what you return
+instead:
+
+- **Cached data**, flagged as stale. Best option when you have it.
+- **A degraded response** — search results without the personalisation
+  service, a product page without live stock counts.
+- **A default** — free shipping if the pricing service is unreachable, if
+  the business would rather absorb the cost than lose the sale.
+- **A fast, honest error** — still far better than a hanging request, since
+  the caller can decide what to do with its own budget.
+
+## Breakers, retries, and bulkheads
+
+These three compose, and each handles a different failure shape:
+
+- **[Retries with backoff](/blog/retries-backoff-and-jitter)** — one request
+  hit a blip.
+- **Circuit breaker** — the dependency is broken; stop asking for a while.
+- **Bulkhead** — cap the concurrent calls to each dependency (say, 20
+  connections) so that even while the breaker is deciding, a slow dependency
+  can only consume a bounded slice of your resources.
+
+Without the breaker, retries make an outage worse. Without the bulkhead, a
+slow dependency exhausts your thread pool before the breaker has collected
+enough evidence to trip.
+
+## Make it observable
+
+A breaker that trips silently is a mystery outage. Emit the state
+transitions, the current state per dependency, and the count of
+short-circuited calls. "Payments breaker open for 4 minutes" is a far better
+alert than "elevated error rate", because it names the dependency and the
+decision your own system made about it.

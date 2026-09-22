@@ -1,0 +1,180 @@
+---
+title: "Immutability and Structural Sharing"
+publishedAt: "2026-09-22"
+summary: "Copying a whole object to change one field sounds wasteful — and isn't, because almost nothing gets copied. How structural sharing works, why it makes === a valid change check, and where it quietly breaks."
+tags: "JavaScript"
+---
+
+Every React tutorial tells you never to mutate state. The reason usually
+given — "React won't re-render" — is true, but it skips the interesting
+part: why copying an object on every update isn't the performance disaster it
+sounds like, and why immutability makes change detection *cheaper* rather
+than more expensive.
+
+## The problem with mutation
+
+```javascript
+state.settings.theme = 'dark';
+setState(state);          // nothing re-renders
+```
+
+`state` is the same object it was before. React compares the old and new
+values with `Object.is`, sees no difference, and skips the render. The data
+changed; the reference didn't.
+
+The fix is to produce a new object — and the naive version of that is
+genuinely expensive:
+
+```javascript
+const next = structuredClone(state);   // copies everything
+next.settings.theme = 'dark';
+```
+
+Deep cloning a large state tree on every keystroke is real work, and it
+throws away something valuable: every consumer now holds a new object, so
+nothing can tell what actually changed.
+
+## Copy the path, share the rest
+
+The immutable update copies only the nodes on the path from the root to the
+change. Everything else is reused by reference:
+
+<StructuralSharingVisualizer />
+
+```javascript
+const next = {
+  ...state,                              // new root
+  settings: {
+    ...state.settings,                   // new settings
+    theme: 'dark',                       // the actual change
+  },
+};
+
+next.user === state.user;                // true  — shared, not copied
+next.settings === state.settings;        // false — on the changed path
+next.settings.lang === state.settings.lang;  // true — shared
+```
+
+Three new objects for a tree of any size. The cost is the **depth** of the
+change, not the size of the data — which is why "copying state on every
+update" is affordable even when state is large.
+
+Two versions now coexist, sharing most of their memory. Neither can observe
+the other changing, because nothing was mutated. That's what makes undo/redo
+almost free: keep the old root.
+
+## Why this makes === a valid change check
+
+This is the part that's easy to miss. Structural sharing doesn't just make
+updates cheap — it makes *comparisons* cheap.
+
+Because nothing is ever mutated in place, two references being equal
+guarantees the contents are equal. So a consumer can check one reference
+instead of walking a tree:
+
+```javascript
+// O(1), and correct — because `user` is never mutated
+if (prevState.user !== nextState.user) {
+  rerenderUserPanel();
+}
+```
+
+That's what `React.memo`, `useMemo` dependency arrays, and every selector
+library rely on. With mutable data, `prev.user === next.user` tells you
+nothing about whether the contents changed, and the only correct check is a
+deep comparison — O(n) on every render of every component.
+
+Immutability trades a small, bounded copy on write for an O(1) check on
+every read. In a UI that renders far more often than it updates, that's a
+good trade.
+
+## The gotchas
+
+**Arrays need non-mutating methods.**
+
+```javascript
+// mutate — wrong
+items.push(item); items.sort(); items.splice(i, 1); items.reverse();
+
+// copy — right
+[...items, item];
+items.toSorted();               // ES2023; or [...items].sort()
+items.filter((_, idx) => idx !== i);
+items.toReversed();
+items.with(i, newValue);        // replace one element
+```
+
+`push`, `pop`, `shift`, `unshift`, `splice`, `sort`, `reverse`, and `fill`
+all mutate. `toSorted`, `toReversed`, `toSpliced`, and `with` are their
+copying counterparts and are the cleanest way to stay honest.
+
+**Spread is shallow.** `{ ...state }` copies one level. Nested objects are
+still shared — which is the point, but it means forgetting a level
+reintroduces mutation:
+
+```javascript
+const next = { ...state };
+next.settings.theme = 'dark';   // mutates the ORIGINAL settings object
+```
+
+Both `state` and `next` now show `dark`, the reference check on `settings`
+passes as unchanged, and the bug looks like "React didn't re-render".
+
+**`Object.freeze` is shallow too.** It protects one level and silently fails
+on nested objects (throws in strict mode, ignores otherwise). Useful as a
+development-time guard; not a substitute for discipline.
+
+## When the ergonomics get bad
+
+Deeply nested updates turn into spread pyramids:
+
+```javascript
+const next = {
+  ...state,
+  users: {
+    ...state.users,
+    [id]: {
+      ...state.users[id],
+      prefs: { ...state.users[id].prefs, theme: 'dark' },
+    },
+  },
+};
+```
+
+Two ways out.
+
+**Immer** lets you write mutations against a proxy and produces the
+structurally-shared result for you — this is what Redux Toolkit uses
+internally:
+
+```javascript
+const next = produce(state, (draft) => {
+  draft.users[id].prefs.theme = 'dark';    // looks like mutation
+});                                        // returns a new, shared tree
+```
+
+The draft is a [Proxy](/blog/javascript-proxy-and-reflect) that records
+writes and applies exactly the path copying shown above.
+
+**Flatten the state.** Deep nesting is usually a modelling problem. Keeping
+entities in a flat map keyed by id, with relationships stored as id arrays,
+makes most updates one level deep — and makes memoised selectors far more
+effective.
+
+## Where immutability doesn't pay
+
+It isn't free, and it isn't always right:
+
+- **Hot loops over large arrays.** Building a new array per iteration
+  allocates hard. Mutate a local array inside the function and return it
+  once — locally mutable, externally immutable, is a perfectly good pattern.
+- **Very large collections with frequent updates.** Plain objects and spread
+  are O(depth) per write but allocate on every write. Persistent data
+  structures (HAMTs, as in Immutable.js) amortise this better — at the cost
+  of a non-native API touching your whole codebase.
+- **Data that isn't shared.** A short-lived local accumulator has no
+  consumers to protect and no references to compare.
+
+The rule worth following: immutable at boundaries — state, props, anything
+crossing module or component lines — and whatever's clearest inside a
+function you own.

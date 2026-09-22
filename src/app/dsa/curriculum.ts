@@ -79,6 +79,16 @@ export const curriculum: CurriculumPhase[] = [
         note: 'The pattern that turns a whole family of O(n²) array and string problems into O(n).',
       },
       {
+        slug: 'prefix-sums-and-difference-arrays',
+        difficulty: 'Intermediate',
+        note: 'Precompute once, answer range queries with a subtraction — the cheapest big win in array problems.',
+      },
+      {
+        slug: 'monotonic-stack',
+        difficulty: 'Intermediate',
+        note: 'A stack that stays ordered, and the four "nearest greater/smaller element" questions it answers in O(n).',
+      },
+      {
         slug: 'quick-sort-and-heap-sort',
         difficulty: 'Intermediate',
         note: 'Divide-and-conquer and heap ideas applied back to sorting — partitioning shows up far beyond sort itself.',
@@ -119,6 +129,11 @@ export const curriculum: CurriculumPhase[] = [
         slug: 'dijkstra-shortest-paths',
         difficulty: 'Advanced',
         note: 'Weighted graphs — where BFS stops working and priority queues take over.',
+      },
+      {
+        slug: 'a-star-pathfinding',
+        difficulty: 'Advanced',
+        note: 'Dijkstra plus a heuristic: the same loop, guided toward the goal, and the conditions that keep it optimal.',
       },
     ],
   },

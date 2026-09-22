@@ -1,0 +1,137 @@
+---
+title: "Sharding and Replication: Splitting a Database That Outgrew One Box"
+publishedAt: "2026-09-15"
+summary: "Replication copies the same data; sharding splits different data. What each one actually buys you, how routing and failover behave, and the problems sharding creates that you have to live with."
+tags: "System Design"
+---
+
+Two words get used almost interchangeably in system design conversations,
+and they solve opposite problems:
+
+- **Replication** — the same data on several machines. Buys you read
+  capacity and survivability.
+- **Sharding** — different data on different machines. Buys you write
+  capacity and storage.
+
+Most real systems need both, in that order: replicate first, because it's
+far less invasive, and shard only when one machine can no longer hold the
+data or absorb the writes.
+
+## Replication first
+
+A primary takes writes and streams them to replicas. Reads can go to any
+copy, so read throughput scales with the number of machines, and losing one
+machine is survivable.
+
+The catch is replication lag. Acknowledging a write on the primary and
+propagating it to replicas are two different moments:
+
+<ShardingVisualizer />
+
+The gap in step four of that animation is the classic bug: a user updates
+their profile, the write lands on the primary, the next page load reads from
+a replica that hasn't caught up, and the change appears to have vanished.
+Standard fixes, in increasing order of cost:
+
+- **Read your own writes** — route a user's reads to the primary for a few
+  seconds after they write, or pin them to the replica that has already
+  acknowledged their write's position.
+- **Monotonic reads** — always send one user to the same replica, so they
+  never see time go backwards even if they see stale data.
+- **Synchronous replication** — the primary waits for at least one replica
+  before acknowledging. No lag window, more write latency, and an outage if
+  that replica is unavailable.
+
+Failover has a matching sharp edge, visible at the end of the animation:
+when a primary dies, writes it acknowledged but had not replicated are gone.
+With asynchronous replication that data loss window is real, and the usual
+compromise — *semi-synchronous* replication, where one replica must confirm —
+bounds it without paying the full synchronous cost.
+
+## When replication runs out
+
+Replication does nothing for two limits:
+
+1. **Write throughput.** Every replica applies every write. Adding machines
+   adds read capacity, not write capacity.
+2. **Dataset size.** Every replica stores everything. If the data doesn't
+   fit on one machine, it doesn't fit on any of them.
+
+That's when the data itself has to be split.
+
+## Choosing a partition key
+
+This is the decision that's hard to reverse, so it deserves more thought
+than the rest of the design put together.
+
+**Hash sharding.** `shard = hash(key) % N`. Even distribution, no hot
+ranges, and range queries become scatter-gather across every shard. The `% N`
+part is also a trap — changing `N` remaps almost every key, which is exactly
+the problem [consistent hashing](/blog/consistent-hashing) exists to solve.
+
+**Range sharding.** Shard 0 holds `a–f`, shard 1 holds `g–m`, and so on.
+Range scans stay local and efficient. Distribution depends entirely on the
+data: shard by timestamp and every write in the system goes to the newest
+shard while the others sit idle.
+
+**Directory / lookup sharding.** A lookup service maps each key to a shard
+explicitly. Maximum flexibility, including moving individual tenants around;
+the lookup service becomes a dependency on every single request.
+
+Whatever the scheme, the goal is the same: a key you actually query by. If
+your app reads orders by `user_id` but you shard orders by `order_id`, every
+"show me this user's orders" query hits every shard.
+
+## Hot keys and hot shards
+
+Hash sharding balances *keys*, not *traffic*. One celebrity account, one
+viral post, one enormous tenant — and one shard gets all the load while the
+rest idle. Adding shards does not help, because the hot key still maps to
+exactly one of them.
+
+Remedies are all workarounds rather than solutions: cache the hot key ahead
+of the database, split it into `celebrity:1#0` … `celebrity:1#9` subkeys that
+hash differently, or move the tenant onto dedicated infrastructure.
+
+## What you give up
+
+Sharding costs you the things a single database gave you for free:
+
+<Table
+  data={{
+    headers: ['Feature', 'Single database', 'Sharded'],
+    rows: [
+      ['Cross-row transactions', 'ACID, free', 'Two-phase commit or redesign'],
+      ['JOIN across entities', 'Free', 'Application-side or denormalise'],
+      ['Unique constraints', 'Free', 'Only within a shard'],
+      ['Auto-increment IDs', 'Free', 'UUID / Snowflake / ID service'],
+      ['Query without the key', 'Free', 'Scatter-gather to every shard'],
+      ['Adding capacity', 'Bigger machine', 'Rebalance and migrate data'],
+    ],
+  }}
+/>
+
+None of these are fatal, and all of them are work — which is why "can we buy
+a bigger machine, add replicas, cache harder, or archive old rows?" is worth
+exhausting first. A modern single server with fast NVMe storage handles
+workloads that people assumed needed sharding a decade ago.
+
+## Combining the two
+
+In practice each shard is itself a replicated group: a primary and one or
+more replicas. Nine machines might be three shards of three, giving you
+three-way write capacity *and* survivability within each shard. The routing
+layer then has two jobs — pick the shard from the key, then pick a member of
+that shard based on whether the request is a read or a write.
+
+## The order of operations
+
+1. Optimise queries and add indexes.
+2. Add a cache.
+3. Add read replicas.
+4. Move cold data out.
+5. Shard.
+
+Each step is cheaper and more reversible than the one after it. Sharding is
+the last step for a reason: it is the only one that changes what your
+application is allowed to ask the database.

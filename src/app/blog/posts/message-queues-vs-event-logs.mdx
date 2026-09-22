@@ -1,0 +1,142 @@
+---
+title: "Message Queues vs Event Logs: Why Kafka Isn't a Queue"
+publishedAt: "2026-09-18"
+summary: "A queue deletes a message when it's handled; a log keeps it and tracks who has read how far. That one difference decides replay, fan-out, ordering, and how you debug a bad deploy."
+tags: "System Design"
+---
+
+"We need a queue" is where a lot of asynchronous designs start, and the
+choice that follows — RabbitMQ or SQS on one side, Kafka or Pulsar or
+Kinesis on the other — is usually made on familiarity. They are genuinely
+different data structures, and picking the wrong one shows up months later
+as "we can't reprocess that".
+
+The difference is what happens to a message after it's consumed.
+
+## Delete on acknowledge, or keep and track
+
+A **queue** hands a message to a consumer and deletes it once acknowledged.
+Its state is "what work is left". A queue with nothing in it is a queue that
+has done its job.
+
+A **log** is an append-only sequence. Consuming doesn't remove anything — it
+advances that consumer's *offset*, a bookmark saying how far it has read.
+The data leaves on a retention policy, not on consumption.
+
+<LogPartitionVisualizer />
+
+Every practical difference falls out of that one design decision.
+
+## What the log buys you
+
+**Replay.** Rewinding an offset reprocesses history. When a consumer ships a
+bug that mangles three hours of events, you fix the code, reset the offset,
+and reprocess. With a queue, those messages are gone — the only recovery is
+whatever you happened to persist elsewhere.
+
+**Fan-out without coordination.** A new service reads the same topic from
+offset 0 with no change to the producer and no effect on existing consumers.
+Adding a consumer to a queue means adding a new queue and a routing rule,
+and it still gets nothing that happened before it existed.
+
+**Lag as a first-class metric.** Log end offset minus committed offset is a
+precise, per-consumer number: how far behind, in messages. Queue depth tells
+you the backlog exists but not who is behind.
+
+**Ordering within a partition.** A log partition is strictly ordered, and a
+single consumer reads it in order. Getting the same guarantee from a queue
+means one consumer and no parallelism.
+
+## What the queue buys you
+
+**Per-message work distribution.** Ten consumers on one queue share the work
+message by message; a slow message doesn't block the others. In a log,
+parallelism is bounded by partition count, and one slow message blocks its
+whole partition until it's handled.
+
+**Per-message acknowledgement and redelivery.** A failed message is
+redelivered, often after a visibility timeout, and eventually lands in a
+dead-letter queue. In a log there is no per-message ack — an offset is a
+single number, so a poison message means either blocking the partition or
+committing past it and handling the failure yourself.
+
+**Simpler operations.** No partitions, no consumer group rebalancing, no
+retention sizing. For "send the welcome email", that simplicity is the
+correct answer.
+
+**Priority and delay.** Priority queues and scheduled delivery are natural
+in a queue and awkward in a log, where order is fixed by append order.
+
+<Table
+  data={{
+    headers: ['Concern', 'Queue', 'Log'],
+    rows: [
+      ['After consumption', 'Deleted', 'Retained until retention expires'],
+      ['Replay', 'No', 'Reset the offset'],
+      ['Multiple consumers', 'Split the work', 'Each group sees everything'],
+      ['Ordering', 'Best-effort', 'Strict within a partition'],
+      ['Parallelism limit', 'Consumer count', 'Partition count'],
+      ['Failed message', 'Redeliver, then DLQ', 'Your problem to handle'],
+      ['Backlog signal', 'Queue depth', 'Per-consumer offset lag'],
+    ],
+  }}
+/>
+
+## Partitions and the ordering trap
+
+A log's ordering guarantee is **per partition**, not per topic. The
+partition is chosen by the message key:
+
+```javascript
+await producer.send({
+  topic: 'orders',
+  messages: [{
+    key: order.userId,          // ← this decides the partition
+    value: JSON.stringify(event),
+  }],
+});
+```
+
+With `userId` as the key, all events for one user land in one partition and
+stay ordered relative to each other, while different users spread across
+partitions for parallelism. Change that key to a random UUID and you get
+perfect balance and no ordering guarantee for anything.
+
+This is where most Kafka ordering bugs come from: `OrderCreated` and
+`OrderCancelled` for the same order sent with different keys, arriving on
+different partitions, processed out of order.
+
+Partition count also caps consumer parallelism. Eight partitions means at
+most eight consumers doing useful work in a group; a ninth sits idle. And
+increasing the partition count later changes the key-to-partition mapping,
+which breaks ordering across the change — so size it with room to grow.
+
+## Delivery semantics, honestly
+
+Both systems advertise "at least once" by default, and both mean it:
+duplicates happen. The consumer crashed after processing and before
+committing; the offset commit failed; a rebalance replayed a batch.
+
+"Exactly once" exists in Kafka via transactions, but it's exactly-once
+*processing within Kafka* — read, transform, write, commit offsets, all in
+one transaction. The moment your consumer calls an external API or writes to
+another database, that guarantee ends at the boundary.
+
+The durable answer is the same in both systems: make consumers idempotent.
+Key writes by event ID, use upserts instead of inserts, record processed IDs.
+Idempotency is cheaper to build than exactly-once delivery is to guarantee.
+
+## Choosing
+
+Reach for a **queue** when work needs doing once, consumers are
+interchangeable, and history has no value after the work completes — sending
+emails, resizing images, generating PDFs, background jobs.
+
+Reach for a **log** when the events *are* the data: several services care
+about them, you'll want to replay them, the order matters, or you expect to
+add consumers you haven't thought of yet — user activity, order lifecycle
+events, change data capture, analytics pipelines.
+
+And running both is normal. An event log as the backbone for facts about
+what happened, with plain queues for the fire-and-forget jobs, is a common
+and reasonable shape.

@@ -1,0 +1,170 @@
+---
+title: "Hoisting and the Temporal Dead Zone"
+publishedAt: "2026-09-19"
+summary: "Nothing moves to the top of the file. What actually happens is that bindings are created before any code runs — and let, const, var, and function declarations are created in four different states."
+tags: "JavaScript"
+---
+
+"Declarations are moved to the top of the scope" is the explanation most of
+us learned, and it's wrong in a way that stops being harmless the moment you
+hit a `ReferenceError` that says *"Cannot access 'x' before
+initialization"*.
+
+Nothing moves. The engine processes a scope in two phases, and everything
+confusing about hoisting is a consequence of what happens in the first one.
+
+## Two phases
+
+Before a single statement executes, the engine scans the scope and creates a
+binding for every declaration it finds. Then it runs the code. The
+declarations differ in what state their binding starts in:
+
+<HoistingVisualizer />
+
+Four kinds of declaration, four starting states:
+
+<Table
+  data={{
+    headers: ['Declaration', 'Binding created', 'Initial state', 'Access before the line'],
+    rows: [
+      ['function f() {}', 'Yes', 'The whole function', 'Works'],
+      ['var x', 'Yes', 'undefined', 'Returns undefined'],
+      ['let x', 'Yes', 'Uninitialized (TDZ)', 'ReferenceError'],
+      ['const x', 'Yes', 'Uninitialized (TDZ)', 'ReferenceError'],
+      ['class C {}', 'Yes', 'Uninitialized (TDZ)', 'ReferenceError'],
+    ],
+  }}
+/>
+
+Every one of them is hoisted — the binding exists before the line runs. The
+difference is only whether it holds something usable yet.
+
+## The error message is the clue
+
+These two errors mean different things, and the wording distinguishes them:
+
+```javascript
+console.log(nope);
+// ReferenceError: nope is not defined
+//   → no binding anywhere. Typo, or a missing import.
+
+console.log(later);
+let later = 1;
+// ReferenceError: Cannot access 'later' before initialization
+//   → the binding exists. You are in its temporal dead zone.
+```
+
+The second message is telling you the engine *knows* about `later` — it
+found the `let` during the scan — and is refusing to let you read it yet.
+
+## The dead zone is a region of code, not a period of time
+
+Despite the name, "temporal" is a little misleading. The TDZ is the stretch
+of code from the top of the scope to the initializing statement. Whether
+that stretch executes in a microsecond or a minute doesn't matter:
+
+```javascript
+function demo() {
+  // TDZ for `value` starts here
+  const read = () => value;      // fine to *define* — nothing runs yet
+  // read();                     // would throw: still in the TDZ
+  let value = 42;                // TDZ ends
+  return read();                 // 42
+}
+```
+
+Closing over a TDZ variable is legal. Only *reading* it before
+initialization throws — which is exactly the behaviour that makes mutual
+recursion between functions work.
+
+## Why the TDZ exists
+
+It's not gratuitous strictness. It makes `const` honest and catches a real
+class of bug.
+
+With `var`, reading too early gives `undefined`, and `undefined` flows
+silently through your program until it fails somewhere else entirely:
+
+```javascript
+function totalPrice(items) {
+  const total = items.reduce((sum, i) => sum + i.price * taxRate, 0);
+  var taxRate = 1.2;      // declared below — undefined during the reduce
+  return total;           // NaN, blamed on `items` in the bug report
+}
+```
+
+The same code with `let` throws at the exact line that's wrong, with the
+variable's name in the message.
+
+The TDZ is also what allows `const` to mean *never unassigned*. If `const`
+bindings started as `undefined` like `var`, there would be a window where a
+constant held a value it was never assigned — and the engine would have to
+allow writing to a `const` at least once, undermining the guarantee.
+
+## var's other problem: function scope
+
+Hoisting and scoping are separate issues that compound each other. `var` is
+scoped to the nearest **function**, ignoring blocks entirely:
+
+```javascript
+function f() {
+  if (true) {
+    var a = 1;
+    let b = 2;
+  }
+  console.log(a);   // 1  — var leaked out of the block
+  console.log(b);   // ReferenceError: b is not defined
+}
+```
+
+The classic loop bug is the same thing in a loop:
+
+```javascript
+for (var i = 0; i < 3; i++) {
+  setTimeout(() => console.log(i));   // 3, 3, 3 — one shared binding
+}
+
+for (let i = 0; i < 3; i++) {
+  setTimeout(() => console.log(i));   // 0, 1, 2 — a fresh binding per iteration
+}
+```
+
+`let` in a `for` head creates a new binding for each iteration and copies the
+value forward — which is why the closures capture different values. See
+[closures](/blog/closures-and-the-module-pattern) for the mechanics of what
+those callbacks are holding onto.
+
+## Function declarations vs function expressions
+
+Only *declarations* are fully hoisted:
+
+```javascript
+hoisted();      // works
+function hoisted() {}
+
+notHoisted();   // TypeError: notHoisted is not a function
+var notHoisted = function () {};
+
+alsoNot();      // ReferenceError: Cannot access 'alsoNot' before initialization
+const alsoNot = () => {};
+```
+
+Three different failures for three declaration styles, and each error names
+its cause: the `var` binding exists and holds `undefined` (so calling it is a
+*type* error), while the `const` binding is in its TDZ (a *reference* error).
+
+One more sharp edge: a function declaration inside a block is block-scoped in
+strict mode and ES modules, but has messy legacy behaviour in sloppy scripts.
+Declare functions at the top level of a function or module, not inside `if`
+blocks.
+
+## What to actually do
+
+- Use `const` by default, `let` when reassigning, and `var` never. This
+  isn't style preference — `let` and `const` turn a silent `undefined` into
+  an immediate, named error.
+- Declare variables close to where they're used. The TDZ only bites code
+  that reads a variable above its declaration, which is worth not writing
+  anyway.
+- Read the error message carefully. "is not defined" and "cannot access
+  before initialization" point at completely different mistakes.

@@ -1,0 +1,158 @@
+---
+title: "A* Pathfinding: Dijkstra With a Sense of Direction"
+publishedAt: "2026-09-14"
+summary: "One extra term in the priority function turns an exhaustive search into a guided one. What admissible and consistent heuristics mean, why they preserve optimality, and where A* degrades."
+tags: "DSA"
+---
+
+[Dijkstra's algorithm](/blog/dijkstra-shortest-paths) finds the shortest
+path by expanding the closest unvisited node, over and over, until it
+reaches the destination. It is correct, it is elegant, and on a large map it
+does an enormous amount of pointless work — because it has no idea which
+direction the destination is in.
+
+A* fixes that with a single change to the priority function.
+
+## One line of difference
+
+Dijkstra pops the node with the smallest `g(n)` — the cost already paid to
+reach `n`. A* pops the smallest:
+
+```
+f(n) = g(n) + h(n)
+```
+
+where `h(n)` is a **heuristic**: a guess at the remaining cost from `n` to
+the goal. It's still the same loop, the same priority queue, the same
+relaxation step. Only the sort key changed.
+
+Set `h(n) = 0` for every node and A* *is* Dijkstra. The heuristic is the
+only thing separating them:
+
+<AStarGridVisualizer />
+
+Both searches find a path of the same length. A* just doesn't waste time
+exploring the space behind the start.
+
+## The implementation
+
+```javascript
+function aStar(start, goal, neighbors, cost, heuristic) {
+  const g = new Map([[start, 0]]);
+  const cameFrom = new Map();
+  const open = new MinHeap((a, b) => a.f - b.f);   // priority queue
+  open.push({ node: start, f: heuristic(start) });
+  const closed = new Set();
+
+  while (!open.isEmpty()) {
+    const { node } = open.pop();
+    if (node === goal) return reconstruct(cameFrom, goal);
+    if (closed.has(node)) continue;                // stale queue entry
+    closed.add(node);
+
+    for (const next of neighbors(node)) {
+      const tentative = g.get(node) + cost(node, next);
+      if (tentative < (g.get(next) ?? Infinity)) {
+        g.set(next, tentative);
+        cameFrom.set(next, node);
+        open.push({ node: next, f: tentative + heuristic(next) });
+      }
+    }
+  }
+  return null;   // goal unreachable
+}
+```
+
+The `closed` set plus the "stale entry" check is the standard way to avoid
+implementing decrease-key on a binary heap: push a duplicate with the better
+priority and ignore the old one when it surfaces.
+
+## Admissibility: the condition for correctness
+
+A* returns a shortest path **if and only if the heuristic never
+overestimates** the true remaining cost. That property is called
+*admissibility*:
+
+```
+h(n) ≤ true cost from n to goal, for every n
+```
+
+The intuition for why it matters: A* stops as soon as it pops the goal. If
+some heuristic inflated the cost of the genuinely shortest route, that route
+would sit lower in the queue than it deserves, and a worse path could
+surface first. Underestimating is safe — it can only make A* explore more
+than strictly necessary, never less.
+
+Common admissible heuristics on a grid:
+
+<Table
+  data={{
+    headers: ['Movement allowed', 'Admissible heuristic', 'Note'],
+    rows: [
+      ['4 directions', 'Manhattan: |dx| + |dy|', 'Exact when unobstructed'],
+      ['8 directions', 'Octile / Chebyshev', 'Manhattan overestimates here'],
+      ['Any angle', 'Euclidean: √(dx² + dy²)', 'Safe but weaker (explores more)'],
+      ['Unknown terrain', '0', 'Admissible — and this is just Dijkstra'],
+    ],
+  }}
+/>
+
+Note the trap in row two: Manhattan distance is a perfectly good heuristic
+for 4-directional movement and an *inadmissible* one when diagonals are
+allowed, because a diagonal step covers `dx` and `dy` at once. Same
+heuristic, same map, and the correctness guarantee disappears because the
+movement rules changed.
+
+## Consistency: the stronger condition
+
+*Consistency* (or the triangle inequality) is a slightly stronger property:
+
+```
+h(n) ≤ cost(n, m) + h(m)   for every edge n → m
+```
+
+Every consistent heuristic is admissible, but not vice versa. Consistency is
+what makes the `closed` set safe: with it, the first time A* expands a node,
+it already has that node's final shortest distance, so re-opening closed
+nodes is never necessary. With a merely admissible heuristic you can
+discover a cheaper route to an already-closed node and must reopen it, which
+some implementations quietly get wrong.
+
+The standard grid heuristics above are all consistent, which is why almost
+nobody hits this in practice — until someone hand-tunes a heuristic and the
+paths start coming out subtly wrong.
+
+## Weighted A*: trading optimality for speed
+
+Multiply the heuristic by a factor greater than 1:
+
+```
+f(n) = g(n) + w · h(n),   w > 1
+```
+
+The search becomes much greedier and much faster — and inadmissible. The
+payoff is a bound: with weight `w`, the path found is at most `w` times
+longer than optimal. For a game character or a route preview where "good and
+instant" beats "perfect and slow", that's often the right deal. Make it an
+explicit, documented decision, not an accident.
+
+## Where A* is the wrong tool
+
+- **No sensible heuristic.** On an abstract graph — social connections,
+  dependency graphs — there's no geometry to exploit, so `h = 0` and you're
+  back to Dijkstra.
+- **Many destinations at once.** A* is tuned for one goal. "Shortest path
+  from here to *everywhere*" is Dijkstra's natural output; running A* per
+  destination throws that away.
+- **Negative edge weights.** Neither Dijkstra nor A* handles them; that's
+  Bellman-Ford.
+- **Huge static maps queried constantly.** Map services precompute
+  contraction hierarchies instead, which answer continental routes in
+  microseconds — at the cost of an expensive preprocessing step.
+
+## The thing worth remembering
+
+A* isn't a different algorithm from Dijkstra; it's Dijkstra plus domain
+knowledge in the priority function. The entire engineering question is what
+you know about the remaining distance, and whether you can prove you're not
+overstating it.
