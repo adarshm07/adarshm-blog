@@ -1,0 +1,157 @@
+---
+title: "Monotonic Stacks: The Pattern Behind Next Greater Element"
+publishedAt: "2026-09-12"
+summary: "A stack that refuses to hold out-of-order values turns a pile of quadratic problems into linear ones. How the invariant works, why the amortised cost is O(n), and the four questions it answers."
+tags: "DSA"
+---
+
+Some interview problems look like they need nested loops, and then someone
+shows you a solution with a single pass and a stack, and it feels like a
+trick. It isn't. It's one pattern — the **monotonic stack** — applied to a
+family of problems that all ask the same underlying question:
+
+> For each element, what is the nearest element to its left/right that is
+> larger/smaller than it?
+
+Four combinations, one technique.
+
+## The brute force, and what it wastes
+
+Next greater element: for every value, find the first larger value to its
+right.
+
+```javascript
+function nextGreaterBrute(nums) {
+  const ans = new Array(nums.length).fill(-1);
+  for (let i = 0; i < nums.length; i++) {
+    for (let j = i + 1; j < nums.length; j++) {
+      if (nums[j] > nums[i]) { ans[i] = nums[j]; break; }
+    }
+  }
+  return ans;
+}
+```
+
+O(n²), and the waste is specific: when the inner loop scans past a run of
+small values looking for something bigger, the *next* outer iteration scans
+that same run again. Each pass throws away everything it learned.
+
+## The invariant
+
+Keep a stack of indices whose answer is still unknown, and maintain one
+rule: **values in the stack are decreasing from bottom to top**.
+
+That rule is what makes the algorithm work. If a new value arrives and it's
+bigger than the stack top, then the new value is — by construction — the
+first larger value to that index's right. Nothing was skipped, because
+everything in between is already gone from the stack.
+
+<MonotonicStackVisualizer />
+
+Watch the moment at value 6: it pops two entries at once. Both 4 and 5 were
+waiting, both get the same answer, and neither is ever revisited.
+
+## The code
+
+```javascript
+function nextGreater(nums) {
+  const ans = new Array(nums.length).fill(-1);
+  const stack = [];                       // indices, values decreasing
+
+  for (let i = 0; i < nums.length; i++) {
+    // everything smaller than nums[i] has just found its answer
+    while (stack.length && nums[stack.at(-1)] < nums[i]) {
+      ans[stack.pop()] = nums[i];
+    }
+    stack.push(i);                        // its answer is still unknown
+  }
+  return ans;                             // leftovers keep -1
+}
+```
+
+Eight lines, and the nested `while` is the part that looks suspicious.
+
+## Why it is O(n), not O(n²)
+
+The `while` loop inside a `for` loop is the standard reason to expect
+quadratic time. It isn't here, and the argument is short:
+
+**Every index is pushed exactly once and popped at most once.** The total
+number of pops across the entire run is therefore bounded by `n`, no matter
+how they cluster. One iteration might pop five entries, but only because
+five earlier iterations each pushed one and popped none.
+
+This is *amortised* analysis: you pay for the pop when you push, not when
+it happens. The same argument underpins dynamic array resizing and the
+union-find path compression bound.
+
+## Storing indices, not values
+
+The code pushes `i`, not `nums[i]`. That's deliberate — with indices you can
+still read the value (`nums[stack.at(-1)]`), but you also get the
+*position*, which most variants need:
+
+```javascript
+// Daily Temperatures: how many days until it gets warmer?
+function dailyTemperatures(temps) {
+  const ans = new Array(temps.length).fill(0);
+  const stack = [];
+  for (let i = 0; i < temps.length; i++) {
+    while (stack.length && temps[stack.at(-1)] < temps[i]) {
+      const j = stack.pop();
+      ans[j] = i - j;            // distance, which needs the index
+    }
+    stack.push(i);
+  }
+  return ans;
+}
+```
+
+Same skeleton, one line different.
+
+## The four variants
+
+Direction and comparison are the only knobs:
+
+<Table
+  data={{
+    headers: ['Question', 'Iterate', 'Pop while top is'],
+    rows: [
+      ['Next greater to the right', 'left → right', 'smaller than current'],
+      ['Next smaller to the right', 'left → right', 'larger than current'],
+      ['Previous greater to the left', 'right → left', 'smaller than current'],
+      ['Previous smaller to the left', 'right → left', 'larger than current'],
+    ],
+  }}
+/>
+
+A useful sanity check: "pop while the top is smaller" keeps the stack
+decreasing, which answers *greater* questions. Flip the comparison and the
+stack becomes increasing, which answers *smaller* ones.
+
+## Where it shows up in real problems
+
+**Largest rectangle in a histogram.** For each bar, the rectangle it can
+anchor extends until a shorter bar on either side. That's "previous smaller"
+and "next smaller" — two monotonic stack passes, or one clever pass — turning
+an O(n²) problem into O(n).
+
+**Trapping rain water.** Water sits between a bar and the nearest taller bar
+on each side. Same two queries.
+
+**Stock span.** How many consecutive days was the price at most today's
+price? That's the distance to the previous greater element.
+
+**Remove k digits to make the smallest number.** Scan left to right, and
+while the last kept digit is larger than the current one and you still have
+removals left, pop it. The result is a non-decreasing digit string, which is
+exactly the smallest arrangement reachable.
+
+They all reduce to: *maintain an ordered stack; the moment an element
+violates the order, it is the answer to whatever is being violated.*
+
+## The tell
+
+When you catch yourself writing "for each element, scan forwards/backwards
+until I find one that's bigger/smaller", stop. That sentence is the
+signature of a monotonic stack, and the rewrite is usually under ten lines.

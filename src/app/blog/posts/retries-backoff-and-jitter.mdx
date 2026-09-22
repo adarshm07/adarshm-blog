@@ -1,0 +1,174 @@
+---
+title: "Retries, Backoff, and Jitter: How to Retry Without Causing an Outage"
+publishedAt: "2026-09-16"
+summary: "A naive retry loop is a denial-of-service attack you wrote yourself. Exponential backoff, why jitter matters more than the backoff, idempotency, and retry budgets."
+tags: "System Design"
+---
+
+Retrying a failed request is the most obvious reliability measure there is,
+and one of the easiest to turn into an outage. The failure mode is well
+known enough to have a name — the **thundering herd** — and the fix is three
+lines of code that most retry loops are missing.
+
+## The naive loop
+
+```javascript
+// Please do not ship this.
+async function fetchWithRetry(url, attempts = 3) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fetch(url);
+    } catch (err) {
+      if (i === attempts - 1) throw err;
+    }
+  }
+}
+```
+
+Two problems. It retries immediately, and it retries everything.
+
+Immediate retries triple your traffic against a service that is already
+struggling — the retries arrive while the original overload is still in
+progress. And if the service is down rather than flaky, all three attempts
+fail, so the caller waits three timeouts to learn what the first one already
+told it.
+
+## Exponential backoff, and why it isn't enough
+
+Waiting longer between attempts gives the dependency time to recover:
+1s, 2s, 4s, 8s.
+
+That helps with duration but not with *shape*. When a service blips, every
+client fails at roughly the same moment, so every client's 1-second timer
+starts at roughly the same moment — and fires at roughly the same moment.
+The retries arrive as one spike, the service falls over again, and the next
+spike is scheduled for 2 seconds later:
+
+<RetryBackoffVisualizer />
+
+The top timeline is exponential backoff done "correctly". The retries are
+spaced out in time and completely synchronised in phase. The service sees
+idle stretches punctuated by bursts it can't absorb.
+
+## Jitter is the actual fix
+
+Randomise the wait:
+
+```javascript
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function retry(fn, { attempts = 5, base = 200, cap = 20_000 } = {}) {
+  for (let i = 0; ; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (i >= attempts - 1 || !isRetryable(err)) throw err;
+      const ceiling = Math.min(cap, base * 2 ** i);
+      await sleep(Math.random() * ceiling);        // full jitter
+    }
+  }
+}
+```
+
+That's "full jitter": wait a random amount between zero and the exponential
+ceiling. The same retry budget, spread across the window instead of
+concentrated at its edge, which is the difference between the two timelines
+above.
+
+Variants worth knowing:
+
+<Table
+  data={{
+    headers: ['Strategy', 'Wait', 'Behaviour'],
+    rows: [
+      ['No jitter', 'base · 2^i', 'Synchronised spikes'],
+      ['Full jitter', 'rand(0, base · 2^i)', 'Best spread; some very short waits'],
+      ['Equal jitter', 'half + rand(0, half)', 'Spread, with a guaranteed minimum wait'],
+      ['Decorrelated', 'rand(base, prev · 3)', 'Spreads without shrinking over time'],
+    ],
+  }}
+/>
+
+Full jitter is the default worth reaching for. Equal jitter is a reasonable
+choice when a too-short first retry is genuinely harmful.
+
+Also cap the ceiling. Uncapped doubling reaches absurd waits by attempt
+fifteen, and a retry two hours later is not a retry — it's a scheduled job
+in disguise.
+
+## Retry only what is retryable
+
+Retrying a request that will never succeed wastes capacity and delays the
+error the caller needs to see.
+
+<Table
+  data={{
+    headers: ['Response', 'Retry?', 'Why'],
+    rows: [
+      ['Connection refused / reset', 'Yes', 'Transient, likely a restart'],
+      ['Timeout', 'Carefully', 'May have succeeded — needs idempotency'],
+      ['429 Too Many Requests', 'Yes, obey Retry-After', 'The server told you when'],
+      ['500 / 502 / 503', 'Yes', 'Server-side, often transient'],
+      ['400 / 422 validation', 'No', 'Same input, same answer'],
+      ['401 / 403', 'No', 'Retry after refreshing credentials, not blindly'],
+      ['404', 'No', 'Nothing to wait for'],
+    ],
+  }}
+/>
+
+The timeout row is the subtle one: a timeout means you don't know whether
+the request was processed. Retrying a `POST /payments` that actually
+succeeded charges the customer twice.
+
+## Idempotency makes retries safe
+
+A retry is only safe if repeating it is harmless. `GET`, `PUT`, and `DELETE`
+are naturally idempotent; `POST` is not. The fix is an idempotency key —
+a client-generated ID the server records:
+
+```javascript
+await fetch('/payments', {
+  method: 'POST',
+  headers: { 'Idempotency-Key': paymentAttemptId },  // stable across retries
+  body: JSON.stringify(payment),
+});
+```
+
+The server stores the outcome against that key. A second request with the
+same key returns the original result instead of charging again. Crucially,
+the key must be generated **once per logical operation**, not once per
+attempt — regenerating it inside the retry loop defeats the entire
+mechanism.
+
+## Retry budgets and amplification
+
+The dangerous case is retries stacking across layers. If every hop retries
+three times, a request through four services can become 81 requests at the
+bottom. Under load, that amplification is what turns a slow dependency into a
+total collapse.
+
+Two guards:
+
+- **Retry at one layer.** Usually the one closest to the user, or the one
+  that knows whether the operation is idempotent. Not every layer.
+- **Retry budgets.** Cap retries as a fraction of overall traffic — say 10%.
+  When failures are widespread, retries are dropped rather than multiplied,
+  because a broadly failing dependency will not be fixed by more requests.
+
+## Retries and circuit breakers
+
+Retries handle the *individual* request that hit a blip. They're the wrong
+tool for a dependency that's genuinely down — that's what a
+[circuit breaker](/blog/circuit-breaker-pattern) is for. The two compose:
+the breaker decides whether it's worth calling at all, and the retry policy
+handles transient failures while the breaker is closed.
+
+## The checklist
+
+- Exponential backoff with a cap.
+- **Jitter** — this is the one people skip, and it matters most.
+- Retry only retryable errors.
+- Idempotency keys for anything that mutates state.
+- A bounded number of attempts, and a bounded total deadline.
+- Retry at one layer, with a budget.
+- A circuit breaker for the case where nothing is going to work.

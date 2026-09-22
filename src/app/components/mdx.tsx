@@ -33,6 +33,16 @@ import { TrieVisualizer } from '@/app/components/trie-visualizer'
 import { BitVisualizer } from '@/app/components/bit-visualizer'
 import { ConsistentHashRingVisualizer } from '@/app/components/consistent-hash-ring-visualizer'
 import { GeneratorVisualizer } from '@/app/components/generator-visualizer'
+import { MonotonicStackVisualizer } from '@/app/components/monotonic-stack-visualizer'
+import { PrefixSumVisualizer } from '@/app/components/prefix-sum-visualizer'
+import { AStarGridVisualizer } from '@/app/components/astar-grid-visualizer'
+import { ShardingVisualizer } from '@/app/components/sharding-visualizer'
+import { RetryBackoffVisualizer } from '@/app/components/retry-backoff-visualizer'
+import { CircuitBreakerVisualizer } from '@/app/components/circuit-breaker-visualizer'
+import { LogPartitionVisualizer } from '@/app/components/log-partition-visualizer'
+import { HoistingVisualizer } from '@/app/components/hoisting-visualizer'
+import { WorkerThreadVisualizer } from '@/app/components/worker-thread-visualizer'
+import { StructuralSharingVisualizer } from '@/app/components/structural-sharing-visualizer'
 import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
@@ -175,6 +185,16 @@ const components = {
   BitVisualizer,
   ConsistentHashRingVisualizer,
   GeneratorVisualizer,
+  MonotonicStackVisualizer,
+  PrefixSumVisualizer,
+  AStarGridVisualizer,
+  ShardingVisualizer,
+  RetryBackoffVisualizer,
+  CircuitBreakerVisualizer,
+  LogPartitionVisualizer,
+  HoistingVisualizer,
+  WorkerThreadVisualizer,
+  StructuralSharingVisualizer,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {

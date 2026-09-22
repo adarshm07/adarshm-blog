@@ -98,7 +98,9 @@ export default async function Blog({
       </div>
 
       <article className="prose">
-        <CustomMDX source={post.content} />
+        {/* blockJS: false lets trusted repo-authored MDX pass object props
+            (e.g. <Table data={...}>); blockDangerousJS stays on by default */}
+        <CustomMDX source={post.content} options={{ blockJS: false }} />
       </article>
     </section>
   )
