@@ -1,0 +1,183 @@
+---
+title: "Tool Calling: How a Model Picks a Function"
+publishedAt: "2026-09-15"
+summary: "A tool is a name, a description, and a JSON Schema — and the description is prompt text that gets read every turn. Schema design, validation, error messages that repair, and why fewer tools work better."
+tags: "AI Engineering"
+---
+
+"The model called our API" is a convenient shorthand and a misleading one.
+The model produced a block of JSON. Something in your code read that JSON
+and decided to make a call. Everything that matters about tool calling lives
+in that gap.
+
+## What you actually send
+
+A tool definition has three parts, and they are not equally important:
+
+<ToolCallVisualizer />
+
+The schema constrains the *shape* of the arguments. The **description** is
+what decides whether the tool gets picked at all, and for what. It is prompt
+text — sent on every request, read every turn, and competing for attention
+with every other tool's description.
+
+```typescript
+const tools: Anthropic.Tool[] = [
+  {
+    name: 'search_orders',
+    description:
+      'Find orders for a customer. Use when the user asks about an order\'s ' +
+      'status, contents, or delivery date. Returns at most 20 orders, newest ' +
+      'first. Does not include cancelled orders unless status is set.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        customer_id: { type: 'string', description: 'Internal id, format c_XXXX' },
+        status: { type: 'string', enum: ['open', 'shipped'] },
+        limit: { type: 'integer', minimum: 1, maximum: 20 },
+      },
+      required: ['customer_id'],
+      additionalProperties: false,
+    },
+  },
+]
+```
+
+Note what the description carries that the schema cannot: *when* to use it,
+what it returns, and what it excludes. Those sentences prevent more bad
+calls than any amount of schema tightening.
+
+## Descriptions are an interface for a reader, not a compiler
+
+The failure mode is writing descriptions the way you write code comments —
+restating the function name. `"Searches orders"` tells a model nothing it
+couldn't guess.
+
+Useful descriptions answer questions the model will otherwise guess at:
+
+- **When should this be used, and when not?** "Use for order history. For
+  live delivery tracking use `track_shipment` instead."
+- **What are the arguments, really?** "`customer_id` is the internal id
+  (`c_8812`), not the email address."
+- **What comes back?** "Returns a list, possibly empty. An empty list means
+  no orders, not an error."
+- **What are the consequences?** "This issues a refund immediately and
+  cannot be undone."
+
+That last one matters more than it looks. A model that knows an action is
+irreversible behaves noticeably more conservatively about calling it.
+
+## Validate, always
+
+With strict mode (`strict: true` on the tool definition, plus
+`additionalProperties: false` and a complete `required` list), the API
+guarantees the arguments validate against your schema. Without it, they
+usually do — and "usually" is not a property you can build on.
+
+Either way, validate at the boundary:
+
+```typescript
+const parsed = SearchOrders.safeParse(block.input)   // zod, ajv, whatever
+
+if (!parsed.success) {
+  return {
+    type: 'tool_result',
+    tool_use_id: block.id,
+    is_error: true,
+    content: `Invalid arguments: ${parsed.error.message}`,
+  }
+}
+```
+
+Two reasons. First, schema validity is not semantic validity — a
+well-formed `customer_id` can still be a customer that does not exist.
+Second, the arguments are model output flowing into your systems. Treat them
+the way you treat a request body from the internet: authorize the *user* the
+agent is acting for, never the model's assertion about who it is acting for.
+
+## Error messages are repair instructions
+
+This is the highest-leverage thing in tool calling and the most neglected.
+The error string you return is read by the model and is the entire basis for
+its next attempt.
+
+```
+✗  "Invalid input"
+✗  "Error: 422"
+✓  "status must be one of: open, shipped. Got: pending.
+    For cancelled orders use include_cancelled: true."
+```
+
+The third one gets fixed on the next turn. The first two produce either the
+same call again or a confused apology to the user. Write tool errors the way
+you would write a compiler error: what was wrong, what was expected, what to
+do instead.
+
+## Fewer tools, and coarser
+
+Every tool definition costs tokens on every request and competes for the
+model's attention. The reliability curve bends the wrong way well before you
+think it will.
+
+<Table
+  data={{
+    headers: ['Tool surface', 'Behaviour'],
+    rows: [
+      ['3–8 well-named tools', 'Reliable selection; most agents live here'],
+      ['15–30 tools', 'Selection errors appear, especially between similar tools'],
+      ['50+ tools', 'Needs search or progressive disclosure rather than a flat list'],
+    ],
+  }}
+/>
+
+When two tools overlap, the model has to guess, and a guess is a coin flip
+you pay for. `get_user`, `get_user_by_email`, and `lookup_customer` should
+be one tool with an argument. If your surface is genuinely large — a big
+MCP server, a broad internal API — the answer is not a longer list; it is
+giving the model a way to *find* tools rather than listing them all.
+
+## Parallel calls, and the trap in handling them
+
+One assistant message can contain several `tool_use` blocks. Run them
+concurrently, then return every result in a **single** user message:
+
+```typescript
+const calls = response.content.filter((b) => b.type === 'tool_use')
+const results = await Promise.all(calls.map(runTool))
+messages.push({ role: 'user', content: results })   // all of them, one message
+```
+
+Splitting results across several user messages is the trap: it breaks the
+pairing between `tool_use` and `tool_result` blocks and trains the model out
+of batching, which makes every subsequent turn slower.
+
+## Approval gates belong in the harness
+
+The model asking to do something and your code doing it are separate events,
+which is exactly where a human fits:
+
+```typescript
+if (DESTRUCTIVE.has(block.name)) {
+  const ok = await requestApproval(block)      // ask a person
+  if (!ok) {
+    return {
+      type: 'tool_result',
+      tool_use_id: block.id,
+      is_error: true,
+      content: 'The user declined this action. Do not retry it.',
+    }
+  }
+}
+```
+
+Note the denial is phrased as an instruction, not just a status. "Denied"
+invites a retry; "the user declined, do not retry" ends it.
+
+## The summary
+
+- The **description** decides whether a tool is used correctly; the schema
+  only decides whether the arguments parse.
+- Validate the arguments, and authorize the user — not the model.
+- Error strings are prompt input. Make them say how to fix the problem.
+- Fewer, coarser, non-overlapping tools beat a complete API surface.
+- Return every result, in one message, including the failures.

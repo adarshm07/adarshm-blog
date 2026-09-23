@@ -1,0 +1,153 @@
+---
+title: "Minimum Spanning Trees: Kruskal, Prim, and the Cut Property"
+publishedAt: "2026-09-19"
+summary: "Connect every node for the least total weight. Two greedy algorithms that both work, the one theorem that explains why, and how to choose between them."
+tags: "DSA"
+---
+
+You have a set of points and the cost of connecting each pair. You want
+every point reachable, for the least total cost. That's a **minimum spanning
+tree**, and it's one of the few places where the obvious greedy approach is
+not just good — it's provably optimal.
+
+Two classic algorithms, and they are greedy in different directions.
+
+## Kruskal: sort the edges, take what doesn't cycle
+
+<MSTVisualizer />
+
+The algorithm in one sentence: sort every edge by weight, and take each one
+unless it would form a cycle.
+
+```javascript
+function kruskal(n, edges) {
+  edges.sort((a, b) => a.w - b.w);
+  const uf = new UnionFind(n);
+  const mst = [];
+
+  for (const { a, b, w } of edges) {
+    if (uf.find(a) === uf.find(b)) continue;   // same component → cycle
+    uf.union(a, b);
+    mst.push({ a, b, w });
+    if (mst.length === n - 1) break;           // tree complete
+  }
+  return mst;
+}
+```
+
+The whole algorithm is the sort plus one question asked repeatedly: *are
+these two vertices already connected?* That question is exactly what
+[union-find](/blog/union-find-disjoint-set) answers in near-constant time,
+which is why the two are always taught together.
+
+Cost: **O(E log E)** for the sort, and effectively O(E α(V)) for the
+union-find work — the sort dominates.
+
+Notice the forest grows in several disconnected places at once. Kruskal
+never cares where the edges are, only what they weigh.
+
+## Prim: grow one tree outward
+
+Prim starts from a single vertex and repeatedly attaches the cheapest edge
+leaving the tree built so far. With a priority queue this is almost exactly
+[Dijkstra's algorithm](/blog/dijkstra-shortest-paths) — with one crucial
+difference in what the queue holds:
+
+```javascript
+function prim(n, adj) {           // adj[v] = [{ to, w }, ...]
+  const inTree = new Array(n).fill(false);
+  const pq = new MinHeap((x, y) => x.w - y.w);
+  const mst = [];
+
+  pq.push({ to: 0, w: 0, from: -1 });
+
+  while (!pq.isEmpty() && mst.length < n - 1) {
+    const { to, w, from } = pq.pop();
+    if (inTree[to]) continue;                 // stale entry
+    inTree[to] = true;
+    if (from !== -1) mst.push({ a: from, b: to, w });
+
+    for (const edge of adj[to]) {
+      if (!inTree[edge.to]) pq.push({ to: edge.to, w: edge.w, from: to });
+    }
+  }
+  return mst;
+}
+```
+
+Dijkstra prioritises by *distance from the source* — the accumulated path
+cost. Prim prioritises by *the weight of the single edge* attaching a vertex
+to the tree. One line different, completely different output: shortest paths
+from a source versus a cheapest connected subgraph.
+
+Cost: **O(E log V)** with a binary heap.
+
+## Why greedy works: the cut property
+
+Both algorithms are greedy, both are optimal, and the same theorem explains
+both.
+
+> **Cut property.** Take any way of splitting the vertices into two
+> non-empty groups. The lightest edge crossing that split belongs to some
+> minimum spanning tree.
+
+The argument is a one-line exchange: suppose an MST doesn't contain that
+lightest crossing edge `e`. It must still connect the two groups, so it
+contains some other crossing edge `f`, which weighs at least as much. Swap
+`f` for `e` — still spanning, still a tree, no heavier. So an MST containing
+`e` exists.
+
+Every step of both algorithms is an instance of this:
+
+- **Prim** splits into "in the tree" and "not in the tree", and takes the
+  lightest crossing edge. Directly the cut property.
+- **Kruskal** takes the lightest edge joining two components — which is the
+  lightest edge across the cut separating one of those components from
+  everything else.
+
+That's the whole proof. The cut property is what makes greedy safe here and
+not, say, for the travelling salesman.
+
+One caveat worth stating: with distinct edge weights the MST is **unique**.
+With ties, several MSTs may exist with the same total weight, and the two
+algorithms may return different ones. Both are correct.
+
+## Choosing between them
+
+<Table
+  data={{
+    headers: ['', 'Kruskal', 'Prim'],
+    rows: [
+      ['Complexity', 'O(E log E)', 'O(E log V)'],
+      ['Best on', 'Sparse graphs', 'Dense graphs'],
+      ['Needs', 'Union-find + a sort', 'A priority queue + adjacency lists'],
+      ['Input shape', 'A flat edge list', 'An adjacency structure'],
+      ['Grows', 'A forest, anywhere', 'One tree, outward'],
+      ['Partial results', 'Useful — a forest at any point', 'Only the connected part'],
+    ],
+  }}
+/>
+
+In practice the input format usually decides: given a list of edges,
+Kruskal is a sort and a loop. Given an adjacency list and a dense graph,
+Prim avoids sorting E edges when E is close to V².
+
+Kruskal has one more property worth knowing: if you stop it early, you have
+the minimum spanning **forest** — the cheapest way to connect things into k
+clusters. That makes it a single-linkage clustering algorithm in disguise:
+run it until `n - k` edges are taken and the components are your clusters.
+
+## Where MSTs show up
+
+- **Network design** — laying cable, pipes, or circuit traces for minimum
+  total length.
+- **Clustering** — single-linkage clustering is Kruskal, stopped early.
+  Removing the k−1 heaviest MST edges splits the data into k clusters.
+- **Approximation algorithms** — an MST gives a 2-approximation for metric
+  travelling salesman (walk the tree, skip repeats).
+- **Image segmentation** — pixels as vertices, colour difference as weight.
+- **Maze generation** — a random-weight MST of a grid graph is a perfect
+  maze, with exactly one path between any two cells.
+
+Two algorithms, one theorem, and a surprising number of problems that turn
+out to be "connect everything cheaply" once you look at them sideways.

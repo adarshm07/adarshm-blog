@@ -1,0 +1,138 @@
+---
+title: "Context Windows: Budgeting Tokens Like Memory"
+publishedAt: "2026-09-16"
+summary: "The window is a budget you refill from scratch every turn. Where the tokens actually go in an agent, why prompt caching is a prefix match, and the difference between clearing context and compacting it."
+tags: "AI Engineering"
+---
+
+A context window looks like a capacity limit. It behaves more like a
+per-request budget: the API is stateless, so every turn re-sends the system
+prompt, the tool definitions, the whole conversation, and every tool result
+so far. Nothing is remembered on the server. The transcript is the memory,
+and you pay to re-upload it on every call.
+
+Two consequences follow, and most practical work with long-running agents is
+about one or the other: what fills the window, and what it costs to resend.
+
+<ContextWindowVisualizer />
+
+## Where the tokens actually go
+
+Ask someone what fills an agent's context and they'll say "the
+conversation". In practice, on any agent that does real work:
+
+<Table
+  data={{
+    headers: ['Component', 'Typical share', 'Grows with'],
+    rows: [
+      ['System prompt', 'Fixed, 1–5k', 'Nothing — write it once'],
+      ['Tool definitions', 'Fixed, 2–10k', 'Number of tools'],
+      ['Conversation turns', 'Small', 'Number of exchanges'],
+      ['Tool results', 'Most of it', 'Every single tool call'],
+    ],
+  }}
+/>
+
+One file read is 3,000 tokens. One API response is 1,500. One search result
+set is 5,000 — and every one of them is resent on every subsequent turn for
+the rest of the run. An agent that has made forty tool calls is carrying all
+forty results whether or not any of them still matter.
+
+That points at the first lever, and it is not a clever one: **return less**.
+Have tools summarise, paginate, and project. A tool that returns the three
+fields the model needs instead of the whole object is worth more than any
+context-management strategy applied afterwards.
+
+## Caching is a prefix match
+
+Prompt caching makes the resending cheap — cached input tokens cost a
+fraction of normal input tokens. The mechanism is a **prefix match**, and
+that word carries all the consequences.
+
+The request is assembled in a fixed order — tools, then system, then
+messages — and the cache matches from the start until the first byte that
+differs. Anything after that point is a full-price miss.
+
+```typescript
+const response = await client.messages.create({
+  model: 'claude-opus-5',
+  max_tokens: 16000,
+  cache_control: { type: 'ephemeral' },  // caches the longest stable prefix
+  system: SYSTEM_PROMPT,                 // stable, byte for byte
+  tools,                                 // deterministic order
+  messages,                              // grows at the end
+})
+
+// The only honest way to know whether caching is working:
+console.log(response.usage.cache_read_input_tokens)
+```
+
+Silent invalidators, roughly in order of how often they appear in real code:
+
+- A timestamp or "today's date" in the system prompt. Changes every request.
+- A request id, trace id, or user id interpolated into the system prompt.
+- Tools built from an object and serialized in non-deterministic order.
+- Conditionally including a tool — the tool list must be identical.
+- Editing an earlier message (for example, trimming history from the front).
+
+Each of these invalidates *everything after it*. Put stable content first,
+volatile content last, and check `cache_read_input_tokens` on a real run
+rather than assuming.
+
+The corollary for agents: place a cache breakpoint **after** the accumulated
+tool results, not before. The expensive part of an agent transcript is
+exactly the part people leave uncached.
+
+## When the window actually fills
+
+Even with disciplined tools, a long run eventually approaches the limit.
+There are two mechanisms, they do different things, and the distinction
+matters.
+
+**Context editing clears.** Old tool results are dropped from the
+transcript. Cheap — no model call — and lossy in a specific way: the model
+keeps its own messages and reasoning about those results, but can no longer
+re-read the results themselves. Good when tool output is bulky and
+short-lived (file contents it has already summarised, search results it has
+already used).
+
+**Compaction summarises.** Earlier conversation is replaced by a generated
+summary, with recent turns kept verbatim. Costs a model call and loses
+detail, but preserves the thread of what happened and why. Good for long
+conversations where the *narrative* matters.
+
+Neither is free, and the order to try them is: return less from tools, then
+clear old results, then compact.
+
+## What to do before any of that
+
+Most context problems dissolve with changes upstream of context management:
+
+**Summarise at the boundary.** If a tool returns a 20,000-token document,
+have the tool return a 500-token extract relevant to the query. A cheap
+model call inside your tool costs less than carrying 20,000 tokens for the
+next thirty turns.
+
+**Put durable state outside the window.** Scratchpad files, a task list, a
+database. The agent re-reads what it needs instead of carrying everything
+forever — and files can be edited, while a transcript can only grow.
+
+**Split the work.** A subagent with its own fresh window can do the
+reading-heavy part and hand back a summary. The parent never sees the raw
+material at all. This is the most effective single technique for
+research-shaped tasks, and it is really just context isolation.
+
+**Cap tool output.** A hard truncation limit per tool result, with a clear
+marker that content was cut, beats discovering that one `cat` of a large log
+file consumed a third of the window.
+
+## The mental model
+
+Treat the window the way you'd treat memory in an embedded system: a fixed
+budget, with an allocator you control, where the expensive things are the
+ones that stay resident.
+
+- Tool results are your largest allocation — bound them at the source.
+- Caching pays for the resend, but only if the prefix is byte-stable.
+- Clearing and compacting are eviction strategies, not a first resort.
+- The cheapest token is the one a tool never returned.

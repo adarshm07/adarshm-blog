@@ -1,0 +1,132 @@
+---
+title: "Distributed Tracing: Reading the Waterfall"
+publishedAt: "2026-09-21"
+summary: "Logs tell you what one service did. Metrics tell you that something is slow. A trace tells you where the time went across every service a single request touched."
+tags: "System Design"
+---
+
+A user says the checkout page is slow. Your dashboard says p99 latency is
+900ms. Your logs, across eleven services, say a great many things — none of
+which are connected to that user's request.
+
+Tracing is the piece that connects them.
+
+## Spans, and the tree they form
+
+A **trace** is one request end to end. A **span** is one unit of work inside
+it — a service handling the request, a database query, an outbound HTTP
+call. Each span carries a trace id (shared by everything in the request),
+its own span id, and its parent's span id. That's all it takes to
+reconstruct the tree:
+
+<TraceWaterfallVisualizer />
+
+Read the waterfall for three things, in this order:
+
+**Where the time went.** Not the total — the bar that covers most of it. In
+the animation, pricing owns 530 of the 815ms and everything else is noise by
+comparison.
+
+**Repetition.** The same span shape repeated dozens of times is an N+1
+query: a loop issuing one call per item. This pattern is nearly invisible in
+aggregate metrics — 47 fast queries look healthy — and unmistakable in a
+waterfall.
+
+**Overlap.** Bars side by side ran concurrently; bars in sequence ran
+sequentially. If three independent calls are stacked in a staircase, you've
+found parallelism you're not taking advantage of.
+
+## Context propagation is the whole mechanism
+
+Tracing works because every service passes the trace context along. The
+standard is a W3C header:
+
+```
+traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+             │  │                                │                │
+          version  trace id (16 bytes)      parent span id     flags
+```
+
+Instrumentation libraries read that header, start a child span, and inject
+an updated header into every outbound call. Which means the one way tracing
+breaks is **a service that doesn't forward the header** — the trace stops
+dead there, and everything beyond it appears as a gap.
+
+Message queues are where this is most often missed: the header has to be
+copied into the message metadata by the producer and read back by the
+consumer, or the async half of your system is invisible.
+
+## Sampling, and the trap in it
+
+Tracing every request at scale is expensive, so you sample. How you sample
+decides whether traces are there when you need them.
+
+**Head sampling** decides at the start — keep 1% of traces, chosen before
+anything happens. Cheap, simple, and it throws away almost every slow
+request, because slow requests are rare by definition.
+
+**Tail sampling** buffers spans and decides after the request finishes: keep
+everything that errored, everything over 500ms, and 1% of the rest. Far more
+useful, and it needs a collector holding spans in memory until the trace is
+complete.
+
+If you only do one thing beyond the default: sample errors and slow requests
+at 100%. Those are the traces you will actually open.
+
+## Spans are only as good as their attributes
+
+A span named `http_request` taking 400ms tells you nothing. The same span
+with attributes — the route, the status code, the downstream host, the row
+count, the cache hit/miss — tells you what to fix.
+
+Two rules that keep this useful:
+
+**Name spans by operation, not by instance.** `GET /orders/:id`, never
+`GET /orders/8812`. High-cardinality names make grouping and comparison
+impossible.
+
+**Put high-cardinality data in attributes.** The order id, the user id, the
+request id all belong as attributes, where you can filter by them without
+fragmenting the span names.
+
+And record errors on the span (`status = error`, plus the exception) rather
+than only in logs — that's what makes "show me traces that failed" a query
+instead of an archaeology project.
+
+## How it fits with logs and metrics
+
+The three are complementary, and the useful move is connecting them:
+
+<Table
+  data={{
+    headers: ['Signal', 'Answers', 'Cost shape'],
+    rows: [
+      ['Metrics', 'Is something wrong? Since when?', 'Cheap, aggregated, no per-request detail'],
+      ['Traces', 'Where did the time go for this request?', 'Sampled; detail per request'],
+      ['Logs', 'What exactly happened at this step?', 'Expensive at volume; unbounded detail'],
+    ],
+  }}
+/>
+
+Put the trace id in every log line. That single field turns "search the logs
+around 14:32 across eleven services" into "show me every log line for this
+trace" — and it is usually one line of logger configuration.
+
+The workflow that falls out: an alert fires on a **metric**, you open a
+**trace** from that window to find which service and which span, then read
+the **logs** for that trace id to see what happened inside it.
+
+## Getting started without boiling the ocean
+
+1. Adopt OpenTelemetry — it's the vendor-neutral standard, and the auto-
+   instrumentation for common frameworks gives you HTTP and database spans
+   without writing code.
+2. Make sure context propagates across every hop, including queues.
+3. Tail-sample: everything that errors or is slow, plus a small baseline.
+4. Add the trace id to your log format.
+5. Only then add custom spans, around the business operations you actually
+   reason about.
+
+Most of the value arrives at step 2. The first time a trace shows you that
+your 800ms endpoint is 470ms of the same query running forty-seven times,
+the whole thing has paid for itself.

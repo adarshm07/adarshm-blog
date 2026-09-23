@@ -1,0 +1,122 @@
+---
+title: "Distributed Locks: Why Your Lock Isn't Holding"
+publishedAt: "2026-09-20"
+summary: "A lease can expire while the client that holds it is still running. Why process pauses break mutual exclusion, what fencing tokens fix, and when you shouldn't be using a lock at all."
+tags: "System Design"
+---
+
+A mutex in a single process is backed by the operating system: if you hold
+it, nobody else does. A distributed lock is a *message* from a lock service
+saying you hold it — and between that message and your next write, anything
+can happen.
+
+The gap is where the bugs live.
+
+## Why locks need leases
+
+If a lock has no expiry and its holder crashes, the lock is held forever and
+everything that needs it stops. So distributed locks are **leases**: you
+hold it for 10 seconds, and you renew it while you work.
+
+That solves the crash case and creates a worse one. A process that has
+stopped and a process that is merely *slow* look identical from the outside,
+and there is no timeout that reliably distinguishes them:
+
+<LeaseFencingVisualizer />
+
+Client A is not crashed. It is in a stop-the-world GC pause, or its VM was
+live-migrated, or its thread lost the CPU, or a page fault went to slow
+storage. The lease expires, B takes the lock, and now two clients both
+believe they hold it — and A doesn't know that any time has passed.
+
+**No lock service can prevent this**, because the failure isn't in the lock
+service. Redlock, ZooKeeper, etcd, a row in Postgres: all of them can hand
+the lock to B while A is paused. The question is only what happens when A
+wakes up and writes.
+
+## Fencing tokens
+
+The fix is to stop trusting the lock and start checking at the resource.
+
+Every time the lock is granted, the service returns a **monotonically
+increasing token**. The client passes it with every write, and the storage
+system rejects any write carrying a token lower than the highest it has
+seen:
+
+```javascript
+const { token } = await lock.acquire('order:42');   // token = 33
+
+// ... work, possibly with a long pause in the middle ...
+
+await storage.write('order:42', data, { fencingToken: token });
+// storage has already seen token 34 from client B → rejected
+```
+
+A's stale write is refused, not because A was correct about anything, but
+because the resource knows someone newer has been there. Without this, A's
+write silently overwrites B's and you have corruption with no error anywhere
+in the logs.
+
+The catch is the requirement: **the resource has to check the token**. If
+you're writing to a store with no conditional-write support, fencing isn't
+available and your lock is advisory — a performance optimisation that
+reduces duplicate work, not a correctness guarantee. It's worth being
+explicit with yourself about which of the two you have.
+
+Many systems already give you the ingredients: conditional writes on S3 and
+DynamoDB, `WHERE version = ?` on a SQL row, compare-and-swap in etcd. A
+version column *is* a fencing token when you use it as one.
+
+## Lock services, briefly
+
+<Table
+  data={{
+    headers: ['Backing store', 'Guarantee', 'Notes'],
+    rows: [
+      ['Single Redis (SET NX PX)', 'Weak', 'Simple and fast; lock lost if that node fails over'],
+      ['Redlock (N Redis nodes)', 'Disputed', 'Depends on bounded clock drift and pauses'],
+      ['ZooKeeper / etcd', 'Strong (consensus)', 'Ephemeral nodes + a monotonic counter for free'],
+      ['A row in your database', 'Strong-ish', 'Already there, already transactional, often enough'],
+    ],
+  }}
+/>
+
+Two things to notice. First, ZooKeeper's `zxid` and etcd's revision numbers
+are fencing tokens you get for free — one more reason to prefer a consensus
+system when you actually need correctness. Second, a database row with a
+version column is a perfectly respectable distributed lock, and it's usually
+already in your stack.
+
+## The question to ask first
+
+Before reaching for any of this: what happens if the lock fails?
+
+**If it's an efficiency lock** — you want to avoid two workers doing the
+same expensive job — a weak lock is fine. Occasional duplicate work costs
+money, not correctness. A single Redis key is a reasonable answer.
+
+**If it's a correctness lock** — two writers would corrupt data or
+double-charge a customer — a lock alone is never sufficient. You need
+fencing at the resource, or you need to remove the need for the lock.
+
+And that last option is usually better:
+
+- **Idempotency.** If the operation is keyed and repeating it is harmless,
+  concurrent execution stops being a correctness problem.
+- **Conditional writes.** `UPDATE … WHERE version = 7` does the mutual
+  exclusion inside a system that can actually enforce it.
+- **Single-writer partitioning.** Route every key to one owner — the model
+  behind Kafka consumer groups and sharded actors. Nothing to lock if only
+  one process can touch a key.
+- **A queue.** Serialise the work by construction instead of coordinating
+  access to it.
+
+## The summary
+
+- Leases expire; the clients holding them do not know when.
+- A pause is indistinguishable from a crash, so two clients can believe they
+  hold the same lock. No lock service fixes this.
+- Fencing tokens move enforcement to the resource, which is the only place
+  it can actually be enforced.
+- Decide whether your lock is for efficiency or correctness. For
+  correctness, prefer a design that doesn't need one.
