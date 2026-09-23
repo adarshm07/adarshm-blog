@@ -43,6 +43,16 @@ import { LogPartitionVisualizer } from '@/app/components/log-partition-visualize
 import { HoistingVisualizer } from '@/app/components/hoisting-visualizer'
 import { WorkerThreadVisualizer } from '@/app/components/worker-thread-visualizer'
 import { StructuralSharingVisualizer } from '@/app/components/structural-sharing-visualizer'
+import { AgentLoopVisualizer } from '@/app/components/agent-loop-visualizer'
+import { ToolCallVisualizer } from '@/app/components/tool-call-visualizer'
+import { ContextWindowVisualizer } from '@/app/components/context-window-visualizer'
+import { RagRetrievalVisualizer } from '@/app/components/rag-retrieval-visualizer'
+import { FenwickVisualizer } from '@/app/components/fenwick-visualizer'
+import { MSTVisualizer } from '@/app/components/mst-visualizer'
+import { LeaseFencingVisualizer } from '@/app/components/lease-fencing-visualizer'
+import { TraceWaterfallVisualizer } from '@/app/components/trace-waterfall-visualizer'
+import { BackpressureVisualizer } from '@/app/components/backpressure-visualizer'
+import { RenderPipelineVisualizer } from '@/app/components/render-pipeline-visualizer'
 import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
@@ -195,6 +205,16 @@ const components = {
   HoistingVisualizer,
   WorkerThreadVisualizer,
   StructuralSharingVisualizer,
+  AgentLoopVisualizer,
+  ToolCallVisualizer,
+  ContextWindowVisualizer,
+  RagRetrievalVisualizer,
+  FenwickVisualizer,
+  MSTVisualizer,
+  LeaseFencingVisualizer,
+  TraceWaterfallVisualizer,
+  BackpressureVisualizer,
+  RenderPipelineVisualizer,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {

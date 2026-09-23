@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import type { ReactNode } from 'react'
 
 const navItems: Record<string, { name: string }> = {
   '/': { name: 'home' },
@@ -9,7 +10,7 @@ const navItems: Record<string, { name: string }> = {
   'mailto:contact@adarshm.com': { name: 'contact' },
 }
 
-export function Navbar() {
+export function Navbar({ search }: { search?: ReactNode }) {
   const pathname = usePathname()
 
   return (
@@ -31,6 +32,7 @@ export function Navbar() {
           </Link>
         )
       })}
+      {search}
     </nav>
   )
 }

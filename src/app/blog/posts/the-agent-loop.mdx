@@ -1,0 +1,171 @@
+---
+title: "The Agent Loop: What Actually Happens Between Prompt and Answer"
+publishedAt: "2026-09-14"
+summary: "An agent is a while loop around a stateless API. What stop_reason really controls, why the transcript is resent on every turn, and the failure modes that show up once tools are in the mix."
+tags: "AI Engineering"
+---
+
+Strip away the framing and an LLM agent is about twenty lines of code: call
+the model, see whether it asked for a tool, run the tool, append the result,
+call again. The interesting parts are not in the loop — they're in what the
+loop implies.
+
+## The loop
+
+<AgentLoopVisualizer />
+
+Three things in that animation are worth stating plainly, because each one
+drives a whole class of design decision.
+
+**The model never executes anything.** It emits a `tool_use` block — a name
+and a JSON object. Your code decides whether to honour it. Every permission
+check, rate limit, and audit log lives on your side of that boundary, and
+nothing in the model's output can bypass them.
+
+**`stop_reason` drives the loop, not the text.** You are not parsing prose to
+decide what to do next; you are reading a field. `tool_use` means run tools
+and continue, `end_turn` means you have an answer, `max_tokens` means the
+response was truncated and needs handling rather than parsing.
+
+**The API is stateless.** There is no session on the server. Every turn
+re-sends the entire transcript — system prompt, tool definitions, all prior
+messages, every tool result. The token count only ever goes up.
+
+## The code
+
+```typescript
+import Anthropic from '@anthropic-ai/sdk'
+
+const client = new Anthropic()
+const messages: Anthropic.MessageParam[] = [
+  { role: 'user', content: 'How many open PRs need review?' },
+]
+
+while (true) {
+  const response = await client.messages.create({
+    model: 'claude-opus-5',
+    max_tokens: 16000,
+    tools,                       // same definitions every turn — see caching below
+    messages,
+  })
+
+  messages.push({ role: 'assistant', content: response.content })
+
+  if (response.stop_reason !== 'tool_use') break   // end_turn: we have an answer
+
+  // one assistant message can request several tools at once
+  const calls = response.content.filter((b) => b.type === 'tool_use')
+  const results = await Promise.all(calls.map(runTool))
+
+  messages.push({ role: 'user', content: results })  // all results, one message
+}
+```
+
+That is the whole mechanism. Everything else — planning, memory, subagents,
+"reasoning" — is either prompt content or extra structure you build around
+this loop.
+
+## Four details that decide whether it works
+
+### Return every tool result, in one message
+
+If the model requests three tools, return three `tool_result` blocks in a
+single user message. Splitting them across messages breaks the block pairing
+and quietly teaches the model to stop requesting tools in parallel — which
+costs you a round trip on every subsequent turn.
+
+### Errors are results, not exceptions
+
+```typescript
+async function runTool(block: Anthropic.ToolUseBlock) {
+  try {
+    const output = await handlers[block.name](block.input)
+    return {
+      type: 'tool_result' as const,
+      tool_use_id: block.id,
+      content: JSON.stringify(output),
+    }
+  } catch (err) {
+    return {
+      type: 'tool_result' as const,
+      tool_use_id: block.id,
+      is_error: true,
+      content: `${err.message}. Check the arguments and try again.`,
+    }
+  }
+}
+```
+
+A thrown exception kills the run. A returned error lets the model correct
+itself — and it usually does, provided the message says what was wrong
+rather than just that something was. Dropping the result entirely is the
+worst option: the block pairing breaks and the API rejects the next request.
+
+### Bound the loop
+
+`while (true)` with a model deciding when to stop is a budget with no
+ceiling. Three bounds, and you want all of them:
+
+- **Iterations** — a hard cap on turns, so a tool-call cycle terminates.
+- **Wall clock** — a deadline for the whole run.
+- **Tokens** — accumulate `usage` across turns; when the transcript grows
+  past what you are willing to pay per turn, compact it or stop.
+
+A loop that ping-pongs between the same two tools is the most common
+runaway, and the cheapest guard is noticing the repeat: if the last N tool
+calls have identical arguments, break and say so.
+
+### Cache the prefix
+
+Because the transcript is resent every turn, the same tokens are billed over
+and over. Prompt caching turns that into a fraction of the cost, and it is a
+**prefix match**: tool definitions and system prompt first, stable and byte
+identical, then the growing history.
+
+```typescript
+const response = await client.messages.create({
+  model: 'claude-opus-5',
+  max_tokens: 16000,
+  cache_control: { type: 'ephemeral' },   // caches the longest stable prefix
+  system: SYSTEM_PROMPT,                  // no timestamps, no request ids
+  tools,                                  // deterministic order
+  messages,
+})
+
+console.log(response.usage.cache_read_input_tokens)  // 0 means you broke the prefix
+```
+
+Put a `Date.now()` in the system prompt and every turn is a full-price cache
+miss. That one line is the most common — and most expensive — bug in agent
+code.
+
+## Where the difficulty actually is
+
+The loop is easy. What decides whether an agent is useful:
+
+**Tool design.** Fewer, coarser tools beat many fine-grained ones. A model
+choosing among six well-named tools is reliable; choosing among forty
+overlapping ones is not. The description is prompt text — it is read every
+turn and it is what the choice is made from.
+
+**Context growth.** Tool output is what fills the window, not conversation.
+A file read, an API response, a search result — each one is thousands of
+tokens that will be resent on every subsequent turn.
+
+**Error recovery.** Agents spend a surprising share of their turns
+recovering from their own mistakes. The quality of your error messages is,
+quite literally, part of the prompt.
+
+**Knowing when not to.** A loop that can go off and do arbitrary work is the
+right shape for open-ended tasks and the wrong shape for anything you could
+have written as a sequence of steps. If you can specify the steps, write the
+steps: you get determinism, testability, and a fraction of the cost.
+
+## The mental model worth keeping
+
+An agent is a state machine where the model picks the next transition and
+your code executes it. The model contributes judgement; the harness
+contributes everything else — permissions, retries, budgets, error framing,
+what goes into the context and what gets dropped.
+
+Most agent problems that look like model problems are harness problems.

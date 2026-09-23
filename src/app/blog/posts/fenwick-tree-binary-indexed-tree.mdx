@@ -1,0 +1,158 @@
+---
+title: "Fenwick Trees: Prefix Sums That Can Change"
+publishedAt: "2026-09-18"
+summary: "A prefix sum array answers range queries in O(1) but costs O(n) to update. A Fenwick tree makes both O(log n) using nothing but the lowest set bit of an index."
+tags: "DSA"
+---
+
+[Prefix sums](/blog/prefix-sums-and-difference-arrays) answer range queries
+with a single subtraction — as long as the array never changes. Update one
+element and every prefix from that point on is wrong, costing O(n) to
+repair.
+
+A **Fenwick tree** (or binary indexed tree) gives up the O(1) query to get
+O(log n) updates. It's about ten lines of code, and the entire structure
+falls out of one bit trick.
+
+## The idea: each index owns a power-of-two range
+
+Index `i` in the tree stores the sum of the last `i & -i` elements ending at
+`i`. That expression — an integer ANDed with its own negation — isolates the
+**lowest set bit**: `12 (1100)` gives 4, `7 (0111)` gives 1, `8 (1000)`
+gives 8.
+
+So index 8 covers eight elements, index 6 covers two, index 7 covers one:
+
+<FenwickVisualizer />
+
+Watch the ranges tile in the query steps. Because each index covers a
+power-of-two block aligned to its own position, any prefix can be assembled
+from a handful of them — one per set bit in the index.
+
+## The two operations
+
+```javascript
+class Fenwick {
+  constructor(n) {
+    this.n = n;
+    this.tree = new Array(n + 1).fill(0);   // 1-indexed
+  }
+
+  // add `delta` to element i (1-indexed)
+  update(i, delta) {
+    for (; i <= this.n; i += i & -i) {      // climb to the covering ranges
+      this.tree[i] += delta;
+    }
+  }
+
+  // sum of elements 1..i
+  query(i) {
+    let sum = 0;
+    for (; i > 0; i -= i & -i) {            // strip one bit at a time
+      sum += this.tree[i];
+    }
+    return sum;
+  }
+
+  rangeQuery(l, r) {                        // sum of l..r, inclusive
+    return this.query(r) - this.query(l - 1);
+  }
+}
+```
+
+That's the whole data structure. The direction of the bit operation is the
+only difference between the two loops:
+
+- **Update** adds the lowest set bit, walking to every range that *contains*
+  this index.
+- **Query** subtracts it, walking through ranges that *tile* the prefix.
+
+Both loops run once per set bit in the index, so both are O(log n).
+
+## Why 1-indexed
+
+`i & -i` is zero when `i` is zero, so a 0-index would make the query loop
+never terminate and the update loop never move. The array is sized `n + 1`
+and element `k` of your data lives at index `k + 1`. Every off-by-one bug in
+Fenwick code traces back to forgetting this.
+
+Building from an existing array is O(n) if you do it in place rather than
+calling `update` n times:
+
+```javascript
+static from(nums) {
+  const fw = new Fenwick(nums.length);
+  fw.tree = [0, ...nums];
+  for (let i = 1; i <= fw.n; i++) {
+    const parent = i + (i & -i);
+    if (parent <= fw.n) fw.tree[parent] += fw.tree[i];   // push up once
+  }
+  return fw;
+}
+```
+
+## Fenwick vs segment tree
+
+Both give O(log n) updates and queries. They are not interchangeable:
+
+<Table
+  data={{
+    headers: ['', 'Fenwick', 'Segment tree'],
+    rows: [
+      ['Memory', 'n + 1 values', '~4n values'],
+      ['Code', '~10 lines', '~50 lines'],
+      ['Constant factor', 'Smaller — fewer, cache-friendlier reads', 'Larger'],
+      ['Operations', 'Invertible only (sum, xor, count)', 'Any associative op (min, max, gcd)'],
+      ['Range updates', 'Needs a second tree or a trick', 'Natural with lazy propagation'],
+      ['Search by prefix', 'O(log n) descent', 'O(log n) descent'],
+    ],
+  }}
+/>
+
+The deciding question is whether your operation can be *undone*. `query(r) -
+query(l-1)` only works because subtraction inverts addition. There is no way
+to "subtract" a minimum out of a range, which is why range-minimum queries
+need a [segment tree](/blog/segment-trees-range-queries).
+
+Rule of thumb: sums and counts, reach for Fenwick; anything else, segment
+tree.
+
+## The trick worth knowing: find by prefix
+
+Because the indices are powers of two, you can descend the tree to answer
+"what is the smallest index where the prefix sum reaches at least `target`?"
+in a single O(log n) pass, without binary searching over queries:
+
+```javascript
+  findPrefix(target) {
+    let pos = 0;
+    let bit = 1 << Math.floor(Math.log2(this.n));
+    for (; bit > 0; bit >>= 1) {
+      if (pos + bit <= this.n && this.tree[pos + bit] < target) {
+        pos += bit;
+        target -= this.tree[pos];
+      }
+    }
+    return pos + 1;
+  }
+```
+
+This turns a Fenwick tree over counts into an **order-statistic
+structure**: keep a 1 at each present value, and `findPrefix(k)` gives you
+the k-th smallest element. That's how you maintain a running median, or
+count inversions while sorting, in O(n log n) with almost no code.
+
+## Where it shows up
+
+- **Counting inversions** — sweep right to left, query how many smaller
+  values you've already seen.
+- **Running order statistics** — k-th smallest, median of a stream, rank
+  of a value.
+- **2D grids** — a Fenwick tree of Fenwick trees answers rectangle sums
+  with point updates in O(log² n).
+- **Competitive programming** — when the constraints say "10⁵ updates and
+  10⁵ queries", this is usually the intended structure, and it is far
+  quicker to write correctly under time pressure than a segment tree.
+
+The whole thing is one observation — that `i & -i` carves the indices into
+aligned power-of-two blocks — applied in both directions.

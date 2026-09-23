@@ -1,0 +1,167 @@
+---
+title: "Streams and Backpressure: Why Your Node Process Runs Out of Memory"
+publishedAt: "2026-09-22"
+summary: "A fast producer and a slow consumer need a way to say 'wait'. What backpressure is, how pipeline() gives it to you for free, and why the version with the callback silently buffers everything."
+tags: "JavaScript"
+---
+
+Two pieces of code that look equivalent. One processes a 10GB file in
+constant memory; the other dies with an out-of-memory error. The difference
+is whether the producer ever finds out that the consumer is behind.
+
+## The problem
+
+Reading is fast. Writing — to a database, over a network, through
+compression — is slower. When a producer outpaces a consumer, the unwritten
+data has to go somewhere, and "somewhere" is your heap:
+
+<BackpressureVisualizer />
+
+The top process isn't doing anything obviously wrong. It reads, it writes,
+it never drops data. It just never *waits* — so memory grows in proportion
+to the input, and the only symptom before the crash is RSS climbing.
+
+**Backpressure** is the signal that closes that loop: a way for the consumer
+to say "not yet", and for the producer to listen.
+
+## The mechanism in Node
+
+Node streams have this built in, in the least discoverable way possible:
+`write()` returns a boolean.
+
+```javascript
+const ok = writable.write(chunk);
+// false = the internal buffer is past its highWaterMark.
+// You may keep writing — Node will buffer it — but you shouldn't.
+```
+
+`false` is not an error, and ignoring it is legal. That is precisely why
+this bug is so common: the code works on a small file and fails on a big
+one.
+
+Handled manually, it looks like this:
+
+```javascript
+readable.on('data', (chunk) => {
+  if (!writable.write(chunk)) {
+    readable.pause();                        // stop reading
+    writable.once('drain', () => readable.resume());  // …until it drains
+  }
+});
+```
+
+`highWaterMark` is the threshold (16KB for byte streams, 16 objects for
+object streams) and `drain` fires once the buffer empties. That's the whole
+protocol: pause on `false`, resume on `drain`.
+
+## Don't write that by hand
+
+Every stream composition problem — backpressure, error propagation, cleanup
+on failure — is already solved by `pipeline`:
+
+```javascript
+import { pipeline } from 'node:stream/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { createGzip } from 'node:zlib';
+
+await pipeline(
+  createReadStream('huge.log'),
+  createGzip(),
+  createWriteStream('huge.log.gz'),
+);
+```
+
+Constant memory regardless of file size, backpressure applied at every
+stage, and — the part `.pipe()` gets wrong — if any stage fails, all of them
+are destroyed and the error reaches your `catch`. A bare
+`a.pipe(b).pipe(c)` leaks file descriptors when `b` errors.
+
+Async iteration composes the same way, with normal control flow:
+
+```javascript
+async function* parseLines(source) {
+  let buffer = '';
+  for await (const chunk of source) {        // awaiting here IS the backpressure
+    buffer += chunk;
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) yield JSON.parse(line);
+  }
+}
+
+await pipeline(
+  createReadStream('events.ndjson', 'utf8'),
+  parseLines,
+  async function (records) {
+    for await (const record of records) await db.insert(record);  // slow consumer
+  },
+);
+```
+
+The `await` inside the loop is what applies the pressure: the generator
+can't produce the next value until the consumer asks for it, and that pull
+propagates all the way back to the file read.
+
+## Web Streams: the same idea, made explicit
+
+In browsers and modern Node, the WHATWG Streams API puts the buffer in the
+type system rather than in a boolean return:
+
+```javascript
+await fetch('/api/upload', {
+  method: 'POST',
+  body: readableStream,     // uploaded incrementally, not buffered
+  duplex: 'half',
+});
+
+// Backpressure via the writer's ready promise:
+const writer = writable.getWriter();
+for (const chunk of chunks) {
+  await writer.ready;       // resolves when there is room
+  writer.write(chunk);      // note: not awaited — ready is the gate
+}
+await writer.close();
+```
+
+`writer.ready` is the explicit version of Node's `drain`. A `ReadableStream`
+is pull-based by design: its `pull()` is called only when the consumer has
+capacity, so a correctly written source never over-produces.
+
+The two worlds interoperate: `Readable.toWeb()` and `Readable.fromWeb()`
+convert in both directions, backpressure preserved.
+
+## The patterns that break it
+
+**`for await` with unawaited work.** Kicking off promises inside the loop
+without awaiting them removes the pressure entirely:
+
+```javascript
+for await (const row of source) {
+  db.insert(row);            // ✗ unawaited — the loop never slows down
+}
+```
+
+Use a bounded concurrency helper if you want parallelism — say four
+in-flight inserts — rather than unbounded fire-and-forget. Bounded
+concurrency preserves backpressure; unbounded destroys it.
+
+**Collecting into an array.** `const all = await toArray(stream)` defeats
+the entire point. If the pipeline ends in an array, it isn't streaming.
+
+**Unbounded internal queues.** Any queue you add between stages —
+`highWaterMark: Infinity`, a plain array, an unbounded channel — is a place
+for memory to accumulate. Bound every queue.
+
+**Transforms that grow.** A transform that turns one 1KB row into a 1MB
+document shifts the bottleneck downstream. Backpressure still works, but
+your `highWaterMark` of "16 objects" now means 16MB.
+
+## The rule
+
+Any time data flows from something fast to something slow, ask one
+question: *what happens when the consumer falls behind?* If the answer is
+"it buffers", find the bound. If there is no bound, the answer is really
+"it crashes, eventually, on an input larger than the one you tested".
+
+Reach for `pipeline` and async iteration, keep every queue bounded, and
+never ignore the return value of `write()`.

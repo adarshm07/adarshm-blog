@@ -1,0 +1,140 @@
+---
+title: "RAG Retrieval: Chunking, Embeddings, and Why It Misses"
+publishedAt: "2026-09-17"
+summary: "Most RAG failures are retrieval failures, not generation failures. How chunking and embeddings decide what the model ever sees, the similarity-is-not-relevance trap, and what actually fixes it."
+tags: "AI Engineering"
+---
+
+Retrieval-augmented generation has a simple promise: put the relevant
+paragraphs in the prompt and the model answers from them instead of from
+memory. When it fails, the answer is usually confident and wrong, and the
+instinct is to blame the model.
+
+It's almost never the model. The relevant paragraph was never retrieved.
+
+## The pipeline, and where it breaks
+
+<RagRetrievalVisualizer />
+
+Four stages, each with its own failure mode:
+
+1. **Chunk** the documents into passages.
+2. **Embed** each chunk into a vector, once, offline.
+3. **Retrieve** the top-k chunks most similar to the embedded query.
+4. **Generate** an answer from those chunks.
+
+Stage 4 gets the attention. Stages 1 and 3 cause the failures.
+
+## Similarity is not relevance
+
+An embedding measures how alike two pieces of text are in meaning. That is
+correlated with relevance, and it is not the same thing — which is the whole
+problem.
+
+Ask *"how long does a refund take?"* of a document whose refund-policy
+section repeats the words "refund" and "policy" constantly, and the
+policy-heavy chunks win on similarity even when the actual answer — a
+sentence about payment processing times — lives elsewhere and shares fewer
+words with the question.
+
+The retriever has no idea what an answer is. It ranks text that *sounds
+like* the question, and a question rarely sounds like its own answer.
+
+This is also why pure vector search struggles with exact terms: an error
+code, a product SKU, a person's name. Embeddings smooth over exactly the
+detail you needed to match. Hybrid search — combining vector similarity with
+keyword scoring (BM25) — fixes a surprising share of "why didn't it find
+that?" complaints, because the two methods fail on different things.
+
+## Chunking decides what can be found
+
+A chunk is the unit of retrieval. If the answer spans two chunks, no
+retrieval strategy will return it intact.
+
+<Table
+  data={{
+    headers: ['Strategy', 'Good for', 'Fails when'],
+    rows: [
+      ['Fixed size (e.g. 512 tokens)', 'Uniform prose', 'Splits mid-argument, mid-table, mid-function'],
+      ['Sentence/paragraph', 'Articles, docs', 'Chunks vary wildly in size and usefulness'],
+      ['Structural (headings, sections)', 'Technical docs, wikis', 'Sections too large to retrieve precisely'],
+      ['Code-aware (functions, classes)', 'Source code', 'Cross-file relationships are lost'],
+    ],
+  }}
+/>
+
+Two techniques earn their keep almost everywhere:
+
+**Overlap.** Have each chunk repeat the last ~10–20% of the previous one, so
+a fact sitting on a boundary appears whole in at least one chunk. Cheap
+insurance against the worst chunking failure.
+
+**Context headers.** Prepend the document title and section path to each
+chunk before embedding it. A chunk that reads *"…must be approved by a
+manager"* is nearly unretrievable on its own; the same chunk prefixed with
+*"Expenses › International travel › Approvals"* is both retrievable and
+interpretable once it lands in the prompt.
+
+## Top-k is a trade, not a setting
+
+A small `k` keeps the prompt tight and misses things. A large `k` rarely
+misses and fills the context with near-relevant text that dilutes the
+prompt, costs tokens on every call, and — past a point — makes answers
+*worse*, because the model has more plausible-looking material to be
+distracted by.
+
+The better shape is two stages:
+
+**Retrieve wide, then rerank.** Pull 20–50 candidates by vector or hybrid
+search, then score each candidate against the query with a cross-encoder or
+a small model that reads both together. Reranking is more accurate than
+embedding similarity precisely because it looks at the pair rather than at
+two independently-computed vectors — and because it only runs on a
+shortlist, it stays affordable. With a reranker in place, `k` can drop back
+to 3–5 and quality goes *up*.
+
+## Evaluate retrieval separately
+
+This is the discipline that separates RAG systems that improve from ones
+that get endlessly re-prompted. Build a small set of question → correct-chunk
+pairs, a hundred is plenty, and measure retrieval on its own:
+
+- **Recall@k** — is the right chunk in the top k at all? If this is low,
+  nothing downstream can save you.
+- **MRR / precision@k** — how high does it rank?
+
+Then, separately, measure whether the model answers correctly *given* the
+right chunks. Two numbers, two different fixes. Without the split, every
+failure looks like a prompting problem and you tune the wrong stage for
+weeks.
+
+## Things that fix more than prompt tweaking
+
+- **Hybrid search.** Vectors plus BM25. Covers semantic and exact matching.
+- **Reranking.** The single biggest quality jump per unit of effort.
+- **Query rewriting.** Expand the user's question, or generate two or three
+  variants, and retrieve for each. Handles the case where the question is
+  short and the document is verbose.
+- **Metadata filters.** Filter by product, version, or date *before*
+  ranking. Most "it cited the old docs" problems are a missing filter, not a
+  ranking problem.
+- **Citations in the output.** Ask for the chunk id alongside each claim.
+  It makes retrieval failures visible instead of silent, and it lets users
+  check.
+
+## When RAG is the wrong tool
+
+RAG answers "what does the corpus say about X". It is a poor fit for:
+
+- **Aggregation.** "How many tickets mention crashes?" needs a query, not
+  a similarity search over ten retrieved tickets.
+- **Whole-document reasoning.** "Summarise this contract" wants the whole
+  contract in context — modern windows are large enough that chunking it
+  actively hurts.
+- **Freshness-critical lookups.** If the answer is a row in a database,
+  give the model a tool that queries the database. A tool call returns the
+  current value; a vector index returns whatever was true when you last
+  reindexed.
+
+RAG is a retrieval system with a language model attached. Most of the
+engineering — and nearly all of the failures — are on the retrieval side.

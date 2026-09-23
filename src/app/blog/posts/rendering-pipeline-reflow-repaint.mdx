@@ -1,0 +1,157 @@
+---
+title: "Reflow, Repaint, Composite: The Browser Rendering Pipeline"
+publishedAt: "2026-09-23"
+summary: "Why animating left janks and animating transform doesn't. The five stages of a frame, which properties skip which stages, and what layout thrashing actually costs."
+tags: "JavaScript"
+---
+
+Two animations, visually identical. One holds 60fps; the other stutters on
+every device slower than your laptop. The difference isn't the amount of
+work — it's how far down the rendering pipeline each one reaches.
+
+## The five stages
+
+Every visual change runs through the same sequence, and the question that
+decides performance is where it enters:
+
+<RenderPipelineVisualizer />
+
+**JavaScript** — your code runs and mutates the DOM or styles.
+**Style** — the browser recalculates which CSS rules apply to which
+elements.
+**Layout** — it computes geometry: position and size of every affected
+element. Also called *reflow*.
+**Paint** — it fills in pixels: colours, text, shadows, borders, into one or
+more layers.
+**Composite** — it assembles the layers into the final frame, on the GPU.
+
+Layout is the expensive one, and it cascades: changing the width of a
+container can move everything after it. Paint is moderately expensive and
+proportional to area. Composite is cheap and can run on a separate thread.
+
+## Which properties reach which stage
+
+<Table
+  data={{
+    headers: ['Change', 'Triggers', 'Cost'],
+    rows: [
+      ['width, height, top, left, margin, padding, font-size', 'Layout → Paint → Composite', 'Highest'],
+      ['color, background, box-shadow, border-radius, visibility', 'Paint → Composite', 'Moderate'],
+      ['transform, opacity, filter', 'Composite only', 'Lowest — can skip the main thread'],
+    ],
+  }}
+/>
+
+This is the whole reason "animate `transform: translateX()`, not `left`" is
+repeated everywhere. Both move an element. `left` recomputes layout on every
+frame; `transform` hands a matrix to the compositor, which already has the
+element as a texture. Same visual result, an order of magnitude apart in
+cost — and `transform` can keep running when the main thread is busy.
+
+At 60fps you have ~16ms per frame, minus what the browser needs for itself.
+A layout pass over a large tree eats that budget on its own.
+
+## Layout thrashing: the one to actually watch for
+
+The browser batches style and layout work — it wants to do one layout pass
+per frame, after all your code has finished mutating. Reading a geometric
+property forces it to flush early:
+
+```javascript
+// ✗ forced synchronous layout, once per iteration
+for (const el of boxes) {
+  el.style.width = el.offsetWidth + 10 + 'px';   // read after write, 200 times
+}
+```
+
+Each write invalidates layout; each read demands an up-to-date value, so the
+browser must recompute immediately. Two hundred elements, two hundred layout
+passes.
+
+The fix costs nothing: separate the reads from the writes.
+
+```javascript
+// ✓ one layout pass for the batch
+const widths = boxes.map((el) => el.offsetWidth);   // read everything
+boxes.forEach((el, i) => {                          // then write everything
+  el.style.width = widths[i] + 10 + 'px';
+});
+```
+
+The properties that force a flush are the ones that must reflect current
+geometry: `offsetTop/Left/Width/Height`, `clientWidth/Height`,
+`scrollTop/Height`, `getBoundingClientRect()`, and `getComputedStyle()` for
+layout-dependent values. Reading any of them after a style write is the
+trigger.
+
+If a library makes the read/write split awkward, `requestAnimationFrame`
+gives you a place to put the writes:
+
+```javascript
+const measurements = elements.map((el) => el.getBoundingClientRect());
+requestAnimationFrame(() => {
+  elements.forEach((el, i) => applyLayout(el, measurements[i]));
+});
+```
+
+## Layers, and not over-promoting
+
+An element can be promoted to its own compositor layer, which makes its
+`transform`/`opacity` animations essentially free — they no longer require
+repainting anything:
+
+```css
+.card {
+  will-change: transform;   /* hint: this will animate */
+}
+```
+
+Each layer costs GPU memory (roughly width × height × 4 bytes), and too many
+layers cost more than the repaints they avoided. Promote the handful of
+elements that genuinely animate — a modal, a drawer, a dragged card — and
+remove the hint when the animation is done. `will-change` applied to
+everything is a well-known way to make a page slower.
+
+## Containment: bounding the cascade
+
+`contain` tells the browser that an element's internals can't affect
+anything outside it, so layout work stays inside that subtree:
+
+```css
+.feed-item {
+  contain: layout paint;   /* changes inside never reflow the page */
+}
+
+.below-the-fold {
+  content-visibility: auto;      /* skip rendering entirely until near the viewport */
+  contain-intrinsic-size: 0 400px;  /* a size placeholder so scrollbars behave */
+}
+```
+
+`content-visibility: auto` is the single biggest win available on long
+pages: off-screen content skips style, layout, and paint until it
+approaches the viewport. On a list of a thousand items, it turns a
+multi-second first render into a normal one.
+
+## Measuring instead of guessing
+
+Everything above is a heuristic; the profiler is the source of truth.
+
+- **Performance panel** — record an interaction and read the frame track.
+  Purple blocks are layout and paint; long ones are your problem.
+- **"Paint flashing"** in DevTools rendering options — highlights repainted
+  regions in green. If the whole screen flashes when one badge updates, you
+  have a layer or containment problem.
+- **Layer borders** — shows what has been promoted, which is usually more
+  than you expected.
+- **`PerformanceObserver`** with `long-animation-frame` — catches the frames
+  that blew the budget in the field, not just on your machine.
+
+## The short version
+
+- Layout is expensive and cascades; paint is moderate; composite is cheap.
+- Animate `transform` and `opacity`. Nothing else, if you can help it.
+- Never read geometry in a loop that also writes it — batch reads, then
+  writes.
+- Promote deliberately with `will-change`, and undo it afterwards.
+- Use `content-visibility: auto` for long pages; it's close to free.

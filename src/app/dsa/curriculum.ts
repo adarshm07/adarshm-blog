@@ -126,6 +126,16 @@ export const curriculum: CurriculumPhase[] = [
         note: 'Near-constant-time connectivity queries, and the trick behind Kruskal’s algorithm.',
       },
       {
+        slug: 'fenwick-tree-binary-indexed-tree',
+        difficulty: 'Advanced',
+        note: 'Prefix sums that survive updates — the same range queries in O(log n), built out of one bit trick.',
+      },
+      {
+        slug: 'minimum-spanning-trees',
+        difficulty: 'Advanced',
+        note: 'Kruskal and Prim: union-find and priority queues applied to the cheapest way to connect everything.',
+      },
+      {
         slug: 'dijkstra-shortest-paths',
         difficulty: 'Advanced',
         note: 'Weighted graphs — where BFS stops working and priority queues take over.',
