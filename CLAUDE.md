@@ -8,10 +8,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 yarn dev      # Start development server at http://localhost:3000
 yarn build    # Production build
 yarn start    # Run production build locally
-yarn lint     # Run Next.js ESLint
+yarn lint     # ESLint (flat config, eslint-config-next)
+npx tsc --noEmit   # Typecheck
 ```
 
-No test suite is configured in this project.
+No test suite is configured. CI (`.github/workflows/ci.yml`) runs lint,
+typecheck, and build on every push and pull request — the build is the real
+gate, because MDX rendering errors only surface during static generation.
+
+`react-hooks/set-state-in-effect` is downgraded to a warning in
+`eslint.config.mjs`; the reasoning is in a comment there.
 
 ## Stack
 
@@ -56,13 +62,66 @@ tags: "DSA, System Design"        # optional; comma-separated, powers the /blog 
 - **`Image`** — renders Next.js `<Image>` with `rounded-xl`
 - **`Table`** — accepts a `{ headers: string[], rows: string[][] }` data prop
 
-### Special routes
+### Every post gets a visualizer
+
+Almost every post is built around one animated component in
+`src/app/components/`, registered in the `components` map in
+`src/app/components/mdx.tsx` and used by name in the MDX. They are all built
+on `StepPlayer` (`src/app/components/step-player.tsx`), which supplies
+play/pause/step/reset and a `StepNote` caption; a visualizer supplies an
+array of steps and renders one frame per index. Data is deterministic — no
+`Math.random()` at render time, or the server and client markup diverge.
+
+**MDX object props need `blockJS: false`.** Both MDX routes pass
+`options={{ blockJS: false }}` to `CustomMDX`; without it, object props like
+`<Table data={{...}}>` are stripped and arrive as `undefined`.
+
+### Routes beyond the blog
 
 | Route | File | Purpose |
 |-------|------|---------|
+| `/about` | `src/app/about/page.tsx` | Bio, personal stack, and how the site is built |
+| `/tools` | `src/app/tools/` | System design practice (BYOK Claude), capacity calculator, regex backtracking checker |
+| `/dsa` | `src/app/dsa/page.tsx` | Ordered learning path from `curriculum.ts` |
+| `/dsa/patterns` | `src/app/dsa/patterns/` | Practice questions grouped by pattern, authored as MDX |
+| `/dsa/progress` | `src/app/dsa/progress/page.tsx` | Dashboard over both progress tracks |
 | `/og` | `src/app/og/route.tsx` | Dynamic OG image generation via `next/og` (accepts `?title=` param) |
 | `/rss` | `src/app/rss/route.ts` | XML RSS feed |
-| `/sitemap.xml` | `src/app/sitemap.ts` | Auto-generated sitemap |
+| `/sitemap.xml` | `src/app/sitemap.ts` | Auto-generated sitemap — add new static routes to the `routes` array |
+| `/search-index` | `src/app/search-index/route.ts` | Static JSON search index, fetched on first ⌘K |
+| `/icon`, `/apple-icon` | `src/app/icon.tsx` | Favicons generated at build time |
+
+### Search
+
+`src/app/lib/search-index.ts` builds the index at build time — title,
+summary, tags, headings, and prose with code fences and JSX stripped — and
+serves it from the static `/search-index` route. `src/app/lib/search.ts`
+holds the ranking (title prefix > word boundary > substring > tag > heading >
+summary > body, with a span-capped subsequence fallback) and is pure, so it
+runs client-side. `SearchPalette` fetches the index on first open and caches
+it in a module variable.
+
+### Local progress tracking
+
+`src/app/lib/dsa-progress.ts` owns both tracks: `dsa-path-progress`
+(articles read) and `dsa-patterns-progress` (questions solved). Values are
+`slug → ISO date`; a v1 bare-array format is migrated on read, so never write
+the old shape back. Components subscribe with `onProgressChange`, which
+covers same-tab updates and cross-tab `storage` events.
+
+### The AI tool
+
+`/tools/system-design` calls the Claude API **from the browser with the
+visitor's own key** — `src/app/lib/byok.ts` handles key storage (session by
+default, device opt-in) and dynamically imports `@anthropic-ai/sdk` with
+`dangerouslyAllowBrowser: true`, so its ~190KB only loads on first use. No
+key ever reaches a server here; there is no backend.
+
+### Pagination
+
+`/blog` paginates at `POSTS_PER_PAGE` (10) via `paginatePosts()` in
+`blog/utils.ts`, which clamps out-of-range pages. The `Pagination` component
+preserves the active tag in every link.
 
 `baseUrl` (`https://adarshm.com`) is defined once in `src/app/sitemap.ts` and imported wherever an absolute URL is needed.
 

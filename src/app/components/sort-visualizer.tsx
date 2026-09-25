@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 
 type Step = { array: number[]; active: number[]; sorted: number[] }
 type Algorithm = 'bubble' | 'selection' | 'insertion' | 'merge' | 'quick' | 'heap'
