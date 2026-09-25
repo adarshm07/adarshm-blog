@@ -54,6 +54,16 @@ import { TraceWaterfallVisualizer } from '@/app/components/trace-waterfall-visua
 import { BackpressureVisualizer } from '@/app/components/backpressure-visualizer'
 import { RenderPipelineVisualizer } from '@/app/components/render-pipeline-visualizer'
 import { EvalMatrixVisualizer } from '@/app/components/eval-matrix-visualizer'
+import { PredicateSearchVisualizer } from '@/app/components/predicate-search-visualizer'
+import { LISVisualizer } from '@/app/components/lis-visualizer'
+import { ReservoirVisualizer } from '@/app/components/reservoir-visualizer'
+import { CancellationVisualizer } from '@/app/components/cancellation-visualizer'
+import { RegexBacktrackingVisualizer } from '@/app/components/regex-backtracking-visualizer'
+import { TimezoneVisualizer } from '@/app/components/timezone-visualizer'
+import { PaginationDriftVisualizer } from '@/app/components/pagination-drift-visualizer'
+import { OutboxVisualizer } from '@/app/components/outbox-visualizer'
+import { PromptInjectionVisualizer } from '@/app/components/prompt-injection-visualizer'
+import { EmbeddingSpaceVisualizer } from '@/app/components/embedding-space-visualizer'
 import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
@@ -142,9 +152,24 @@ function slugify(str: string) {
     .replace(/--+/g, '-')
 }
 
+/**
+ * A heading with inline markup (`code`, *emphasis*, a link) arrives as an
+ * array of nodes rather than a string, so flatten it before slugifying.
+ */
+function childrenToText(children: React.ReactNode): string {
+  if (typeof children === 'string' || typeof children === 'number') {
+    return String(children)
+  }
+  if (Array.isArray(children)) return children.map(childrenToText).join('')
+  if (React.isValidElement(children)) {
+    return childrenToText((children.props as { children?: React.ReactNode }).children)
+  }
+  return ''
+}
+
 function createHeading(level: number) {
-  const Heading = ({ children }: { children: string }) => {
-    const slug = slugify(children)
+  const Heading = ({ children }: { children: React.ReactNode }) => {
+    const slug = slugify(childrenToText(children))
     return React.createElement(
       `h${level}`,
       { id: slug },
@@ -217,6 +242,16 @@ const components = {
   BackpressureVisualizer,
   RenderPipelineVisualizer,
   EvalMatrixVisualizer,
+  PredicateSearchVisualizer,
+  LISVisualizer,
+  ReservoirVisualizer,
+  CancellationVisualizer,
+  RegexBacktrackingVisualizer,
+  TimezoneVisualizer,
+  PaginationDriftVisualizer,
+  OutboxVisualizer,
+  PromptInjectionVisualizer,
+  EmbeddingSpaceVisualizer,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {

@@ -1,0 +1,127 @@
+---
+title: "What an Embedding Actually Is"
+publishedAt: "2026-09-25"
+summary: "A list of numbers where distance means similarity. What cosine similarity measures, why the same word can have two vectors, and the queries embeddings are quietly bad at."
+tags: "AI Engineering"
+---
+
+"Embed the documents and search by similarity" is now a standard line in
+system design, which is a shame, because the interesting parts are in what
+the vectors can and can't express.
+
+## A point in a space nobody designed
+
+An embedding model turns text into a fixed-length list of numbers — a point
+in a space with hundreds or thousands of dimensions:
+
+```
+"a small dog"  →  [0.021, -0.118, 0.334, …, 0.087]   // e.g. 1536 numbers
+```
+
+The dimensions have no individual meaning. Nobody set dimension 412 to
+"animalness". The model learned an arrangement where texts that appear in
+similar contexts land near each other, and the usefulness is entirely in
+the *relative positions*:
+
+<EmbeddingSpaceVisualizer />
+
+Two things in that picture are worth pulling out.
+
+**Similar meanings cluster.** "dog" and "puppy" sit close together without
+sharing many characters. That's the property that makes semantic search
+work: a query can match a passage that uses none of its words.
+
+**Context changes the vector.** The two "bank"s land in different places.
+Modern embedding models encode the whole input string, so the surrounding
+words disambiguate the sense — which older word-level vectors (word2vec,
+GloVe) could not do, because they assigned one vector per word for all
+time.
+
+## Cosine similarity, concretely
+
+Similarity is the cosine of the angle between two vectors — magnitude
+ignored, direction compared:
+
+```javascript
+function cosineSimilarity(a, b) {
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+```
+
+Ranges from −1 to 1, though in practice text embeddings rarely go negative;
+the useful signal is in the gaps between scores, not their absolute values.
+
+Most providers return **normalised** vectors (length 1), and then cosine
+similarity is just the dot product — which is why vector databases talk
+about "inner product" as if it were a different metric. It's the same
+ranking, one multiplication cheaper.
+
+The absolute number is not meaningful across models. 0.82 from one model
+and 0.82 from another say nothing comparable; a threshold tuned for one is
+meaningless for the other.
+
+## What they're bad at
+
+This is the part that gets skipped, and it causes most disappointing
+retrieval:
+
+**Exact tokens.** An error code, a SKU, a version number, a surname. These
+have no meaningful neighbourhood — the model has nothing to generalise
+from, so the nearest point is close to arbitrary. This is why hybrid search
+(vectors plus BM25) beats either alone on technical corpora.
+
+**Negation.** "The refund was approved" and "the refund was not approved"
+embed very close together. The words are nearly identical and the meanings
+are opposite. Embeddings measure topical similarity, and negation barely
+moves the needle.
+
+**Numbers and comparisons.** "orders over $500" doesn't retrieve by
+magnitude. If the query is really a filter, it belongs in a `WHERE` clause,
+not a vector search.
+
+**Long documents.** A single vector for a 50-page document averages
+everything into mush. This is why chunking exists, and why chunk size is
+the main lever in a [RAG pipeline](/blog/rag-retrieval-explained).
+
+## The operational facts
+
+**Query and document must use the same model.** Different models produce
+incomparable spaces; mixing them returns noise that looks like results.
+
+**Changing models means re-embedding everything.** Not just new documents —
+the whole corpus, or your index contains two spaces that can't be compared.
+Budget for this before choosing a model, and keep the raw text so you can.
+
+**Dimensions cost memory.** A million chunks at 1536 dimensions in float32
+is about 6GB before any index overhead. Some models support truncating the
+vector (Matryoshka representation learning) so you can trade a little
+accuracy for a lot of memory.
+
+**Approximate search is the norm.** HNSW and IVF indexes don't check every
+vector; they trade a small recall loss for orders-of-magnitude speed. The
+recall/latency knob is a real decision, not a default to accept silently.
+
+**Embedding is cheap, and not free.** It's one of the cheapest model calls
+you can make, but embedding a corpus repeatedly on every deploy adds up —
+cache by a hash of the chunk text.
+
+## Where they're used beyond search
+
+- **Clustering** — group similar support tickets to find recurring themes.
+- **Deduplication** — near-duplicate detection where exact hashing fails.
+- **Classification** — embed labelled examples, then classify by nearest
+  neighbour. Often beats a fine-tuned model for a handful of classes, and
+  takes an afternoon.
+- **Recommendations** — "more like this" is a nearest-neighbour query.
+- **Outlier detection** — anything far from every cluster is worth a look.
+
+Each of these is the same primitive: turn text into points, then do
+geometry. Once you see it that way, "when should I use embeddings?" becomes
+"is the question I'm asking really about *nearness*?" — and for exact
+lookups, filters, and aggregates, the honest answer is no.

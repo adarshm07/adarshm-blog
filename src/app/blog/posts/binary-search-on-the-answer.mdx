@@ -1,0 +1,148 @@
+---
+title: "Binary Search on the Answer"
+publishedAt: "2026-09-24"
+summary: "The array isn't sorted. There is no array. You can still binary search — as long as you can write a yes/no question whose answers flip exactly once."
+tags: "DSA"
+---
+
+Most people learn binary search as "find a value in a sorted array" and
+stop there. The more useful version has nothing to do with arrays: it
+searches a **range of possible answers**, and the only thing that has to be
+sorted is the answer to a yes/no question.
+
+This is the pattern behind a whole class of problems that look like
+optimisation and are really search.
+
+## The shape of the problem
+
+The tell is a question of the form *"what is the smallest / largest X such
+that …"*, where checking a specific X is much easier than deriving it.
+
+Koko eats bananas from four piles — 7, 11, 5, 8 — and has 8 hours before
+the guards return. She eats at a fixed speed of k bananas per hour and
+never moves to another pile within an hour. What's the slowest speed that
+still finishes in time?
+
+Deriving that speed directly is awkward. *Checking* a speed is trivial: sum
+`ceil(pile / k)` and compare to 8.
+
+<PredicateSearchVisualizer />
+
+Look at the row of T/F values in the third step. That's the whole trick:
+even though the input was never sorted, the *predicate* is monotonic —
+false, false, false, then true forever. Anything with that shape is
+binary-searchable.
+
+## The code
+
+```javascript
+function minEatingSpeed(piles, hours) {
+  const feasible = (k) =>
+    piles.reduce((sum, pile) => sum + Math.ceil(pile / k), 0) <= hours;
+
+  let lo = 1;                         // slowest conceivable speed
+  let hi = Math.max(...piles);        // fast enough to finish in one hour per pile
+
+  while (lo < hi) {
+    const mid = lo + Math.floor((hi - lo) / 2);
+    if (feasible(mid)) hi = mid;      // mid works — it might be the answer, keep it
+    else lo = mid + 1;                // mid fails — the answer is strictly higher
+  }
+  return lo;                          // lo === hi === the first true
+}
+```
+
+Three parts, and each one is where bugs come from:
+
+1. **The predicate.** `feasible(k)` must be monotonic: once true, true for
+   everything above.
+2. **The bounds.** `lo` must be small enough to be false (or be the answer)
+   and `hi` large enough to be true.
+3. **The loop.** `hi = mid` when feasible, `lo = mid + 1` when not, and
+   `while (lo < hi)`.
+
+## Getting the loop right
+
+The off-by-one errors in this pattern are relentless, so it's worth
+memorising two templates rather than re-deriving them:
+
+```javascript
+// FIRST value where predicate is true  (F F F T T T)
+while (lo < hi) {
+  const mid = lo + Math.floor((hi - lo) / 2);   // rounds down
+  if (predicate(mid)) hi = mid;
+  else lo = mid + 1;
+}
+
+// LAST value where predicate is true   (T T T F F F)
+while (lo < hi) {
+  const mid = lo + Math.ceil((hi - lo) / 2);    // rounds UP — or it loops forever
+  if (predicate(mid)) lo = mid;
+  else hi = mid - 1;
+}
+```
+
+The rounding direction is the part people get wrong. In the second
+template, `lo = mid` with a mid that rounds down means `lo` can stop
+advancing when `hi = lo + 1`, and the loop spins forever. Round the mid
+toward whichever bound you assign without the ±1.
+
+Both loops end with `lo === hi`, so there's no "did I return `lo` or
+`hi`" question — and neither needs a `found` flag.
+
+## Recognising it in the wild
+
+Once you know the shape, it shows up constantly:
+
+<Table
+  data={{
+    headers: ['Problem', 'Search over', 'Predicate'],
+    rows: [
+      ['Koko eating bananas', 'Eating speed', 'Finishes within h hours?'],
+      ['Ship packages in D days', 'Ship capacity', 'All packages fit in D days?'],
+      ['Split array, minimise largest sum', 'The largest sum', 'Can split into ≤ k parts?'],
+      ['Minimum time to make m bouquets', 'Days waited', 'Enough flowers bloomed?'],
+      ['Aggressive cows / max-min distance', 'Minimum gap', 'Can place all cows?'],
+      ['Median of two sorted arrays', 'Partition point', 'Left half ≤ right half?'],
+      ['sqrt(x) without Math.sqrt', 'The root', 'mid² ≤ x?'],
+    ],
+  }}
+/>
+
+The common structure: the answer is a number in a known range, the
+objective is a min or a max, and a candidate can be *verified* far more
+cheaply than it can be computed.
+
+## Real-valued answers
+
+When the answer is a float rather than an integer, the loop terminates on
+precision instead of on `lo === hi`:
+
+```javascript
+function search(predicate, lo, hi, iterations = 100) {
+  for (let i = 0; i < iterations; i++) {      // fixed count, not a tolerance
+    const mid = (lo + hi) / 2;
+    if (predicate(mid)) hi = mid;
+    else lo = mid;
+  }
+  return lo;
+}
+```
+
+Use a fixed iteration count rather than `while (hi - lo > 1e-9)`. A hundred
+halvings takes any starting range below double precision, and it can't hang
+on a tolerance that floating point never reaches.
+
+## The one thing to verify
+
+Everything rests on monotonicity, and it's easy to assume it without
+checking. If a faster eating speed could somehow take *more* time, or a
+larger ship capacity could need *more* days, the predicate isn't monotonic
+and binary search returns nonsense confidently.
+
+When you're unsure, brute-force the predicate over a small range and print
+the T/F row — exactly the row in the animation above. If it flips more than
+once, the problem is telling you it isn't this pattern.
+
+That check takes two minutes and saves the hour you'd otherwise spend
+debugging the loop bounds of a search that was never valid.

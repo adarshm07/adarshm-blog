@@ -1,0 +1,162 @@
+---
+title: "Longest Increasing Subsequence in O(n log n)"
+publishedAt: "2026-09-24"
+summary: "The O(n²) dynamic program is the one everyone learns. The faster version keeps one array of 'best endings' and binary searches it — and the array it builds is not the answer."
+tags: "DSA"
+---
+
+Longest increasing subsequence is the standard example of a problem with a
+clean quadratic solution and a much faster one that looks like sleight of
+hand. It's worth understanding the fast version properly, because the same
+"keep the best ending for each length" idea shows up well beyond LIS.
+
+## The O(n²) version first
+
+```javascript
+function lisQuadratic(nums) {
+  const best = new Array(nums.length).fill(1);   // best[i] = LIS ending at i
+
+  for (let i = 1; i < nums.length; i++) {
+    for (let j = 0; j < i; j++) {
+      if (nums[j] < nums[i]) best[i] = Math.max(best[i], best[j] + 1);
+    }
+  }
+  return Math.max(...best);
+}
+```
+
+Every element looks back at every earlier element. It's easy to reason
+about and it's the right answer in an interview if you can't get the faster
+one out — but on 10⁵ elements it's ten billion comparisons.
+
+## The insight: track endings, not subsequences
+
+Among all increasing subsequences of a given length, the only one worth
+remembering is the one with the **smallest final element**. A smaller
+ending accepts more future elements, and nothing about a longer-tailed
+version ever helps later.
+
+So keep an array `tails`, where `tails[k]` is the smallest value that can
+end an increasing subsequence of length `k + 1`:
+
+<LISVisualizer />
+
+Two operations, and only one of them changes the answer:
+
+- The new element is **larger than every tail** → append it. The longest
+  subsequence just got longer.
+- Otherwise → **replace the first tail that is ≥ it**. The length is
+  unchanged, but that length now has a smaller, more permissive ending.
+
+Because `tails` is always sorted, finding the replacement position is a
+binary search.
+
+## The code
+
+```javascript
+function lengthOfLIS(nums) {
+  const tails = [];
+
+  for (const n of nums) {
+    // first index with tails[idx] >= n
+    let lo = 0, hi = tails.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (tails[mid] < n) lo = mid + 1;
+      else hi = mid;
+    }
+
+    if (lo === tails.length) tails.push(n);   // extends the longest run
+    else tails[lo] = n;                       // better ending, same length
+  }
+  return tails.length;
+}
+```
+
+O(n log n): one binary search per element. The whole thing is a dozen
+lines, and the sorted invariant is what makes the binary search valid — it
+holds because each write either appends a larger value or lowers an
+existing one below its right-hand neighbour.
+
+## `tails` is not the subsequence
+
+This trips people up, and the animation shows it clearly: the final `tails`
+is `[1, 2, 5, 6]`, while the actual LIS is `[1, 4, 5, 9]` or `[1, 4, 5, 6]`.
+
+`tails[k]` records the best *ending* seen for length `k + 1`, and those
+endings come from different subsequences at different times. The length is
+correct; the contents are a mix.
+
+To recover the real subsequence, record where each element landed and who
+preceded it:
+
+```javascript
+function lisSequence(nums) {
+  const tails = [];         // values, as before
+  const tailIdx = [];       // tailIdx[k] = index in nums of that tail
+  const parent = new Array(nums.length).fill(-1);
+
+  nums.forEach((n, i) => {
+    let lo = 0, hi = tails.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (tails[mid] < n) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo > 0) parent[i] = tailIdx[lo - 1];     // whoever ends the shorter run
+    tails[lo] = n;
+    tailIdx[lo] = i;
+  });
+
+  const out = [];
+  for (let i = tailIdx[tails.length - 1]; i !== -1; i = parent[i]) out.push(nums[i]);
+  return out.reverse();
+}
+```
+
+The parent pointers make the reconstruction O(n) after the fact, and they
+cost nothing during the main loop.
+
+## Strict vs non-strict, and other variants
+
+One character changes the meaning:
+
+- **Strictly increasing** → find the first tail `>= n` (`lower_bound`).
+- **Non-decreasing** (duplicates allowed) → find the first tail `> n`
+  (`upper_bound`).
+
+Get this backwards and a sequence of equal values reports length 1 instead
+of n, or vice versa. It's the most common bug in this algorithm.
+
+Other variants fall out of transformations rather than new algorithms:
+
+- **Longest decreasing** — reverse the array, or negate the values.
+- **Longest bitonic** — LIS from the left plus LIS from the right, joined
+  at each index.
+- **Russian doll envelopes** — sort by width ascending and height
+  *descending*, then LIS on heights. The descending tiebreak is what stops
+  two envelopes of equal width being nested.
+- **Minimum removals to make a sequence increasing** — `n − LIS`.
+
+## Patience sorting, if you like the picture
+
+The same algorithm is a card game. Deal the sequence one card at a time,
+placing each on the leftmost pile whose top card is ≥ it, or starting a new
+pile on the right. The number of piles at the end is the LIS length, and
+the pile tops are exactly the `tails` array.
+
+The greedy rule is provably optimal, which is the informal proof that the
+algorithm is correct — and it explains why `tails` holds pile tops rather
+than any single run of cards.
+
+## Where it comes up
+
+Beyond the interview question: scheduling problems where tasks must be
+picked in order, `diff` algorithms (the longest common subsequence of two
+permutations reduces to LIS), box-stacking, and any "how much of this
+sequence is already in order" measure.
+
+The transferable idea isn't the algorithm. It's the move of storing *the
+best ending per length* instead of the subsequences themselves — swapping a
+quadratic search over histories for a logarithmic search over a sorted
+summary.

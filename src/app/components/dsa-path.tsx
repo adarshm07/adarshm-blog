@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { onProgressChange, pathProgress } from '@/app/lib/dsa-progress'
 import Link from 'next/link'
 import type { Difficulty } from '@/app/dsa/curriculum'
 
@@ -19,8 +20,6 @@ export type PathPhase = {
   items: PathItem[]
 }
 
-const STORAGE_KEY = 'dsa-path-progress'
-
 const difficultyStyles: Record<Difficulty, string> = {
   Beginner:
     'text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/60',
@@ -29,24 +28,15 @@ const difficultyStyles: Record<Difficulty, string> = {
   Advanced: 'text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/60',
 }
 
-function loadProgress(): Set<string> {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return new Set()
-    const parsed = JSON.parse(raw)
-    return new Set(Array.isArray(parsed) ? parsed.filter((s) => typeof s === 'string') : [])
-  } catch {
-    return new Set()
-  }
-}
-
 export function DsaPath({ phases }: { phases: PathPhase[] }) {
   const [done, setDone] = useState<Set<string>>(new Set())
   const [hydrated, setHydrated] = useState(false)
 
   useEffect(() => {
-    setDone(loadProgress())
+    const sync = () => setDone(new Set(Object.keys(pathProgress.load())))
+    sync()
     setHydrated(true)
+    return onProgressChange(sync)
   }, [])
 
   const readableSlugs = phases.flatMap((phase) =>
@@ -59,27 +49,12 @@ export function DsaPath({ phases }: { phases: PathPhase[] }) {
       : Math.round((completedCount / readableSlugs.length) * 100)
 
   function toggle(slug: string) {
-    setDone((prev) => {
-      const next = new Set(prev)
-      if (next.has(slug)) {
-        next.delete(slug)
-      } else {
-        next.add(slug)
-      }
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(next)))
-      } catch {
-        // storage unavailable (private mode, etc.) — progress just won't persist
-      }
-      return next
-    })
+    setDone(new Set(Object.keys(pathProgress.toggle(slug))))
   }
 
   function reset() {
+    pathProgress.clear(readableSlugs)
     setDone(new Set())
-    try {
-      localStorage.removeItem(STORAGE_KEY)
-    } catch {}
   }
 
   return (

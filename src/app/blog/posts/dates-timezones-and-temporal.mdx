@@ -1,0 +1,143 @@
+---
+title: "Dates, Timezones, and Why Temporal Exists"
+publishedAt: "2026-09-25"
+summary: "An instant and a wall-clock reading are different things, and Date conflates them. What DST actually does to your data, and how Temporal's types stop the bugs at the point of modelling."
+tags: "JavaScript"
+---
+
+Almost every date bug comes from one confusion: **an instant** (a point on
+the universal timeline) and **a wall-clock reading** (what a clock says in
+some particular place) are different kinds of value, and `Date` represents
+only the first while pretending to offer both.
+
+## What a Date actually is
+
+A `Date` is a number: milliseconds since the epoch. That's it. It has no
+timezone.
+
+```javascript
+const d = new Date('2026-03-29T01:30:00Z');
+
+d.getTime();       // 1774747800000 — the real content
+d.toString();      // rendered in the *machine's* zone, wherever that is
+d.getHours();      // also the machine's zone. Not the user's, not the data's.
+```
+
+Everything that looks like a timezone in the `Date` API is a rendering of
+that one number in whatever zone the runtime happens to be configured for.
+Which is why code works on a laptop in Bengaluru and breaks on a server in
+UTC, and why `getHours()` in a scheduler is almost always a bug.
+
+The parsing rules add a second trap:
+
+```javascript
+new Date('2026-03-29')             // midnight UTC        — date-only is UTC
+new Date('2026-03-29T00:00:00')    // midnight LOCAL time — no Z means local
+```
+
+Two strings one character apart, parsed in different zones. This is the
+source of the eternal "the date is off by one day" bug, and it depends on
+which side of UTC the user is.
+
+## DST is where data gets corrupted
+
+Twice a year, local time does something a naive model doesn't allow for:
+
+<TimezoneVisualizer />
+
+**Spring forward: an hour that doesn't exist.** Local time jumps from 02:00
+to 03:00. A wall time of 02:30 on that date maps to no instant at all. A
+daily job scheduled at 02:30 either doesn't run or silently shifts,
+depending on whose rules apply.
+
+**Fall back: an hour that happens twice.** 01:30 names two different
+instants, an hour apart. A timestamp stored as local wall time on that
+night is genuinely ambiguous — there is no rule that recovers which one was
+meant, because the information was never written down.
+
+That's the practical argument for storing instants: a UTC timestamp is
+never ambiguous and never missing.
+
+## The rule that prevents most of this
+
+**Store instants. Render wall times. Convert only at the edges.**
+
+- Persist UTC (`2026-03-29T01:30:00Z`) or epoch milliseconds.
+- Store the user's IANA zone (`Asia/Kolkata`) as a separate field whenever
+  the wall time matters — for recurring events, reminders, business hours.
+- Convert to local time when rendering, and back when parsing input. Never
+  in the middle.
+
+Store an *offset* (`+05:30`) rather than a zone name and you lose the
+future: offsets change when governments change DST rules, and a
+recurring 09:00 meeting must follow the rule, not the offset it had when
+it was created.
+
+## Temporal, and why the types are the point
+
+`Temporal` is the replacement for `Date`, and its value isn't nicer
+formatting — it's that the distinction above becomes a type you must
+choose:
+
+<Table
+  data={{
+    headers: ['Type', 'Represents', 'Use for'],
+    rows: [
+      ['Temporal.Instant', 'A point on the timeline, no zone', 'Timestamps, logs, "when did this happen"'],
+      ['Temporal.ZonedDateTime', 'An instant + an IANA zone', 'Meetings, alarms, anything a person experiences'],
+      ['Temporal.PlainDate', 'A calendar date, no time or zone', 'Birthdays, invoice dates, holidays'],
+      ['Temporal.PlainTime', 'A clock time, no date or zone', 'Opening hours'],
+      ['Temporal.PlainDateTime', 'Date + time, no zone', 'A form value before you know the zone'],
+      ['Temporal.Duration', 'A length of time', 'Arithmetic, intervals'],
+    ],
+  }}
+/>
+
+A birthday is a `PlainDate` — it does not move when you fly to Tokyo. A
+meeting is a `ZonedDateTime`. A log entry is an `Instant`. Choosing the type
+*is* the modelling decision, and choosing wrong is now visible in the code
+rather than surfacing as an off-by-one-day report months later.
+
+```javascript
+const meeting = Temporal.ZonedDateTime.from({
+  timeZone: 'America/New_York',
+  year: 2026, month: 3, day: 8, hour: 2, minute: 30,
+});
+// 02:30 does not exist that morning — Temporal applies an explicit
+// disambiguation policy ('compatible' by default) instead of guessing silently.
+
+const tomorrow = meeting.add({ days: 1 });       // DST-aware: adds a calendar day
+const later    = meeting.add({ hours: 24 });     // exactly 24 hours — may differ
+
+const birthday = Temporal.PlainDate.from('1995-08-14');
+birthday.add({ years: 30 });                     // no zone involved, no DST to get wrong
+```
+
+The `add({ days: 1 })` versus `add({ hours: 24 })` distinction is the whole
+design in one line: on a DST boundary those are different answers, and
+Temporal makes you say which one you meant. `Date` has only the second.
+
+## Until Temporal is everywhere
+
+It's shipping across engines and available as a polyfill, but if you can't
+adopt it yet:
+
+- Use `Intl.DateTimeFormat` for all formatting, with an explicit
+  `timeZone`. It's built in, it's correct, and it beats hand-rolled
+  formatting.
+- Use `date-fns-tz`, `Luxon`, or `js-joda` for arithmetic — Moment is in
+  maintenance and mutates its own values.
+- Never do date arithmetic by adding milliseconds. `+ 86_400_000` is not "a
+  day" on 4 days of the year in most zones.
+- Keep the zone database current. IANA ships updates several times a year
+  because governments keep changing the rules — a stale `tzdata` in a
+  container image is a real and boring source of wrong times.
+
+## The short version
+
+- A `Date` is an instant. It has no timezone, whatever the method names
+  suggest.
+- Local wall times are ambiguous twice a year and impossible once — do not
+  store them as your source of truth.
+- Store instants plus an IANA zone name; convert at the edges only.
+- Reach for Temporal, and let the type say whether a value has a zone.

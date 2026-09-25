@@ -84,6 +84,11 @@ export const curriculum: CurriculumPhase[] = [
         note: 'Precompute once, answer range queries with a subtraction — the cheapest big win in array problems.',
       },
       {
+        slug: 'binary-search-on-the-answer',
+        difficulty: 'Intermediate',
+        note: 'Binary search without a sorted array: search the range of possible answers, using a yes/no check that flips exactly once.',
+      },
+      {
         slug: 'monotonic-stack',
         difficulty: 'Intermediate',
         note: 'A stack that stays ordered, and the four "nearest greater/smaller element" questions it answers in O(n).',
@@ -97,6 +102,11 @@ export const curriculum: CurriculumPhase[] = [
         slug: 'graph-traversal-bfs-dfs',
         difficulty: 'Intermediate',
         note: 'BFS and DFS are the entry point to every graph problem: reachability, shortest paths, cycles.',
+      },
+      {
+        slug: 'longest-increasing-subsequence',
+        difficulty: 'Advanced',
+        note: 'The same problem solved twice — an O(n²) dynamic program, then the O(n log n) version built on a binary search.',
       },
       {
         slug: 'dynamic-programming-intro',

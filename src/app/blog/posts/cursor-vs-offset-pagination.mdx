@@ -1,0 +1,137 @@
+---
+title: "Cursor vs Offset Pagination: Why Page 2 Shows You Page 1 Again"
+publishedAt: "2026-09-25"
+summary: "OFFSET is a position in a result set that keeps changing, and it gets slower the deeper you go. A cursor is a value in the data. When each one is the right answer."
+tags: "System Design"
+---
+
+`LIMIT 10 OFFSET 20` is the first pagination anyone writes, and for a lot
+of pages it's the correct answer forever. It has two failure modes, though,
+and both arrive quietly: duplicated and skipped rows under concurrent
+writes, and queries that get slower the further a user scrolls.
+
+## The drift
+
+An offset counts rows in a result set that is recomputed on every request.
+Insert a row near the top between two requests and every offset below it
+now points somewhere else:
+
+<PaginationDriftVisualizer />
+
+The reader sees post 7 twice and never sees post 4. Nothing errored, no
+constraint was violated — the query did exactly what it was asked, against
+a table that had changed.
+
+On a busy feed this happens constantly, and it's worst precisely where
+people notice: an infinite-scroll list that repeats items, or a batch job
+that silently skips records while paging through them.
+
+## The cost
+
+The second problem is measurable rather than subtle. `OFFSET 100000` does
+not seek — the database walks and discards a hundred thousand rows before
+returning the ten you asked for:
+
+```sql
+-- page 1:      reads 10 rows
+SELECT * FROM posts ORDER BY id DESC LIMIT 10 OFFSET 0;
+
+-- page 10 000: reads 100 010 rows, returns 10
+SELECT * FROM posts ORDER BY id DESC LIMIT 10 OFFSET 100000;
+```
+
+Latency grows linearly with page depth. Most apps never notice, because
+most users never go past page 3 — but a crawler, an export job, or a
+"select all" that pages to the end turns that into a table scan per page.
+
+## Keyset pagination
+
+The fix is to stop asking for a position and start asking for a value:
+*give me the rows after this one*.
+
+```sql
+-- first page
+SELECT * FROM posts ORDER BY id DESC LIMIT 10;
+
+-- next page: the client sends back the last id it saw
+SELECT * FROM posts WHERE id < 7 ORDER BY id DESC LIMIT 10;
+```
+
+The database seeks into the index at id 7 and reads ten rows. Same cost on
+page 1 and page 30 000, and inserts above the cursor don't move it —
+"after id 7" means the same thing no matter what else happened.
+
+## Ties need a composite cursor
+
+The cursor column must be unique and match the sort order, or rows with
+equal values fall on both sides of the boundary. Sorting by `created_at`
+means a tuple comparison:
+
+```sql
+SELECT * FROM posts
+WHERE (created_at, id) < ('2026-09-21 10:00:00', 4821)   -- row-value comparison
+ORDER BY created_at DESC, id DESC
+LIMIT 10;
+```
+
+Row-value syntax is exact and index-friendly. The hand-expanded version
+(`created_at < x OR (created_at = x AND id < y)`) is equivalent but easier
+to get subtly wrong, and some planners handle it worse.
+
+Then encode the cursor opaquely so clients don't build their own:
+
+```javascript
+const encode = (row) =>
+  Buffer.from(JSON.stringify([row.created_at, row.id])).toString('base64url');
+
+// { items, nextCursor: items.length === limit ? encode(items.at(-1)) : null }
+```
+
+Base64 isn't security — it's a signal that the value is yours to change.
+A client that parses it will break when you add a sort field; one that
+treats it as opaque won't. Sign it if a fabricated cursor could leak
+anything.
+
+## Choosing
+
+<Table
+  data={{
+    headers: ['', 'Offset', 'Cursor'],
+    rows: [
+      ['Jump to page N', 'Yes', 'No — next/previous only'],
+      ['Total page count', 'Yes (extra COUNT)', 'Not without a separate count'],
+      ['Stable under writes', 'No', 'Yes'],
+      ['Deep-page cost', 'Grows linearly', 'Constant'],
+      ['Arbitrary sort order', 'Easy', 'Needs a unique tiebreak'],
+      ['Implementation', 'Trivial', 'Moderate'],
+    ],
+  }}
+/>
+
+**Offset is right** for admin tables, search results, and anything with a
+page-number UI over a small or slow-changing dataset. Numbered pages are a
+real affordance, and giving them up to fix a problem you don't have is a
+bad trade. This blog's own index uses offsets, on 66 rows that change a few
+times a week.
+
+**Cursors are right** for feeds and infinite scroll, public APIs, exports
+and sync jobs, and anything where the dataset is large or actively written.
+
+**Both is fine.** Offsets for the human-facing UI, cursors for the API and
+the batch jobs. They're not a philosophy, just two different queries.
+
+## Practical notes
+
+- **Cap the page size.** `?limit=100000` is an accidental denial of service
+  on any scheme.
+- **Return `nextCursor: null`** rather than making clients infer the end
+  from a short page. A page can be short for other reasons.
+- **Don't expose raw offsets in an API** you'll have to keep compatible —
+  clients will build URLs out of them and you'll own that shape forever.
+- **`COUNT(*)` is its own problem.** On large tables it can cost more than
+  the page query. An approximate count from table statistics is usually
+  what the UI actually needs.
+- **Beware of sorting by a mutable column.** If a row's `updated_at`
+  changes between pages, it can move across the cursor boundary and be seen
+  twice or missed — the same drift, just from updates rather than inserts.
+  Paginate on something immutable when correctness matters.
