@@ -18,7 +18,7 @@ export default async function sitemap() {
     priority: 0.7,
   }))
 
-  let routes = ['', '/blog', '/dsa', '/dsa/patterns'].map((route) => ({
+  let routes = ['', '/blog', '/about', '/dsa', '/dsa/patterns', '/dsa/progress'].map((route) => ({
     url: `${baseUrl}${route}`,
     lastModified: new Date().toISOString().split('T')[0],
     changeFrequency: 'weekly' as const,

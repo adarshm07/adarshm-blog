@@ -1,49 +1,22 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-
-const STORAGE_KEY = 'dsa-patterns-progress'
-
-function loadProgress(): Set<string> {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return new Set()
-    const parsed = JSON.parse(raw)
-    return new Set(
-      Array.isArray(parsed) ? parsed.filter((s) => typeof s === 'string') : []
-    )
-  } catch {
-    return new Set()
-  }
-}
+import { onProgressChange, questionProgress } from '@/app/lib/dsa-progress'
 
 export function QuestionSolvedButton({ slug }: { slug: string }) {
   const [solved, setSolved] = useState(false)
   const [hydrated, setHydrated] = useState(false)
 
   useEffect(() => {
-    setSolved(loadProgress().has(slug))
+    const sync = () => setSolved(Boolean(questionProgress.load()[slug]))
+    sync()
     setHydrated(true)
+    return onProgressChange(sync)
   }, [slug])
-
-  function toggle() {
-    const progress = loadProgress()
-    if (progress.has(slug)) {
-      progress.delete(slug)
-    } else {
-      progress.add(slug)
-    }
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(progress)))
-    } catch {
-      // storage unavailable — state still toggles for this visit
-    }
-    setSolved(progress.has(slug))
-  }
 
   return (
     <button
-      onClick={toggle}
+      onClick={() => setSolved(Boolean(questionProgress.toggle(slug)[slug]))}
       aria-pressed={solved}
       className={[
         'inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors',

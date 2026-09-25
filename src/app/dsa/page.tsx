@@ -78,6 +78,21 @@ export default function Page() {
           →
         </span>
       </Link>
+      <Link
+        href="/dsa/progress"
+        className="group mb-8 flex items-center justify-between gap-4 rounded-xl border border-neutral-100 dark:border-neutral-800 px-4 py-3 hover:border-green-600/40 dark:hover:border-green-500/40 transition-colors"
+      >
+        <span className="text-sm text-neutral-600 dark:text-neutral-300">
+          Track your progress{' '}
+          <span className="text-neutral-500 dark:text-neutral-400">
+            — everything you have marked complete, by pattern and difficulty.
+          </span>
+        </span>
+        <span className="shrink-0 text-sm text-green-600 dark:text-green-400 group-hover:translate-x-0.5 transition-transform">
+          →
+        </span>
+      </Link>
+
       <DsaPath phases={phases} />
     </section>
   )

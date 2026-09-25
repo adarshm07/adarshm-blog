@@ -7,6 +7,7 @@ import type { ReactNode } from 'react'
 const navItems: Record<string, { name: string }> = {
   '/': { name: 'home' },
   '/blog': { name: 'blog' },
+  '/about': { name: 'about' },
   'mailto:contact@adarshm.com': { name: 'contact' },
 }
 
