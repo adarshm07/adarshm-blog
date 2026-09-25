@@ -133,7 +133,7 @@ export function SearchPalette() {
         type="button"
         onClick={() => setOpen(true)}
         aria-label="Search the site"
-        className="ml-auto flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-neutral-500 dark:text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-900 transition-colors"
+        className="ml-auto flex shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm sm:px-2.5 text-neutral-500 dark:text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-900 transition-colors"
       >
         <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" aria-hidden="true">
           <circle cx="9" cy="9" r="5.5" stroke="currentColor" strokeWidth="1.5" />
