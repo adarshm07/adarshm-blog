@@ -63,6 +63,47 @@ export function getBlogPosts() {
   return getMDXData(path.join(process.cwd(), 'src', 'app', 'blog', 'posts'))
 }
 
+export type Post = ReturnType<typeof getBlogPosts>[number]
+
+export const POSTS_PER_PAGE = 10
+
+/** Newest first, optionally narrowed to one tag. */
+export function getSortedPosts(tag?: string) {
+  return getBlogPosts()
+    .filter((post) => !tag || post.metadata.tags?.includes(tag))
+    .sort(
+      (a, b) =>
+        new Date(b.metadata.publishedAt).getTime() -
+        new Date(a.metadata.publishedAt).getTime()
+    )
+}
+
+/**
+ * One page of posts. `page` is clamped into range, so a hand-typed or stale
+ * ?page= lands on a real page instead of an empty list.
+ */
+export function paginatePosts({
+  tag,
+  page = 1,
+  perPage = POSTS_PER_PAGE,
+}: {
+  tag?: string
+  page?: number
+  perPage?: number
+} = {}) {
+  const posts = getSortedPosts(tag)
+  const totalPages = Math.max(1, Math.ceil(posts.length / perPage))
+  const current = Math.min(Math.max(1, Math.floor(page) || 1), totalPages)
+  const start = (current - 1) * perPage
+
+  return {
+    posts: posts.slice(start, start + perPage),
+    page: current,
+    totalPages,
+    total: posts.length,
+  }
+}
+
 export function getAllTags() {
   let posts = getBlogPosts()
   let tags = new Set<string>()

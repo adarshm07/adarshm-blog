@@ -1,0 +1,210 @@
+---
+title: "Evals: How You Know the Change Helped"
+publishedAt: "2026-09-25"
+summary: "Prompt engineering without measurement is guessing with extra steps. How to build an eval set from real traffic, pick a grader that isn't lying to you, and avoid tuning your way to a number that means nothing."
+tags: "AI Engineering"
+---
+
+Everyone who has shipped an LLM feature knows this loop: change the prompt,
+try it once, decide it's better, ship. Then a week later something that used
+to work doesn't, and nobody can say which change broke it — because nothing
+was ever measured.
+
+An **eval** is the fix, and it is much less sophisticated than the word
+suggests. It's a list of inputs, a way to score the outputs, and a number
+you can compare across versions.
+
+## What an eval actually is
+
+<EvalMatrixVisualizer />
+
+Three things in that animation matter more than any tooling choice.
+
+**A single number hides regressions.** v2 and v3 both score 6 of 8, and v3
+is worse — it broke two cases that used to work. Keep the per-case grid, not
+just the average. The cases that flip from pass to fail are the most
+informative output an eval produces.
+
+**Tuning against your test set inflates the score.** By v4 everything
+passes, because four rounds of changes were made while staring at those
+exact eight cases. That is memorisation, not improvement.
+
+**A held-out set is what tells you the truth.** Same version, cases it was
+never tuned against, and the score drops. The gap between the two numbers is
+the size of your self-deception.
+
+## Start with twenty real cases
+
+The most common reason people don't have evals is that they imagine needing
+hundreds. You don't. Twenty cases drawn from real traffic beat two hundred
+invented ones, because invented cases cluster around what you already
+thought of.
+
+Where to get them:
+
+- **Production logs.** Real inputs, in the real distribution.
+- **Bug reports.** Every "the bot said something wrong" is an eval case with
+  a known-correct answer attached.
+- **Edge cases you've hit.** The prompt injection attempt, the empty result,
+  the non-English question, the ambiguous request.
+
+Include the cases your system currently *fails*. An eval set where
+everything already passes measures nothing and can only go down.
+
+Store them as data, not code:
+
+```json
+[
+  {
+    "id": "refund-in-policy",
+    "input": "I bought a jacket 12 days ago, can I return it?",
+    "expect": { "contains": ["30 days", "yes"], "not_contains": ["cannot"] }
+  },
+  {
+    "id": "no-data",
+    "input": "What is your CEO's home address?",
+    "expect": { "behaviour": "refuses and offers support contact" }
+  }
+]
+```
+
+## Choosing a grader
+
+The grader decides what your number means. Use the cheapest one that can
+actually distinguish good from bad:
+
+<Table
+  data={{
+    headers: ['Grader', 'Use when', 'Watch out for'],
+    rows: [
+      ['Exact / regex match', 'Classification, extraction, structured output', 'Brittle — fails on valid paraphrases'],
+      ['Schema validation', 'JSON or tool arguments', 'Valid shape, wrong content'],
+      ['Assertions (contains / absent)', 'Answers that must mention or avoid specifics', 'Passes shallow answers that hit the keyword'],
+      ['Code execution', 'Generated code, SQL, transforms', 'Needs a sandbox and fixtures'],
+      ['Model-as-judge', 'Open-ended prose, tone, helpfulness', 'Biased, and needs its own validation'],
+      ['Human review', 'The ground truth for everything else', 'Slow and expensive — sample it'],
+    ],
+  }}
+/>
+
+Reach for a judge last, not first. Half the cases people assume need one are
+really assertions in disguise: "does the answer cite a source", "does it
+refuse", "does it mention the 30-day window".
+
+When you do need a judge, make it grade against a rubric and output a
+verdict you can parse:
+
+```typescript
+import Anthropic from '@anthropic-ai/sdk'
+
+const client = new Anthropic()
+
+async function judge(input: string, output: string, rubric: string) {
+  const response = await client.messages.create({
+    model: 'claude-opus-5',
+    max_tokens: 1024,
+    system:
+      'You grade assistant answers against a rubric. Be strict: a partially ' +
+      'correct answer fails. Reply with one line of reasoning, then PASS or FAIL ' +
+      'on its own final line.',
+    messages: [
+      { role: 'user', content: `Question:\n${input}\n\nAnswer:\n${output}\n\nRubric:\n${rubric}` },
+    ],
+  })
+
+  const text = response.content.find((b) => b.type === 'text')?.text ?? ''
+  return text.trimEnd().endsWith('PASS')
+}
+```
+
+Two details that matter more than the prompt wording. **Reasoning before the
+verdict** — a judge asked for a bare label grades worse than one that has to
+state why first. And **a per-case rubric**, not a global "is this good?":
+graders with a specific criterion agree with humans far more often than ones
+asked for a general impression.
+
+Then validate the judge itself: grade thirty cases by hand, compare. If the
+judge disagrees with you on a fifth of them, its scores can't settle a
+5-percentage-point difference between two prompts.
+
+## The runner
+
+The whole harness is a loop, and keeping it boring is the point:
+
+```typescript
+const results = await Promise.all(
+  cases.map(async (testCase) => {
+    const output = await runApp(testCase.input)     // the thing under test
+    const pass = await grade(testCase, output)
+    return { id: testCase.id, pass, output }
+  })
+)
+
+const score = results.filter((r) => r.pass).length / results.length
+
+// the useful part: what changed since last time
+const previous = JSON.parse(await fs.readFile('evals/last-run.json', 'utf8'))
+const regressions = results.filter(
+  (r) => !r.pass && previous.find((p) => p.id === r.id)?.pass
+)
+```
+
+Save every run with its outputs. The diff between runs — which cases
+flipped, and what the model actually said — is where the insight is; the
+score is just the headline.
+
+## Split your cases, or fool yourself
+
+Same discipline as machine learning, for the same reason:
+
+- **Dev set** (say 60%) — look at these constantly, tune against them.
+- **Held-out set** (40%) — run occasionally, never tune against, treat as
+  the real number.
+
+If the dev score climbs and the held-out score doesn't, you're fitting to
+the examples rather than improving the system. That is the single most
+common way eval programs quietly stop being useful.
+
+## Non-determinism, and what to do about it
+
+The same prompt can produce different outputs, so a pass/fail flip isn't
+always a change in quality.
+
+- Run each case **3–5 times** and report a pass rate rather than a boolean.
+  A case that passes 3 of 5 runs is a different situation from one that
+  passes 5 of 5, and the distinction matters for anything user-facing.
+- Compare **distributions, not single runs**. Small differences on twenty
+  cases are noise; treat a 1-case improvement as nothing happened.
+- Make the *harness* deterministic even when the model isn't: fixed case
+  order, fixed fixtures, stubbed tools. If the tool the agent calls returns
+  different data every run, you are measuring your fixtures.
+
+## What to measure besides correctness
+
+Once correctness is tracked, the same harness answers questions you'd
+otherwise argue about:
+
+- **Cost per case.** Accumulate `usage` across the run. A prompt that adds
+  two points of accuracy and 40% to the bill is a decision, not an upgrade.
+- **Latency.** Especially for agents, where a turn count is the real driver.
+- **Turn count** for agent tasks — did the change make it finish in four
+  tool calls instead of nine?
+- **Refusal and error rates**, tracked separately from wrong answers. They
+  have different fixes.
+
+## Where this pays off
+
+Evals are unglamorous and they change how the work feels. With twenty cases
+and a script:
+
+- You can tell whether a prompt change helped, in a minute, instead of
+  arguing about vibes.
+- You can upgrade a model deliberately — run the set on both, look at the
+  cases that differ, and decide.
+- You can refactor prompts without fear, because a regression shows up as a
+  red cell instead of a support ticket.
+- New failure modes get added as cases, so the same bug can't ship twice.
+
+The bar is genuinely low. Twenty cases in a JSON file, a script that runs
+them, and a saved result to diff against — that's the whole thing, and it's
+the difference between engineering and guessing.

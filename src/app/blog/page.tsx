@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { BlogPosts } from '@/app/components/posts'
-import { getAllTags } from '@/app/blog/utils'
+import { Pagination } from '@/app/components/pagination'
+import { getAllTags, paginatePosts } from '@/app/blog/utils'
 
 export const metadata = {
   title: 'Blog',
@@ -11,10 +12,14 @@ export const metadata = {
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ tag?: string }>
+  searchParams: Promise<{ tag?: string; page?: string }>
 }) {
-  const { tag } = await searchParams
+  const { tag, page: pageParam } = await searchParams
   const tags = getAllTags()
+  const { posts, page, totalPages, total } = paginatePosts({
+    tag,
+    page: Number(pageParam) || 1,
+  })
 
   return (
     <section>
@@ -72,7 +77,20 @@ export default async function Page({
         </div>
       )}
 
-      <BlogPosts showSummary tag={tag} />
+      {total === 0 ? (
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">
+          No posts tagged “{tag}” yet.
+        </p>
+      ) : (
+        <>
+          <BlogPosts showSummary posts={posts} />
+          <Pagination page={page} totalPages={totalPages} tag={tag} />
+          <p className="mt-4 text-center font-mono text-[10px] text-neutral-400 dark:text-neutral-500 tabular-nums">
+            {total} post{total === 1 ? '' : 's'}
+            {tag ? ` tagged ${tag}` : ''} · page {page} of {totalPages}
+          </p>
+        </>
+      )}
     </section>
   )
 }
