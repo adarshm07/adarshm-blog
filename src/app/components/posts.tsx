@@ -1,23 +1,24 @@
 import Link from 'next/link'
-import { formatDate, getBlogPosts, getReadingTime } from '@/app/blog/utils'
+import {
+  formatDate,
+  getReadingTime,
+  getSortedPosts,
+  type Post,
+} from '@/app/blog/utils'
 
 export function BlogPosts({
   limit,
   showSummary = false,
   tag,
+  posts,
 }: {
   limit?: number
   showSummary?: boolean
   tag?: string
+  /** Pass an explicit slice (e.g. one page); otherwise the newest `limit` posts. */
+  posts?: Post[]
 } = {}) {
-  const allBlogs = getBlogPosts()
-    .filter((post) => !tag || post.metadata.tags?.includes(tag))
-    .sort(
-      (a, b) =>
-        new Date(b.metadata.publishedAt).getTime() -
-        new Date(a.metadata.publishedAt).getTime()
-    )
-    .slice(0, limit)
+  const allBlogs = posts ?? getSortedPosts(tag).slice(0, limit)
 
   return (
     <div className="divide-y divide-neutral-100 dark:divide-neutral-800">

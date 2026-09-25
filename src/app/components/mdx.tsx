@@ -53,6 +53,7 @@ import { LeaseFencingVisualizer } from '@/app/components/lease-fencing-visualize
 import { TraceWaterfallVisualizer } from '@/app/components/trace-waterfall-visualizer'
 import { BackpressureVisualizer } from '@/app/components/backpressure-visualizer'
 import { RenderPipelineVisualizer } from '@/app/components/render-pipeline-visualizer'
+import { EvalMatrixVisualizer } from '@/app/components/eval-matrix-visualizer'
 import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
@@ -215,6 +216,7 @@ const components = {
   TraceWaterfallVisualizer,
   BackpressureVisualizer,
   RenderPipelineVisualizer,
+  EvalMatrixVisualizer,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {
