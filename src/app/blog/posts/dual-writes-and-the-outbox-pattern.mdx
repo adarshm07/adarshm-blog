@@ -1,0 +1,149 @@
+---
+title: "Dual Writes and the Outbox Pattern"
+publishedAt: "2026-09-25"
+summary: "Save the row, then publish the event. Two writes, no shared transaction, and a window where one succeeds and the other doesn't. Why no ordering fixes it, and what does."
+tags: "System Design"
+---
+
+```javascript
+await db.orders.insert(order);              // 1
+await broker.publish('OrderCreated', order); // 2
+```
+
+Two lines that appear in nearly every service that has both a database and
+a message broker. They are also a data-consistency bug, and swapping them
+doesn't help.
+
+## The window
+
+Between those two lines the process can crash, the broker can be
+unreachable, the network can drop. Whatever happens in that window leaves
+the two systems disagreeing:
+
+<OutboxVisualizer />
+
+**Database first, publish fails.** The order exists and nothing downstream
+hears about it: no confirmation email, no warehouse pick, no analytics row.
+Silent, and usually discovered by a customer.
+
+**Publish first, database fails.** Consumers act on an order that doesn't
+exist. Now you have a confirmation email for a row nobody can find.
+
+**Retry the failed one.** You either double-publish (the broker got it, the
+ack was lost) or you're retrying inside a request that has already
+returned. Retries change which failure you get, not whether you get one.
+
+There's no ordering of two independent writes that makes this atomic,
+because atomicity across two systems is exactly what you don't have.
+
+## The outbox
+
+Make it one write. The event goes into an ordinary table in the **same
+transaction** as the business data:
+
+```sql
+BEGIN;
+  INSERT INTO orders (id, customer_id, total) VALUES (...);
+  INSERT INTO outbox (id, topic, payload, created_at)
+       VALUES (gen_random_uuid(), 'OrderCreated', $1, now());
+COMMIT;
+```
+
+Either both rows land or neither does — that's the database's ordinary
+guarantee, and the whole point of the pattern is to rely on it rather than
+inventing a distributed one.
+
+A separate **relay** then moves events from the outbox to the broker:
+
+```javascript
+async function relay() {
+  const rows = await db.query(
+    `SELECT * FROM outbox WHERE sent_at IS NULL
+     ORDER BY created_at LIMIT 100 FOR UPDATE SKIP LOCKED`   // safe with N relays
+  );
+
+  for (const row of rows) {
+    await broker.publish(row.topic, row.payload);
+    await db.query(`UPDATE outbox SET sent_at = now() WHERE id = $1`, [row.id]);
+  }
+}
+```
+
+If the broker is down, nothing is lost — the rows stay, and the next run
+picks them up. `FOR UPDATE SKIP LOCKED` is what lets several relay
+instances run without publishing the same row twice.
+
+## Two ways to run the relay
+
+**Polling** — a loop like the one above, every second or so. Simple, no
+extra infrastructure, easy to reason about. Costs you a constant trickle of
+queries and adds latency equal to half the poll interval.
+
+**Change data capture** — a tool like Debezium tails the database's
+write-ahead log and publishes outbox inserts as they're committed. No
+polling, lower latency, and it can't miss a row; the cost is a real piece
+of infrastructure to run and understand.
+
+Start with polling. Move to CDC when the latency or the query load actually
+bothers you.
+
+## At-least-once, not exactly-once
+
+The relay can crash after publishing and before marking the row sent. On
+restart it publishes again. That is unavoidable — the publish and the mark
+are themselves two writes to two systems, which is the original problem one
+level down.
+
+So the outbox gives you **at-least-once delivery with no lost events**, and
+consumers must be idempotent. Include a stable event id in the payload and
+have consumers record what they've processed:
+
+```javascript
+async function onOrderCreated(event) {
+  const inserted = await db.query(
+    `INSERT INTO processed_events (event_id) VALUES ($1)
+     ON CONFLICT DO NOTHING RETURNING event_id`,
+    [event.id]
+  );
+  if (inserted.rowCount === 0) return;    // already handled
+  await sendConfirmationEmail(event);
+}
+```
+
+This is the same conclusion as [message queues versus event
+logs](/blog/message-queues-vs-event-logs): idempotent consumers are cheaper
+to build than exactly-once delivery is to guarantee.
+
+## Operational details that matter
+
+**Clean up the table.** An outbox that's never pruned becomes the largest
+table in the database. Delete sent rows after a retention window, or
+partition by day and drop old partitions.
+
+**Watch the lag.** The age of the oldest unsent row is the single best
+alert: it goes up when the broker is down, when the relay has crashed, or
+when a poison message is blocking the loop.
+
+**Handle poison messages.** One row that always fails to publish will stall
+everything behind it if you process strictly in order. Track attempts and
+move repeat offenders aside after a threshold.
+
+**Order is per-key, not global.** If consumers depend on ordering, publish
+with a partition key (the order id, the customer id) and let the broker
+keep order within that key. Global ordering through a single relay is a
+throughput ceiling you don't want.
+
+## When you don't need it
+
+The outbox is worth its complexity when events drive other systems' state.
+It's overkill when:
+
+- The event is advisory — a metric, a cache invalidation, a nice-to-have
+  notification where a rare miss costs nothing.
+- The consumer can derive the state by reading the database directly.
+- You can restructure so there's only one write. A consumer that polls a
+  `status` column doesn't need an event at all.
+
+That last one is worth sitting with before building anything. A surprising
+number of dual-write problems disappear when the second system stops
+needing to be told and starts being able to look.

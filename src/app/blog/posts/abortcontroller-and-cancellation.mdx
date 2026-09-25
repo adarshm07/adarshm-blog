@@ -1,0 +1,191 @@
+---
+title: "AbortController: Cancellation That Actually Cleans Up"
+publishedAt: "2026-09-24"
+summary: "Promises have no cancel button. AbortController is the standard signal that does — for fetch, event listeners, streams, timers, and your own async functions."
+tags: "JavaScript"
+---
+
+A promise, once started, runs to completion. There's no `.cancel()`, and
+there was never going to be one — a promise is a value that will exist, not
+a handle on the work producing it.
+
+`AbortController` is the missing handle, and it's now wired into most of the
+platform.
+
+## The shape
+
+One controller produces one signal. Anything that accepts the signal gets
+torn down when you abort:
+
+<CancellationVisualizer />
+
+```javascript
+const controller = new AbortController();
+
+const response = await fetch(url, { signal: controller.signal });
+
+controller.abort();   // fetch rejects with an AbortError
+```
+
+The signal travels one way — controller to listeners — and it's a
+broadcast: every operation watching that signal is notified at once.
+
+## Where it's already supported
+
+This is the part people under-use. `signal` is accepted far beyond `fetch`:
+
+```javascript
+// event listeners — removed automatically on abort
+element.addEventListener('scroll', onScroll, { signal });
+window.addEventListener('resize', onResize, { signal });
+
+// one abort() removes both, with no removeEventListener bookkeeping
+
+// Node timers
+await setTimeout(1000, undefined, { signal });          // node:timers/promises
+
+// streams
+await readable.pipeTo(writable, { signal });
+
+// Node fs, http, readline, and most modern Node APIs
+await fs.readFile(path, { signal });
+```
+
+The event listener case is worth calling out: keeping a controller per
+component and aborting it on teardown removes every listener in one call,
+and it's much harder to get wrong than matching each `addEventListener`
+with the identical function reference in `removeEventListener`.
+
+## Handling the rejection
+
+An aborted operation rejects — with an `AbortError` — and that is not a
+failure you want to report to the user:
+
+```javascript
+try {
+  const res = await fetch(url, { signal });
+  render(await res.json());
+} catch (err) {
+  if (err.name === 'AbortError') return;    // expected: we cancelled it
+  showError(err);                            // a real failure
+}
+```
+
+Check `err.name === 'AbortError'`, not the message. And note that a
+cancelled request is a normal control-flow outcome, so swallowing it
+silently is correct here — the rare case where an empty catch branch is the
+right answer.
+
+## Making your own functions cancellable
+
+Async work you write should accept a signal and honour it. Three things to
+do:
+
+```javascript
+async function processAll(items, { signal } = {}) {
+  signal?.throwIfAborted();                  // 1. bail immediately if already aborted
+
+  for (const item of items) {
+    await process(item);
+    signal?.throwIfAborted();                // 2. check between units of work
+  }
+}
+```
+
+And for something that isn't a loop — a long wait, a subscription — listen
+for the event:
+
+```javascript
+function waitForMessage(socket, { signal }) {
+  return new Promise((resolve, reject) => {
+    const onMessage = (e) => { cleanup(); resolve(e.data); };
+    const onAbort = () => { cleanup(); reject(signal.reason); };  // 3. reject on abort
+
+    const cleanup = () => {
+      socket.removeEventListener('message', onMessage);
+      signal.removeEventListener('abort', onAbort);
+    };
+
+    socket.addEventListener('message', onMessage);
+    signal.addEventListener('abort', onAbort);
+  });
+}
+```
+
+`signal.reason` is the value passed to `abort(reason)`, defaulting to an
+`AbortError`. Passing your own reason — `controller.abort(new
+TimeoutError())` — makes the rejection self-describing at the catch site.
+
+## Composing signals
+
+Two helpers cover most real cases, and both are now standard:
+
+```javascript
+// a signal that aborts itself after 5 seconds
+const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+
+// abort when EITHER the user cancels or the timeout fires
+const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]);
+```
+
+`AbortSignal.any` is what you want whenever a request has both a deadline
+and a user-triggered cancel path — a component unmounting, a navigation, a
+newer query superseding this one.
+
+## The single-use trap
+
+A controller aborts once and stays aborted. Reusing it is the most common
+mistake:
+
+```javascript
+// ✗ the second search never runs — the signal is already aborted
+const controller = new AbortController();
+async function search(q) {
+  controller.abort();
+  return fetch(`/search?q=${q}`, { signal: controller.signal });
+}
+
+// ✓ abort the previous one, then make a new controller
+let current = null;
+async function search(q) {
+  current?.abort();
+  current = new AbortController();
+  return fetch(`/search?q=${q}`, { signal: current.signal });
+}
+```
+
+That second pattern — keep a reference, abort it at the top, replace it —
+is the whole solution to stale search results overwriting fresh ones, and
+it's more reliable than comparing response timestamps after the fact.
+
+## In React
+
+The same idea, scoped to the effect:
+
+```javascript
+useEffect(() => {
+  const controller = new AbortController();
+
+  fetch(`/api/items?q=${query}`, { signal: controller.signal })
+    .then((r) => r.json())
+    .then(setItems)
+    .catch((err) => { if (err.name !== 'AbortError') setError(err); });
+
+  return () => controller.abort();   // runs on unmount AND before the next effect
+}, [query]);
+```
+
+The cleanup function runs before each re-run, so a fast typist's earlier
+requests are cancelled rather than racing. This removes the "is this
+response still relevant?" bookkeeping entirely.
+
+## What abort does not do
+
+Cancelling is cooperative. `controller.abort()` tells the browser to stop
+waiting and tells your code to stop working — it does not reach into the
+server and undo anything.
+
+An aborted `POST` may well have been received and processed. If the request
+mutates state, cancellation is a UI affordance, not a rollback: pair it
+with an idempotency key so a retry doesn't double-apply, and don't assume
+an abort means the work didn't happen.

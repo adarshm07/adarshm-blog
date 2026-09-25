@@ -1,0 +1,140 @@
+---
+title: "Catastrophic Backtracking: How a Regex Takes Down a Server"
+publishedAt: "2026-09-25"
+summary: "A twenty-character input, a regex that looks fine, and a CPU pinned for minutes. Why backtracking engines go exponential, how to spot the pattern, and what to do instead."
+tags: "JavaScript"
+---
+
+`^(a+)+$` is a regex that matches a string of a's. It is also, on the
+wrong input, a way to freeze a Node process with a twenty-character
+payload — no botnet required, no vulnerability in your code beyond one
+line of validation.
+
+## What the engine is doing
+
+JavaScript's regex engine is a **backtracking** engine. It tries one
+possible way to match, and when that fails it rewinds and tries the next
+one. For most patterns there are only a handful of possibilities.
+
+Nested quantifiers are the exception:
+
+<RegexBacktrackingVisualizer />
+
+The key moment is the third step. On `aaaa!` the engine can't match, and
+before it gives up it must try *every way* of splitting those four a's
+between the inner `a+` and the outer `+`: 4, then 3+1, 2+2, 2+1+1, 1+2+1,
+and so on. Every split produces identical characters, but the engine has no
+way to know that. For n characters there are 2ⁿ⁻¹ arrangements.
+
+Twenty-four characters is eight million attempts. Thirty is half a billion.
+Forty is a lunch break.
+
+## The patterns that do it
+
+Catastrophic backtracking needs ambiguity — two or more ways for the
+pattern to consume the same characters — plus something that forces a
+failure at the end.
+
+```javascript
+/^(a+)+$/           // quantifier inside a quantifier
+/^(a|a)+$/          // alternatives that match the same thing
+/^(a|ab)+$/         // overlapping alternatives
+/^\s*(\w+\s*)+$/    // the realistic one: repeated group with overlapping classes
+/^([a-zA-Z]+)*$/    // and this one, which looks completely harmless
+```
+
+The last two are how it shows up in real code — a validator for a name, a
+header parser, an email pattern copied from a blog post. Nobody writes
+`(a+)+` on purpose.
+
+The failure is also *input-dependent*: matching inputs return instantly, so
+the regex passes every test you write with valid data. It only explodes on
+a near-miss — a long valid-looking prefix followed by one bad character,
+which is exactly what an attacker sends.
+
+## Fixing it
+
+**Remove the ambiguity.** Usually the nesting is redundant:
+
+```javascript
+/^(a+)+$/     →  /^a+$/          // identical language, one way to match
+/^(\w+\s*)+$/ →  /^\w+(\s+\w+)*\s*$/   // each character belongs to exactly one part
+```
+
+The test to apply: for a given input, is there more than one way for the
+pattern to consume it? If yes, the engine will eventually try all of them.
+
+**Make the parts disjoint.** `(\w+\s*)+` is dangerous because `\w` and
+`\s*` can both match at a boundary position. Rewriting so that each
+character can only be claimed by one piece removes the branching entirely.
+
+**Anchor and bound.** `^…$` with `{1,64}` instead of `+` caps the
+exponent even if some ambiguity remains. A length check before the regex
+runs is cruder and even more effective:
+
+```javascript
+if (input.length > 256) return false;    // cheap, and it bounds everything below
+```
+
+**Stop using a regex.** Splitting on a delimiter and checking each piece is
+often clearer *and* linear:
+
+```javascript
+// instead of a regex for "words separated by spaces"
+const ok = input.split(/\s+/).every((w) => /^\w+$/.test(w));
+```
+
+## Checking what you already have
+
+Two things worth doing on an existing codebase:
+
+**Grep for the shape.** A quantifier applied to a group that itself
+contains a quantifier — `)+`, `)*`, `){2,}` preceded by `+`, `*`, or `{n,}`
+inside the group — is the signature. Most hits are fine; all of them are
+worth a look.
+
+**Fuzz the suspicious ones.** The test is quick, and the result is
+unambiguous:
+
+```javascript
+function timeRegex(re, build, maxLength = 40) {
+  for (let n = 10; n <= maxLength; n += 5) {
+    const start = performance.now();
+    re.test(build(n));
+    const ms = performance.now() - start;
+    console.log(n, ms.toFixed(1) + 'ms');
+    if (ms > 1000) return console.warn('superlinear at length', n);
+  }
+}
+
+timeRegex(/^(a+)+$/, (n) => 'a'.repeat(n) + '!');
+```
+
+Linear growth is fine. A time that doubles for every few characters added
+is the exponential, and it will not get better on a faster machine.
+
+## Engines that don't backtrack
+
+Backtracking is a design choice, not a law. RE2 (Go's default engine,
+available in Node via bindings) compiles patterns to an automaton and runs
+in time linear in the input — it cannot backtrack catastrophically, because
+it doesn't backtrack at all.
+
+The trade is features: no backreferences, no lookbehind, no recursion,
+because those are exactly what an automaton can't express. For validating
+untrusted input, that's usually a trade worth making.
+
+## The rule
+
+Treat every regex that touches user input as a piece of untrusted
+computation:
+
+- No quantifier directly inside another quantifier.
+- Make alternatives and adjacent parts non-overlapping.
+- Bound the input length before matching.
+- Timing-test anything with nesting you can't eliminate.
+- For high-risk validation on untrusted input, prefer a parser or a
+  non-backtracking engine.
+
+A regex is a program. This one happens to have an exponential worst case
+that a user gets to choose.

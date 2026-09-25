@@ -1,0 +1,154 @@
+---
+title: "Reservoir Sampling: A Fair Sample From a Stream You Can't Count"
+publishedAt: "2026-09-24"
+summary: "Pick k items uniformly at random from a sequence of unknown length, in one pass, holding only k items. The algorithm is four lines; the proof is one induction step."
+tags: "DSA"
+---
+
+You're tailing a log file and want 100 representative lines. You can't
+count the lines first — the file is still being written, and it's larger
+than memory. You need each line to have an equal chance of being picked,
+and you get exactly one pass.
+
+Reservoir sampling solves this with k slots of memory and no knowledge of
+the stream's length.
+
+## The algorithm
+
+Fill the reservoir with the first k items. After that, for the nth item,
+keep it with probability k/n — and if you keep it, have it evict a
+uniformly chosen existing slot.
+
+<ReservoirVisualizer />
+
+```javascript
+function reservoirSample(stream, k) {
+  const reservoir = [];
+  let n = 0;
+
+  for (const item of stream) {
+    n++;
+    if (reservoir.length < k) {
+      reservoir.push(item);                       // first k fill it
+    } else {
+      const j = Math.floor(Math.random() * n);    // 0 … n-1
+      if (j < k) reservoir[j] = item;             // probability k/n
+    }
+  }
+  return reservoir;
+}
+```
+
+`Math.floor(Math.random() * n) < k` is the k/n coin flip and the uniform
+slot choice in one expression: the draw is uniform over n positions, and it
+lands in the reservoir exactly when it's below k.
+
+One pass, O(n) time, O(k) memory, and the stream length never appears
+anywhere except as a running count.
+
+## Why it's uniform
+
+The claim: after seeing n items, every item has probability exactly k/n of
+being in the reservoir. Induction on n.
+
+**Base case.** After the first k items, each is present with probability
+1 = k/k.
+
+**Inductive step.** Assume it holds for n − 1. Item n enters with
+probability k/n, which matches the claim directly.
+
+For any earlier item, it was present with probability k/(n−1), and it
+survives unless item n both enters *and* picks its slot to evict:
+
+```
+P(survive) = 1 − (k/n) × (1/k) = 1 − 1/n = (n−1)/n
+```
+
+So its overall probability is:
+
+```
+k/(n−1) × (n−1)/n = k/n
+```
+
+Which is the claim. The k/n acceptance rate is chosen precisely so the
+eviction risk it creates cancels against it.
+
+## Weighted sampling, when items aren't equal
+
+Uniform is often not what you want — you might want to sample proportional
+to request duration, or file size. The A-Res algorithm handles it with a
+neat trick: give each item a key of `random^(1/weight)` and keep the k
+largest keys in a min-heap.
+
+```javascript
+function weightedSample(stream, k) {
+  const heap = new MinHeap((a, b) => a.key - b.key);   // smallest key on top
+
+  for (const { item, weight } of stream) {
+    const key = Math.random() ** (1 / weight);         // heavier → key nearer 1
+    if (heap.size() < k) heap.push({ key, item });
+    else if (key > heap.peek().key) {
+      heap.pop();
+      heap.push({ key, item });
+    }
+  }
+  return heap.toArray().map((entry) => entry.item);
+}
+```
+
+A higher weight pushes the exponent toward 0, which pushes `random^(1/w)`
+toward 1, which makes the item more likely to survive in the top k. Still
+one pass, now O(n log k).
+
+## Distributed sampling
+
+The uniform version composes across machines, which is what makes it
+practical at scale. Each worker samples its shard and reports the sample
+plus how many items it saw; the coordinator then samples from the samples,
+weighting each worker by its count.
+
+```javascript
+// each worker returns { sample, seen }
+function merge(results, k) {
+  const total = results.reduce((sum, r) => sum + r.seen, 0);
+  const pool = results.flatMap((r) =>
+    r.sample.map((item) => ({ item, weight: r.seen / total }))
+  );
+  return weightedSample(pool, k);
+}
+```
+
+Without the weighting, a worker that saw a thousand items would contribute
+as much as one that saw a million — a classic source of skewed "random"
+samples in analytics pipelines.
+
+## Where it shows up
+
+- **Log and trace sampling.** Keep a bounded, representative sample of
+  requests without knowing the traffic volume in advance.
+- **A/B assignment over streams**, where the population isn't known up
+  front.
+- **Random line from a file** — the k = 1 case, and a one-liner.
+- **Shuffling a stream** — reservoir sampling with k = n is essentially
+  Fisher–Yates for data that arrives incrementally.
+- **Choosing a pivot** or a random element from a linked list, where
+  there's no index to pick.
+
+## The pitfalls
+
+**`Math.random()` is not cryptographically secure.** For sampling
+telemetry that's fine. For anything where an adversary benefits from
+predicting or biasing the selection — a lottery, a security audit sample —
+use `crypto.getRandomValues`.
+
+**Order in the reservoir is not stream order.** Items sit in whatever slot
+they evicted. Sort afterwards if order matters.
+
+**Sampling per key needs one reservoir per key.** A single global reservoir
+over a skewed stream gives you a sample dominated by the heavy key, which
+is usually not the thing you wanted to look at.
+
+The reason the algorithm is worth knowing isn't that you'll implement it
+often — it's that "I can't hold this in memory and I don't know how big it
+is" stops being a blocker once you've seen that four lines and a running
+count are enough.
