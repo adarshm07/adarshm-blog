@@ -62,12 +62,9 @@ export default function Page() {
 
 function ProfileSkeleton() {
   return (
-    <div className="flex items-center gap-5 animate-pulse">
-      <div className="h-16 w-16 rounded-full bg-neutral-100 dark:bg-neutral-800 shrink-0" />
-      <div className="flex-1 space-y-2">
-        <div className="h-6 w-40 rounded bg-neutral-100 dark:bg-neutral-800" />
-        <div className="h-4 w-64 rounded bg-neutral-100 dark:bg-neutral-800" />
-      </div>
+    <div className="animate-pulse space-y-2">
+      <div className="h-6 w-40 rounded bg-neutral-100 dark:bg-neutral-800" />
+      <div className="h-4 w-64 rounded bg-neutral-100 dark:bg-neutral-800" />
     </div>
   )
 }

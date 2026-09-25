@@ -1,15 +1,6 @@
-import Image from 'next/image'
 import { getGithubProfile } from '@/app/lib/github'
 
 const LINKEDIN_URL = 'https://www.linkedin.com/in/adarshm07/'
-
-/**
- * Stable avatar URL that needs no API call. getGithubProfile() returns null
- * whenever the unauthenticated GitHub API is rate-limited or unreachable at
- * build time, and without this the photo silently disappeared until some
- * later rebuild happened to succeed.
- */
-const FALLBACK_AVATAR = 'https://github.com/adarshm07.png?size=160'
 
 function GithubIcon() {
   return (
@@ -39,22 +30,12 @@ export async function Profile() {
   const profile = await getGithubProfile()
 
   const name = profile?.name ?? 'Adarsh M'
-  const avatarUrl = profile?.avatar_url ?? FALLBACK_AVATAR
   const twitterUsername = profile?.twitter_username ?? 'adarshm07'
   const githubUrl = profile?.html_url ?? 'https://github.com/adarshm07'
 
   return (
-    <div className="flex flex-col sm:flex-row sm:items-center gap-5">
-      <Image
-        src={avatarUrl}
-        alt={name}
-        width={64}
-        height={64}
-        className="h-16 w-16 rounded-full ring-2 ring-neutral-100 dark:ring-neutral-800 shrink-0 bg-neutral-100 dark:bg-neutral-800"
-        priority
-      />
-
-      <div className="flex-1 min-w-0">
+    <div>
+      <div className="min-w-0">
         <h1 className="text-2xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-50">
           {name}
         </h1>
