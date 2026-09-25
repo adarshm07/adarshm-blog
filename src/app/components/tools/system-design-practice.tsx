@@ -2,6 +2,12 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { ApiKeyField } from '@/app/components/tools/api-key-field'
+import {
+  DesignBoard,
+  describeBoard,
+  EMPTY_BOARD,
+  type Board,
+} from '@/app/components/tools/design-board'
 import { createClient, describeError } from '@/app/lib/byok'
 import { DIMENSIONS, PROBLEMS, type Problem } from '@/app/lib/system-design-problems'
 
@@ -81,6 +87,7 @@ function formatTime(seconds: number) {
 export function SystemDesignPractice() {
   const [problem, setProblem] = useState<Problem>(PROBLEMS[0])
   const [answer, setAnswer] = useState('')
+  const [board, setBoard] = useState<Board>(EMPTY_BOARD)
   const [apiKey, setApiKey] = useState('')
   const [model, setModel] = useState('claude-opus-5')
   const [review, setReview] = useState<Review | null>(null)
@@ -98,11 +105,12 @@ export function SystemDesignPractice() {
   useEffect(() => {
     try {
       const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? 'null')
-      if (draft?.slug && draft.answer) {
+      if (draft?.slug && (draft.answer || draft.board)) {
         const found = PROBLEMS.find((p) => p.slug === draft.slug)
         if (found) {
           setProblem(found)
-          setAnswer(draft.answer)
+          setAnswer(draft.answer ?? '')
+          if (draft.board?.nodes) setBoard(draft.board)
         }
       }
     } catch {}
@@ -110,9 +118,9 @@ export function SystemDesignPractice() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify({ slug: problem.slug, answer }))
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ slug: problem.slug, answer, board }))
     } catch {}
-  }, [problem.slug, answer])
+  }, [problem.slug, answer, board])
 
   useEffect(() => {
     if (!running) return
@@ -125,6 +133,7 @@ export function SystemDesignPractice() {
     if (!next) return
     setProblem(next)
     setAnswer('')
+    setBoard(EMPTY_BOARD)
     setReview(null)
     setRaw('')
     setError('')
@@ -134,7 +143,10 @@ export function SystemDesignPractice() {
 
   async function grade() {
     if (!apiKey) return setError('Add your API key first — the panel above.')
-    if (answer.trim().length < 80) return setError('Write a bit more before grading.')
+    const diagram = describeBoard(board)
+    if (answer.trim().length < 80 && !diagram) {
+      return setError('Draw a diagram or write a bit more before grading.')
+    }
 
     setLoading(true)
     setError('')
@@ -155,7 +167,14 @@ export function SystemDesignPractice() {
           messages: [
             {
               role: 'user',
-              content: `# Problem\n${problem.title}\n${problem.prompt}\nStated scale: ${problem.scale}\n\n# Rubric dimensions\n${rubric}\n\n# The candidate's written design\n${answer}`,
+              content: [
+                `# Problem\n${problem.title}\n${problem.prompt}\nStated scale: ${problem.scale}`,
+                `# Rubric dimensions\n${rubric}`,
+                diagram
+                  ? `# The diagram they drew\nThis is a text rendering of their architecture board. Treat it as part of the answer — an arrow means a call or a data flow.\n\n${diagram}`
+                  : '# The diagram they drew\n(nothing drawn — judge the architecture dimension on the writing alone)',
+                `# Their written design\n${answer || '(nothing written — judge on the diagram alone)'}`,
+              ].join('\n\n'),
             },
           ],
         },
@@ -245,6 +264,13 @@ export function SystemDesignPractice() {
       </div>
 
       <div>
+        <p className="mb-1.5 text-xs font-medium uppercase tracking-widest text-neutral-400 dark:text-neutral-500">
+          Board
+        </p>
+        <DesignBoard board={board} onChange={setBoard} />
+      </div>
+
+      <div>
         <div className="mb-1.5 flex items-baseline justify-between">
           <label
             htmlFor="design-answer"
@@ -253,7 +279,9 @@ export function SystemDesignPractice() {
             Your design
           </label>
           <span className="font-mono text-[10px] text-neutral-400 dark:text-neutral-500 tabular-nums">
-            {answer.trim() ? answer.trim().split(/\s+/).length : 0} words
+            {answer.trim() ? answer.trim().split(/\s+/).length : 0} words ·{' '}
+            {board.nodes.length} box{board.nodes.length === 1 ? '' : 'es'},{' '}
+            {board.edges.length} arrow{board.edges.length === 1 ? '' : 's'}
           </span>
         </div>
         <textarea
