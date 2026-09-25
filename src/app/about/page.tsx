@@ -17,7 +17,31 @@ export const metadata = {
   },
 }
 
-const STACK: { name: string; detail: string }[] = [
+const WORK_STACK: { group: string; items: string[] }[] = [
+  { group: 'Languages', items: ['TypeScript', 'JavaScript'] },
+  { group: 'Frontend', items: ['React', 'Next.js', 'Tailwind CSS', 'React Native'] },
+  {
+    group: 'Backend & data',
+    items: [
+      'Node.js',
+      'Express',
+      'GraphQL',
+      'PostgreSQL',
+      'MySQL',
+      'MongoDB',
+      'Redis',
+      'Prisma',
+      'Drizzle',
+    ],
+  },
+  { group: 'Testing', items: ['Jest', 'Playwright'] },
+  {
+    group: 'Infrastructure',
+    items: ['AWS', 'Vercel', 'Docker', 'Kubernetes', 'GitHub Actions'],
+  },
+]
+
+const SITE_STACK: { name: string; detail: string }[] = [
   { name: 'Next.js 16', detail: 'App Router, React Server Components, Turbopack' },
   { name: 'React 19', detail: 'Server components by default; client only for the interactive parts' },
   { name: 'TypeScript', detail: 'Strict mode, path alias @/* → ./src/*' },
@@ -135,10 +159,35 @@ export default function Page() {
 
       <div>
         <h2 className="mb-4 text-xs font-medium uppercase tracking-widest text-neutral-400 dark:text-neutral-500">
-          Stack
+          What I work with
+        </h2>
+        <div className="space-y-4">
+          {WORK_STACK.map((row) => (
+            <div key={row.group} className="flex flex-col gap-2 sm:flex-row sm:gap-4">
+              <span className="w-32 shrink-0 pt-0.5 text-xs text-neutral-400 dark:text-neutral-500">
+                {row.group}
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {row.items.map((item) => (
+                  <span
+                    key={item}
+                    className="rounded-md bg-neutral-100 dark:bg-neutral-800 px-2 py-1 font-mono text-xs text-neutral-700 dark:text-neutral-200"
+                  >
+                    {item}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <h2 className="mb-4 text-xs font-medium uppercase tracking-widest text-neutral-400 dark:text-neutral-500">
+          What this site runs on
         </h2>
         <ul className="divide-y divide-neutral-100 dark:divide-neutral-800">
-          {STACK.map((item) => (
+          {SITE_STACK.map((item) => (
             <li
               key={item.name}
               className="flex flex-col gap-0.5 py-2.5 sm:flex-row sm:items-baseline sm:gap-4"
