@@ -22,7 +22,7 @@ const WORK_STACK: { group: string; items: string[] }[] = [
   { group: 'Frontend', items: ['React', 'Next.js', 'Tailwind CSS', 'React Native'] },
   {
     group: 'Backend & data',
-    items: ['Node.js', 'Express', 'NestJS', 'PostgreSQL', 'MySQL', 'MongoDB', 'Redis'],
+    items: ['Node.js', 'Express', 'PostgreSQL', 'MySQL', 'MongoDB', 'Redis'],
   },
   {
     group: 'Infrastructure',
