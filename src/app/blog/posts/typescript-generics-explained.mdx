@@ -1,0 +1,186 @@
+---
+title: "Generics in TypeScript: Writing Reusable, Type-Safe Code"
+publishedAt: "2026-07-18"
+summary: "Typing a function's parameter as 'any' gets reusability by throwing away safety. Generics get both: the function stays fully general, but the type system still tracks exactly what went in and enforces it on the way out."
+tags: "TypeScript"
+---
+
+A function that works on arrays of anything faces a real tension: type it
+too specifically (`number[]`) and it only works for numbers; type it as
+`any[]` and it works for everything but TypeScript stops checking
+anything about what comes out. **Generics** resolve the tension by
+parameterizing the type itself — the function stays fully general, but the
+compiler still tracks the specific type used at each call site.
+
+## The problem any silently creates
+
+```typescript
+function firstAny(arr: any[]): any {
+  return arr[0];
+}
+
+const first = firstAny([1, 2, 3]);
+first.toUpperCase(); // no compile error — but this crashes at runtime
+```
+
+`any` disables type checking entirely for anything that flows through it.
+`firstAny` compiles fine, `first` is typed `any`, and calling a
+string method on what's actually a number produces no warning — the bug
+surfaces only at runtime, exactly the class of error TypeScript exists to
+catch.
+
+## The fix: a type parameter
+
+```typescript
+function first<T>(arr: T[]): T | undefined {
+  return arr[0];
+}
+
+const a = first([1, 2, 3]);        // inferred as number | undefined
+const b = first(["x", "y"]);        // inferred as string | undefined
+
+a.toUpperCase(); // compile error — TypeScript knows `a` is a number
+```
+
+`T` is a **type parameter** — a placeholder the caller (or type
+inference) fills in per call. `first([1, 2, 3])` infers `T = number`
+without it being written anywhere explicitly; TypeScript reads it off the
+argument. The function body never mentions `number` or `string` at all —
+it's written once, generically, and specialized automatically at each
+call site.
+
+## Constraining a type parameter
+
+An unconstrained `T` can be *anything*, which means the function body
+can't assume any properties exist on it. `extends` narrows what `T` is
+allowed to be, unlocking operations the compiler can then verify are safe:
+
+```typescript
+interface HasLength {
+  length: number;
+}
+
+function longest<T extends HasLength>(a: T, b: T): T {
+  return a.length >= b.length ? a : b;
+}
+
+longest("hello", "hi");        // fine — strings have .length
+longest([1, 2, 3], [1]);        // fine — arrays have .length
+longest(5, 10);                  // compile error — numbers have no .length
+```
+
+`T extends HasLength` reads as "whatever `T` ends up being, it must at
+least have a `length: number`" — without pinning `T` down to a single
+concrete type, unlike an unconstrained parameter that would let anything
+through, including values with no `.length` at all.
+
+## Multiple type parameters, and inferring more than one
+
+Generic functions and types aren't limited to a single parameter — each
+one is inferred independently from where it's used:
+
+```typescript
+function zip<A, B>(a: A[], b: B[]): [A, B][] {
+  const length = Math.min(a.length, b.length);
+  return Array.from({ length }, (_, i) => [a[i], b[i]]);
+}
+
+zip([1, 2, 3], ["a", "b", "c"]);
+// inferred: [number, string][] — A = number, B = string, no annotation needed
+```
+
+## Generic interfaces and classes
+
+Generics aren't limited to functions — they parameterize entire shapes,
+which is how a single `Box<T>` interface describes a box of anything
+without losing what's actually inside:
+
+```typescript
+interface Box<T> {
+  value: T;
+  map<U>(fn: (value: T) => U): Box<U>;
+}
+
+class SimpleBox<T> implements Box<T> {
+  constructor(public value: T) {}
+  map<U>(fn: (value: T) => U): Box<U> {
+    return new SimpleBox(fn(this.value));
+  }
+}
+
+const box = new SimpleBox(5);          // Box<number>
+const strBox = box.map((n) => `#${n}`); // Box<string> — U inferred from fn's return type
+```
+
+Note the two independent type parameters here: `T` belongs to the class
+itself (fixed at construction — this box always holds a `number`), while
+`U` belongs to the individual `map` call (fixed per call — this
+particular `.map()` happens to produce a `string`). Mixing up which
+parameter belongs to the class versus the method is a common source of
+confusion when generics are still new.
+
+## Default type parameters
+
+Like default function parameters, a generic can supply a fallback type
+when the caller doesn't specify one:
+
+```typescript
+interface ApiResponse<T = unknown> {
+  data: T;
+  status: number;
+}
+
+function fetchGeneric(): ApiResponse {
+  return { data: null, status: 200 }; // T defaults to unknown
+}
+
+function fetchUsers(): ApiResponse<User[]> {
+  return { data: [], status: 200 }; // T explicitly pinned to User[]
+}
+```
+
+Defaulting to `unknown` rather than `any` is deliberate: `unknown` still
+forces a type check (narrowing or a type assertion) before the value can
+be used, preserving safety for callers who didn't specify a concrete type,
+instead of silently reopening the `any` hole generics exist to close.
+
+## Where generics matter most
+
+<table>
+  <thead>
+    <tr>
+      <th>Pattern</th>
+      <th>Why generics fit</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Data structures (Stack, Queue, LinkedList)</td>
+      <td>The container logic is identical regardless of what's stored</td>
+    </tr>
+    <tr>
+      <td>API client wrappers</td>
+      <td>Same fetch/parse logic, different response shape per endpoint</td>
+    </tr>
+    <tr>
+      <td>React hooks (<code>useState&lt;T&gt;</code>)</td>
+      <td>One hook implementation, type-safe for every possible state shape</td>
+    </tr>
+    <tr>
+      <td>Utility types (<code>Partial&lt;T&gt;</code>, <code>Record&lt;K, V&gt;</code>)</td>
+      <td>Type-level transformations that work over any input type</td>
+    </tr>
+  </tbody>
+</table>
+
+## Wrap-up
+
+Generics let a function, interface, or class stay genuinely reusable
+without falling back to `any` — the type parameter is filled in per use,
+usually inferred automatically, and the compiler keeps tracking it all
+the way through. Constraining a type parameter with `extends` narrows
+what operations are safe inside the generic body without pinning it down
+to one concrete type. The result is code written once that stays fully
+type-checked at every call site, which is the entire reason TypeScript's
+own standard library (`Array<T>`, `Promise<T>`, `Map<K, V>`) is built out
+of generics from the ground up.

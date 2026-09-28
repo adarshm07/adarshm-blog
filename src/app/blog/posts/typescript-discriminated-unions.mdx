@@ -1,0 +1,181 @@
+---
+title: "Discriminated Unions and Exhaustive Checks in TypeScript"
+publishedAt: "2026-07-18"
+summary: "A plain union of interfaces still needs optional-field guessing to figure out which variant you have. Adding one shared literal-typed field turns that guessing into a compiler-verified switch — and the compiler can even catch every place you forgot to handle a case."
+tags: "TypeScript"
+---
+
+Modeling "one of several possible shapes" with a plain union of
+interfaces works, but using it forces awkward guessing — checking which
+optional fields happen to be present to infer which variant you actually
+have. **Discriminated unions** fix this by giving every variant one
+shared field with a distinct literal value, which TypeScript can use to
+narrow the type automatically, field by field, inside a single `if` or
+`switch`.
+
+## The problem with a loose union
+
+```typescript
+interface LoadingState {
+  data?: never;
+  error?: never;
+}
+
+interface SuccessState {
+  data: string[];
+  error?: never;
+}
+
+interface ErrorState {
+  data?: never;
+  error: string;
+}
+
+type FetchState = LoadingState | SuccessState | ErrorState;
+
+function render(state: FetchState) {
+  if (state.data) {
+    // TypeScript can narrow this via the optional-field trick above,
+    // but it's fragile — add a field, forget a `never`, and it breaks
+  }
+}
+```
+
+That works, but it's a workaround built out of `never` fields specifically
+to make presence-checking narrow correctly — brittle, and easy to get
+subtly wrong as more variants get added.
+
+## The fix: a shared discriminant field
+
+Give every variant one property — conventionally named `type`, `kind`, or
+`status` — with its own distinct **literal type**:
+
+```typescript
+interface LoadingState {
+  status: "loading";
+}
+
+interface SuccessState {
+  status: "success";
+  data: string[];
+}
+
+interface ErrorState {
+  status: "error";
+  error: string;
+}
+
+type FetchState = LoadingState | SuccessState | ErrorState;
+
+function render(state: FetchState) {
+  if (state.status === "success") {
+    console.log(state.data);   // TypeScript knows state is SuccessState here
+  } else if (state.status === "error") {
+    console.log(state.error);  // narrowed to ErrorState
+  } else {
+    console.log("loading...");  // by elimination, LoadingState
+  }
+}
+```
+
+Checking `state.status === "success"` doesn't just compare a string — it
+tells the compiler "within this branch, `state` can only be the variant
+whose `status` literal is `"success"`," which makes `state.data` legal
+without any type assertion. This is TypeScript's **control flow
+analysis** doing real work: the discriminant check is enough for it to
+narrow the entire union, field by field, correctly, in every branch.
+
+## switch statements narrow the same way
+
+```typescript
+function describe(state: FetchState): string {
+  switch (state.status) {
+    case "loading":
+      return "Loading...";
+    case "success":
+      return `Got ${state.data.length} items`; // narrowed to SuccessState
+    case "error":
+      return `Failed: ${state.error}`;          // narrowed to ErrorState
+  }
+}
+```
+
+Each `case` narrows `state` to exactly the matching variant, the same way
+the `if`/`else if` chain did — `switch` is just a more common way to
+write this pattern in practice, especially with three or more variants.
+
+## Exhaustiveness checking: catching missed cases at compile time
+
+The real payoff shows up when a new variant gets added later. Without
+exhaustiveness checking, a missed `case` fails silently at runtime.
+With it, the compiler refuses to build:
+
+```typescript
+function assertNever(value: never): never {
+  throw new Error(`Unhandled case: ${JSON.stringify(value)}`);
+}
+
+function describeExhaustive(state: FetchState): string {
+  switch (state.status) {
+    case "loading":
+      return "Loading...";
+    case "success":
+      return `Got ${state.data.length} items`;
+    case "error":
+      return `Failed: ${state.error}`;
+    default:
+      return assertNever(state); // if every case is handled, `state` is `never` here
+  }
+}
+```
+
+`never` is the type of a value that can't exist. If every case is
+handled, TypeScript narrows `state` in the `default` branch down to
+`never` — and `assertNever(state)` type-checks. The moment someone adds a
+fourth variant to `FetchState` (say, `"idle"`) without adding its `case`,
+`state` in the `default` branch is no longer narrowed all the way to
+`never` — it's still partially the unhandled variant — and
+`assertNever(state)` becomes a **compile error**, pointing directly at
+the missing case. This turns "I forgot to handle a new state" from a
+runtime bug discovered in production into a build failure discovered
+immediately.
+
+## Discriminated unions beyond string literals
+
+The discriminant doesn't have to be a string — any literal type works,
+including booleans and numbers, and the pattern generalizes cleanly to
+recursive structures like an AST or a reducer's action type:
+
+```typescript
+type Action =
+  | { type: "increment"; amount: number }
+  | { type: "decrement"; amount: number }
+  | { type: "reset" };
+
+function reducer(state: number, action: Action): number {
+  switch (action.type) {
+    case "increment":
+      return state + action.amount; // action narrowed — .amount exists
+    case "decrement":
+      return state - action.amount;
+    case "reset":
+      return 0; // action narrowed to { type: "reset" } — no .amount here, correctly
+  }
+}
+```
+
+This exact shape is why Redux reducers, and reducer-based state management
+in general, read so naturally in TypeScript — the action union *is* a
+discriminated union, and `switch (action.type)` is exhaustiveness checking
+applied directly to "did I handle every action my reducer can receive."
+
+## Wrap-up
+
+A discriminated union adds one shared, literal-typed field to every
+variant of a union type, and in exchange the compiler can narrow the
+whole shape automatically from a single equality check — no type
+assertions, no fragile optional-field guessing. Paired with a
+`never`-typed exhaustiveness check in the default branch, it turns
+"handle every possible case" from a discipline you have to remember into
+a rule the compiler enforces, catching a forgotten case the moment a new
+variant is added rather than the moment it ships.
