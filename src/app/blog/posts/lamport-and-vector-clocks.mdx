@@ -1,0 +1,163 @@
+---
+title: "Lamport and Vector Clocks: Ordering Events Without a Shared Clock"
+publishedAt: "2026-09-28"
+summary: "Machine clocks drift, so timestamps can't tell you which of two events in a distributed system came first. Logical clocks can — Lamport clocks give a consistent order, vector clocks tell you whether an order exists at all."
+tags: "System Design"
+---
+
+Two replicas both accept a write to the same key. Which one wins? The
+obvious answer — compare timestamps, keep the later one — quietly assumes
+the two machines agree on what time it is. They don't. NTP keeps clocks
+within milliseconds on a good day and much worse on a bad one, and a clock
+can jump backwards after a sync. "Last write wins" by wall-clock time will
+sometimes keep the *earlier* write and silently discard the later one.
+
+Logical clocks give up on real time entirely and track something more
+useful: **causality**.
+
+## Happened-before
+
+Leslie Lamport's 1978 paper defines the relation that actually matters.
+Event a *happened-before* event b (written a → b) if:
+
+- a and b are on the same process and a came first, or
+- a is sending a message and b is receiving that message, or
+- there's some c with a → c and c → b (it's transitive).
+
+If neither a → b nor b → a, the events are **concurrent**. Not
+"simultaneous" — they may be seconds apart in real time — just causally
+unrelated. Neither could have influenced the other.
+
+## Lamport clocks
+
+Each process keeps a single integer:
+
+```javascript
+class LamportClock {
+  time = 0;
+
+  tick() {                      // local event or send
+    return ++this.time;
+  }
+
+  receive(messageTime) {        // on receiving a message
+    this.time = Math.max(this.time, messageTime) + 1;
+    return this.time;
+  }
+}
+```
+
+Increment before every event; attach the value to outgoing messages; on
+receipt, jump past whatever the sender had seen.
+
+This guarantees: **if a → b, then `L(a) < L(b)`**. Ties can be broken by
+process ID to get a total order every node agrees on — which is exactly
+what you need for things like a distributed mutual-exclusion queue or a
+consistent log order.
+
+What it doesn't give you is the converse. `L(a) < L(b)` does *not* mean
+a → b. The events might be concurrent, and the clock can't tell.
+
+## Vector clocks
+
+To detect concurrency, each process keeps a counter **per process**: "how
+many events from each process do I know about?"
+
+<VectorClockVisualizer />
+
+```javascript
+class VectorClock {
+  constructor(id, n) {
+    this.id = id;
+    this.v = new Array(n).fill(0);
+  }
+
+  tick() {
+    this.v[this.id]++;
+    return [...this.v];
+  }
+
+  receive(other) {
+    for (let i = 0; i < this.v.length; i++) {
+      this.v[i] = Math.max(this.v[i], other[i]);
+    }
+    this.v[this.id]++;
+    return [...this.v];
+  }
+}
+
+function compare(a, b) {
+  let aBefore = false;
+  let bBefore = false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] < b[i]) aBefore = true;
+    if (a[i] > b[i]) bBefore = true;
+  }
+  if (aBefore && !bBefore) return 'before';
+  if (bBefore && !aBefore) return 'after';
+  if (!aBefore && !bBefore) return 'equal';
+  return 'concurrent';
+}
+```
+
+Now the relationship is exact in both directions: **a → b if and only if
+`V(a) < V(b)`** element-wise. And if neither vector dominates the other, the
+events are concurrent — which is the thing Lamport clocks can't express.
+
+## What it's for: detecting conflicts
+
+That "concurrent" answer is the whole point. Consider a key-value store
+with replicas:
+
+- If the incoming write's vector **dominates** the stored one, the new
+  write saw the old one. Overwrite safely.
+- If it's **dominated**, it's stale. Discard it.
+- If they're **concurrent**, two clients wrote without seeing each other.
+  That's a real conflict, and no timestamp can resolve it correctly.
+
+Amazon's Dynamo paper used exactly this. On a conflict, it kept both
+versions ("siblings") and returned them to the client to merge — the
+classic example being a shopping cart, where the merge is a union of the
+items. Riak exposed the same model.
+
+The alternatives, when merging in the application is too much to ask:
+
+- **Last-write-wins** with a timestamp. Simple, and loses data under
+  concurrency. Fine for caches, dangerous for anything users typed.
+- **CRDTs** — data types designed so that concurrent updates always merge
+  deterministically (counters, sets, text). They typically carry vector
+  clocks or similar metadata internally.
+
+## The costs
+
+**Size grows with the number of writers.** A vector has one entry per
+process that has ever written. With thousands of clients, that's a lot of
+metadata per key. Dynamo used the replica node IDs rather than client IDs,
+and pruned old entries — which reintroduces a small chance of wrongly
+treating related writes as concurrent.
+
+**Version vectors vs. vector clocks.** Storage systems usually track one
+counter per *replica* per key (a version vector), rather than one per
+process per event. Same comparison, much less state.
+
+**Hybrid logical clocks** combine a physical timestamp with a logical
+counter. They stay close to wall-clock time — useful for queries like "as
+of 10:00" — while still respecting causality. CockroachDB and MongoDB use
+them.
+
+## Quick reference
+
+<Table data={{
+  headers: ["", "Wall clock", "Lamport clock", "Vector clock"],
+  rows: [
+    ["Size", "1 number", "1 number", "1 number per process"],
+    ["a → b implies a < b", "No (drift, skew)", "Yes", "Yes"],
+    ["a < b implies a → b", "No", "No", "Yes"],
+    ["Detects concurrency", "No", "No", "Yes"],
+    ["Typical use", "Logs for humans", "Total order, mutual exclusion", "Conflict detection in replicated data"]
+  ]
+}} />
+
+The shift in thinking is the useful part: in a distributed system, "which
+came first?" often has no answer, and the right response is to detect that
+case and handle it — not to let a clock pretend it knows.

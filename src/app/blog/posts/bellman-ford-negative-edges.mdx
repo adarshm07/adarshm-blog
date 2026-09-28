@@ -1,0 +1,144 @@
+---
+title: "Bellman-Ford: Shortest Paths When Edges Can Be Negative"
+publishedAt: "2026-09-26"
+summary: "Dijkstra locks in a node the moment it's popped, which is exactly what breaks when an edge weight is negative. Bellman-Ford gives up that greed, relaxes every edge V − 1 times, and can tell you when no shortest path exists at all."
+tags: "DSA"
+---
+
+[Dijkstra's algorithm](/blog/dijkstra-shortest-paths) has one assumption
+baked in so deeply it's easy to miss: once a node comes off the priority
+queue, its distance is final. That's true only if no edge can make a path
+*shorter* by extending it. Add a single negative edge and it stops being
+true.
+
+## Where Dijkstra goes wrong
+
+Take this graph, with source S:
+
+```
+S → A   2
+S → B   5
+B → A  -4
+A → C   1
+C → D   3
+B → D   4
+```
+
+Dijkstra pops S, sets A = 2 and B = 5, then pops A — the smallest — and
+declares it final at 2. It goes on to set C = 3 and D = 6. When it finally
+pops B and sees `B → A` with weight −4, it finds a path to A of cost 1, but
+A is already closed. The answer comes back with A = 2 and D = 6. The true
+values are A = 1 and D = 5, via S → B → A → C → D.
+
+The greedy step is the bug. Bellman-Ford removes it.
+
+## Relax everything, repeatedly
+
+"Relaxing" an edge u → v means checking whether going through u gives v a
+shorter distance than it currently has:
+
+```javascript
+if (dist[u] + w < dist[v]) dist[v] = dist[u] + w;
+```
+
+Bellman-Ford's entire algorithm is: relax **every** edge, and do that
+V − 1 times.
+
+<BellmanFordVisualizer />
+
+```javascript
+function bellmanFord(vertices, edges, source) {
+  const dist = new Map(vertices.map((v) => [v, Infinity]));
+  dist.set(source, 0);
+
+  for (let i = 0; i < vertices.length - 1; i++) {
+    let changed = false;
+    for (const [u, v, w] of edges) {
+      if (dist.get(u) + w < dist.get(v)) {
+        dist.set(v, dist.get(u) + w);
+        changed = true;
+      }
+    }
+    if (!changed) break;               // already converged
+  }
+
+  // One more pass: any improvement now means a negative cycle.
+  for (const [u, v, w] of edges) {
+    if (dist.get(u) + w < dist.get(v)) {
+      throw new Error('negative cycle reachable from source');
+    }
+  }
+  return dist;
+}
+```
+
+`Infinity + w` is still `Infinity` in JavaScript, so unreached vertices
+never relax anything — no special case needed.
+
+## Why V − 1 passes is enough
+
+A shortest path in a graph with no negative cycles never repeats a vertex —
+repeating one would mean going around a cycle, which can only add
+non-negative weight. So every shortest path has at most V − 1 edges.
+
+Now the key invariant: **after pass i, every vertex whose shortest path
+uses at most i edges has its correct distance.** Pass 1 gets every
+one-edge path right. Pass 2 relaxes the second edge of every two-edge path,
+whose first edge is already correct. And so on.
+
+That's exactly what the visualizer shows. The edges are listed in the
+worst possible order, so the −4 creeps forward one edge per pass, and the
+4-edge path to D needs all 4 passes. In a friendlier order it could finish
+in one — which is why the early `break` on "nothing changed" matters in
+practice.
+
+## Negative cycles
+
+If a cycle's total weight is negative, you can loop it forever and drive
+the distance to −∞. "Shortest path" stops meaning anything.
+
+Bellman-Ford detects this for free. After V − 1 passes, every legitimate
+shortest path has been found. If a V-th pass can *still* improve some
+distance, the only explanation is a path with V or more edges beating all
+shorter ones — which means it contains a cycle that pays for itself.
+
+This is the algorithm's real value. Negative edges on their own are
+uncommon; being able to *prove there's no free lunch* is useful.
+
+## Where it shows up
+
+- **Currency arbitrage.** Make each edge weight `−log(rate)`. A cycle of
+  trades that multiplies your money becomes a cycle whose weights sum to
+  less than zero — a negative cycle.
+- **Distance-vector routing** (RIP). Each router relaxes routes advertised
+  by its neighbours, which is Bellman-Ford run in a distributed way.
+- **Difference constraints.** Systems of inequalities like `x − y ≤ 3` map
+  to edges; the system is satisfiable exactly when the graph has no
+  negative cycle. Scheduling problems reduce to this.
+- **Johnson's algorithm** runs Bellman-Ford once to reweight a graph so
+  every edge is non-negative, then runs Dijkstra from every vertex.
+
+## Cost and trade-offs
+
+<Table data={{
+  headers: ["", "Dijkstra (binary heap)", "Bellman-Ford"],
+  rows: [
+    ["Time", "O((V + E) log V)", "O(V · E)"],
+    ["Negative edges", "Wrong answers", "Handled"],
+    ["Negative cycles", "Undetected", "Detected"],
+    ["Distributed version", "Awkward", "Natural (neighbours exchange distances)"]
+  ]
+}} />
+
+O(V·E) is a lot slower on large graphs, so the rule is simple: if every
+weight is non-negative, use Dijkstra. Reach for Bellman-Ford when negative
+weights are real, or when detecting a negative cycle *is* the question.
+
+A common optimization, SPFA, only relaxes edges out of vertices whose
+distance just changed, using a queue. It's usually much faster, but its
+worst case is the same O(V·E) — and adversarial inputs for it are easy to
+construct.
+
+The general lesson: a greedy algorithm is correct exactly as long as its
+"once decided, never revisited" assumption holds. When it doesn't, you pay
+to revisit — and Bellman-Ford is the bill for revisiting everything.

@@ -1,0 +1,150 @@
+---
+title: "Rabin-Karp and the Rolling Hash"
+publishedAt: "2026-09-27"
+summary: "Compare a fingerprint of each window instead of the window itself — and update that fingerprint in O(1) as the window slides. The string-matching algorithm that also powers plagiarism detection, rsync, and content-defined chunking."
+tags: "DSA"
+---
+
+The naive way to find a pattern of length m in a text of length n checks
+every position, comparing up to m characters each time: O(n·m).
+[KMP](/blog/kmp-string-matching) gets to O(n + m) by never re-reading a
+character. Rabin-Karp gets there by a different route: it compares
+**numbers** instead of strings, and makes each number almost free to
+compute.
+
+## Fingerprint the window
+
+Hash the pattern once. Then hash every m-length window of the text and
+compare hashes. Different hashes mean the window definitely isn't a match,
+so you skip it with a single integer comparison. Equal hashes mean it
+*might* be — check the characters to be sure.
+
+That only helps if hashing a window is cheap. Hashing m characters from
+scratch at each of n positions is O(n·m) again. The whole algorithm hinges
+on a hash that can be **rolled**.
+
+## The rolling hash
+
+Treat a window as a number in base B. For digits, B = 10 makes it
+literal: the window `314` is the number 314. Sliding one position right,
+from `314` to `141`, is arithmetic:
+
+```
+141 = (314 − 3·100) · 10 + 1
+```
+
+Subtract the outgoing digit's contribution, shift everything up one place,
+add the incoming digit. That's O(1) regardless of m. To keep the numbers
+small, do all of it modulo a prime M.
+
+<RollingHashVisualizer />
+
+For general strings, use character codes as digits and a base larger than
+the alphabet:
+
+```javascript
+function rabinKarp(text, pattern) {
+  const B = 256;
+  const M = 1_000_000_007;
+  const m = pattern.length;
+  const n = text.length;
+  if (m > n) return [];
+
+  // B^(m-1) mod M: the weight of the window's leading character.
+  let high = 1;
+  for (let i = 0; i < m - 1; i++) high = (high * B) % M;
+
+  let p = 0;
+  let w = 0;
+  for (let i = 0; i < m; i++) {
+    p = (p * B + pattern.charCodeAt(i)) % M;
+    w = (w * B + text.charCodeAt(i)) % M;
+  }
+
+  const matches = [];
+  for (let i = 0; ; i++) {
+    if (w === p && text.startsWith(pattern, i)) matches.push(i);
+    if (i + m >= n) break;
+    // Roll: remove text[i], shift, add text[i + m].
+    w = (w - text.charCodeAt(i) * high % M + M) % M;
+    w = (w * B + text.charCodeAt(i + m)) % M;
+  }
+  return matches;
+}
+```
+
+Two details worth pointing at:
+
+**The `+ M` before the modulo.** JavaScript's `%` keeps the sign of the
+left operand, so subtracting can go negative. Adding M first keeps the
+value in `[0, M)`.
+
+**Keep intermediate products under 2⁵³.** `w * B` is at most about
+2.6 × 10¹¹, which fits exactly in a double. If you raise B or M, the
+products can exceed `Number.MAX_SAFE_INTEGER` and silently lose precision —
+at that point switch to `BigInt`, or pick smaller constants.
+
+## Spurious hits
+
+Many windows share a hash mod M; the visualizer uses M = 13 so you can
+watch it happen twice. Every hash match still needs the character
+comparison, so the worst case is O(n·m) — a text and pattern where every
+window collides.
+
+With a random-looking prime around 10⁹, a given non-matching window
+collides with probability roughly 1/M. The expected number of spurious hits
+over the whole text is about n/M, which is effectively zero. Expected time
+is O(n + m).
+
+If you'd rather never pay for character checks, use **two** independent
+hashes (different B or M) and treat agreement on both as a match. That
+trades a tiny false-positive probability for guaranteed O(n + m) time —
+fine for many uses, but not when correctness must be absolute.
+
+## Where it beats KMP: many patterns
+
+KMP builds a table per pattern. Rabin-Karp, given k patterns **of the same
+length**, hashes them all into a set and checks each window's hash against
+the set in O(1):
+
+```javascript
+const wanted = new Set(patterns.map(hash));
+// … roll through the text as before …
+if (wanted.has(w)) { /* verify against the patterns with this hash */ }
+```
+
+That's O(n + k·m) for all k patterns at once — the reason it's the go-to
+for plagiarism detection, which fingerprints every k-word shingle of a
+document and looks for overlaps.
+
+## The rolling hash on its own
+
+The fingerprint trick outlives the string-matching problem:
+
+- **rsync** uses a rolling checksum to find blocks the receiver already
+  has, even when they've shifted by a few bytes.
+- **Content-defined chunking** — used by backup tools and deduplicating
+  storage — rolls a hash over a file and cuts a chunk wherever the hash
+  hits a chosen bit pattern. Inserting a byte only changes the chunks near
+  the edit, instead of shifting every fixed-size block after it.
+- **Longest repeated substring** in O(n log n): binary search on the
+  length, and use a rolling hash to check "does any substring of length L
+  appear twice?" in O(n).
+
+## Pitfalls
+
+**Tiny moduli are for diagrams.** M = 13 makes a good picture and a bad
+search.
+
+**Adversarial input.** If an attacker knows B and M, they can craft many
+colliding windows and push you to O(n·m). Choosing B randomly at startup
+defeats that.
+
+**Variable-length patterns** break the multi-pattern trick — each length
+needs its own rolling window. For large dictionaries of mixed lengths,
+Aho-Corasick is the better tool.
+
+What makes Rabin-Karp worth knowing isn't the matcher — KMP is often the
+cleaner choice for one pattern. It's the rolling hash: any time you slide a
+fixed window over data and need a cheap identity for each position, it's
+the tool that makes each step constant time.

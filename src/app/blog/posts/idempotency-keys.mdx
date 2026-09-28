@@ -1,0 +1,156 @@
+---
+title: "Idempotency Keys: Making Retries Safe"
+publishedAt: "2026-09-27"
+summary: "A request timed out. Did the charge go through? The client can't know, so it has to retry — and the server has to make that retry harmless. How idempotency keys work, and the race conditions a naive implementation misses."
+tags: "System Design"
+---
+
+Every guide to [retries and backoff](/blog/retries-backoff-and-jitter)
+comes with a warning: only retry idempotent operations. `GET` is fine.
+`PUT` of a full resource is fine. `POST /charges` is not — retry it and a
+customer pays twice.
+
+But the operations you most need to retry are exactly the ones with side
+effects. Idempotency keys make a non-idempotent endpoint *behave*
+idempotently, one request at a time.
+
+## The ambiguous failure
+
+A client sends a request and gets back a timeout. There are three
+possibilities:
+
+1. The request never reached the server.
+2. The server received it, and crashed or failed before finishing.
+3. The server finished the work, and the **response** was lost.
+
+The client can't tell them apart. Not retrying is wrong in cases 1 and 2.
+Retrying blindly is wrong in case 3. The fix has to live on the server,
+because only the server knows what it already did.
+
+## The protocol
+
+The client generates a unique key — a UUID — **once per logical
+operation**, before the first attempt, and sends it in a header on every
+attempt. The server remembers each key and the response it produced, and
+replays that response when it sees the key again.
+
+<IdempotencyVisualizer />
+
+```http
+POST /v1/charges
+Idempotency-Key: 5d1e2b4a-7f3a-4c1e-9b2d-8a6f0e3c1d47
+Content-Type: application/json
+
+{ "amount": 4000, "currency": "usd", "source": "card_123" }
+```
+
+The key identifies the *intent*, not the HTTP request. Two different
+attempts at the same charge share a key. Two different charges — even for
+the same amount, to the same card — must not.
+
+## A server-side implementation
+
+The core is a table with a unique constraint on the key:
+
+```sql
+CREATE TABLE idempotency_keys (
+  key           text PRIMARY KEY,
+  request_hash  text NOT NULL,
+  status        text NOT NULL,        -- 'in_progress' | 'done'
+  response_code int,
+  response_body jsonb,
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+```
+
+```javascript
+async function handleCharge(req, res) {
+  const key = req.get('Idempotency-Key');
+  const hash = sha256(JSON.stringify(req.body));
+
+  // 1. Claim the key. The unique index makes this atomic: exactly one
+  //    concurrent request wins the insert.
+  const claimed = await db.query(
+    `INSERT INTO idempotency_keys (key, request_hash, status)
+     VALUES ($1, $2, 'in_progress')
+     ON CONFLICT (key) DO NOTHING
+     RETURNING key`,
+    [key, hash]
+  );
+
+  if (claimed.rowCount === 0) {
+    const existing = await db.one(
+      'SELECT * FROM idempotency_keys WHERE key = $1', [key]
+    );
+    if (existing.request_hash !== hash) {
+      return res.status(422).json({ error: 'key reused with a different body' });
+    }
+    if (existing.status === 'in_progress') {
+      return res.status(409).json({ error: 'request in progress, retry later' });
+    }
+    return res.status(existing.response_code).json(existing.response_body);
+  }
+
+  // 2. Do the work and record the result.
+  const charge = await payments.charge(req.body);
+  await db.query(
+    `UPDATE idempotency_keys
+     SET status = 'done', response_code = 201, response_body = $2
+     WHERE key = $1`,
+    [key, charge]
+  );
+  return res.status(201).json(charge);
+}
+```
+
+## The details that matter
+
+**Claim before you act.** Checking "does this key exist?" and then
+inserting it is a race: two concurrent retries both see nothing and both
+proceed. The `INSERT … ON CONFLICT DO NOTHING` is the check and the claim
+in one atomic step.
+
+**Fingerprint the request.** If a client bug reuses a key for a different
+payload, replaying the old response silently does the wrong thing. Store a
+hash of the body and reject mismatches.
+
+**Decide what "in progress" means after a crash.** If the server dies
+between claiming the key and finishing, the record sits in `in_progress`
+forever and every retry gets 409. Either expire in-progress claims after a
+timeout, or — better — make the work itself resumable from recorded
+checkpoints.
+
+**Put the key and the side effect in the same transaction when you can.**
+If the charge is a row in the same database, write it and mark the key
+`done` in one transaction, and the crash window disappears. When the side
+effect is an external API call, you can't, and you need that API to accept
+an idempotency key of its own — pass one derived from yours, so your retry
+becomes its retry.
+
+**Cache errors carefully.** A `400` for a malformed body is deterministic;
+replaying it is correct. A `503` because a dependency was down is
+transient; caching it means the client can never succeed with that key.
+Only store responses the server would give again.
+
+**Expire keys.** Stripe keeps them for 24 hours. Pick a window longer than
+any client's retry horizon, then delete — the table otherwise grows
+forever.
+
+## Idempotency beyond HTTP
+
+The same shape shows up anywhere delivery is at-least-once:
+
+- **Message consumers.** A queue will redeliver after a consumer crash.
+  Store processed message IDs alongside the effect, in one transaction —
+  the consumer side of the
+  [outbox pattern](/blog/dual-writes-and-the-outbox-pattern).
+- **Natural keys.** Sometimes the data already has one. "Apply payment
+  `inv_42` to the ledger" can use a unique constraint on the invoice ID; no
+  separate key table needed.
+- **Idempotent by construction.** `SET balance = 100` is safe to repeat;
+  `SET balance = balance + 10` is not. Where you can, design operations
+  that state the desired end result instead of a delta.
+
+Networks guarantee at-least-once at best. Exactly-once *effects* aren't
+something the network gives you; they're something you build on the
+receiving end — and an idempotency key is the smallest version of that.

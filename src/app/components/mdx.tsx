@@ -64,6 +64,16 @@ import { PaginationDriftVisualizer } from '@/app/components/pagination-drift-vis
 import { OutboxVisualizer } from '@/app/components/outbox-visualizer'
 import { PromptInjectionVisualizer } from '@/app/components/prompt-injection-visualizer'
 import { EmbeddingSpaceVisualizer } from '@/app/components/embedding-space-visualizer'
+import { QuickselectVisualizer } from '@/app/components/quickselect-visualizer'
+import { BellmanFordVisualizer } from '@/app/components/bellman-ford-visualizer'
+import { SkipListVisualizer } from '@/app/components/skip-list-visualizer'
+import { RollingHashVisualizer } from '@/app/components/rolling-hash-visualizer'
+import { IdempotencyVisualizer } from '@/app/components/idempotency-visualizer'
+import { LSMTreeVisualizer } from '@/app/components/lsm-tree-visualizer'
+import { VectorClockVisualizer } from '@/app/components/vector-clock-visualizer'
+import { ReconciliationVisualizer } from '@/app/components/reconciliation-visualizer'
+import { CopyDepthVisualizer } from '@/app/components/copy-depth-visualizer'
+import { BPEVisualizer } from '@/app/components/bpe-visualizer'
 import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
@@ -252,6 +262,16 @@ const components = {
   OutboxVisualizer,
   PromptInjectionVisualizer,
   EmbeddingSpaceVisualizer,
+  QuickselectVisualizer,
+  BellmanFordVisualizer,
+  SkipListVisualizer,
+  RollingHashVisualizer,
+  IdempotencyVisualizer,
+  LSMTreeVisualizer,
+  VectorClockVisualizer,
+  ReconciliationVisualizer,
+  CopyDepthVisualizer,
+  BPEVisualizer,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {

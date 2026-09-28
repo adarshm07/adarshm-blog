@@ -1,0 +1,155 @@
+---
+title: "LSM Trees: Why Write-Heavy Databases Never Update in Place"
+publishedAt: "2026-09-27"
+summary: "B-trees update pages where they live. LSM trees buffer writes in memory, flush them as immutable sorted files, and merge those files in the background. How the memtable, SSTables, tombstones and compaction fit together — and what reads pay for it."
+tags: "System Design"
+---
+
+A B-tree, the structure behind most
+[database indexes](/blog/database-indexing-explained), keeps each key in
+exactly one place on disk. Updating a key means finding its page, changing
+it, and writing the page back. That's a random write for every update — and
+random writes are the slowest thing a disk does.
+
+A log-structured merge tree takes the opposite approach: **never modify
+anything on disk**. Every write is an append. Cassandra, RocksDB, LevelDB,
+ScyllaDB, and the storage engines under many time-series and streaming
+systems are built this way.
+
+## The write path
+
+Three pieces:
+
+- **Write-ahead log (WAL).** Every write is appended here first, so a crash
+  can't lose it. Sequential, cheap.
+- **Memtable.** An in-memory sorted structure — often a
+  [skip list](/blog/skip-lists-explained) — holding recent writes.
+- **SSTables.** When the memtable fills, it's written to disk as a sorted,
+  immutable file in one sequential pass. Then the WAL segment covering it
+  can be deleted.
+
+<LSMTreeVisualizer />
+
+Updates don't find the old value; they write a new one. Deletes don't
+remove anything; they write a **tombstone** — a marker that says "this key
+is deleted as of now." Both are just more appends.
+
+```javascript
+class LSMTree {
+  memtable = new SortedMap();
+  sstables = [];               // newest first
+  limit = 4096;
+
+  put(key, value) {
+    this.wal.append({ key, value });
+    this.memtable.set(key, value);
+    if (this.memtable.size >= this.limit) this.flush();
+  }
+
+  delete(key) {
+    this.put(key, TOMBSTONE);
+  }
+
+  flush() {
+    const table = SSTable.write([...this.memtable.entries()]);  // sorted
+    this.sstables.unshift(table);
+    this.memtable = new SortedMap();
+    this.wal.truncate();
+  }
+}
+```
+
+## The read path
+
+Because a key can have versions in the memtable and in several SSTables,
+reads must check from newest to oldest and stop at the first hit:
+
+```javascript
+get(key) {
+  if (this.memtable.has(key)) return unwrap(this.memtable.get(key));
+  for (const table of this.sstables) {
+    if (!table.bloom.mightContain(key)) continue;   // skip most files
+    const value = table.lookup(key);                // sparse index + one block read
+    if (value !== undefined) return unwrap(value);
+  }
+  return undefined;
+}
+
+const unwrap = (v) => (v === TOMBSTONE ? undefined : v);
+```
+
+A tombstone found first means "deleted" — the older value further down is
+shadowed, not consulted.
+
+Two things keep this from being slow:
+
+- **A [Bloom filter](/blog/bloom-filters-explained) per SSTable.** A
+  lookup for a key that isn't in a file almost always skips it without
+  touching disk.
+- **A sparse index per SSTable.** Since the file is sorted, you only need
+  the first key of every block in memory; binary search the index, then
+  read one block.
+
+Range scans are a k-way merge across the memtable and every overlapping
+SSTable — the same merge a
+[heap](/blog/heaps-and-priority-queues) does for k sorted lists.
+
+## Compaction
+
+Without cleanup, SSTables accumulate forever: reads touch more and more
+files, and dead versions waste space. **Compaction** merges several
+SSTables into one, keeping only the newest version of each key.
+
+Because every input is sorted, it's a streaming merge — sequential reads,
+sequential writes, bounded memory. It runs in the background.
+
+Tombstones are dropped during compaction only when the merge includes the
+**oldest** data for that key range. Drop one too early and an older value
+in a file that wasn't part of this compaction comes back to life. That
+"resurrection" bug is the reason Cassandra keeps tombstones for
+`gc_grace_seconds` before purging them.
+
+Two main strategies decide *what* to merge:
+
+<Table data={{
+  headers: ["", "Size-tiered", "Leveled"],
+  rows: [
+    ["How", "Merge several similar-size tables into one bigger one", "Each level is ~10× the last; keys don't overlap within a level"],
+    ["Write amplification", "Lower", "Higher — data is rewritten at every level"],
+    ["Read amplification", "Higher — many overlapping tables", "Lower — at most one table per level"],
+    ["Space amplification", "Up to ~2× during merges", "~10%"],
+    ["Used by", "Cassandra default, write-heavy loads", "RocksDB/LevelDB default, read-heavy loads"]
+  ]
+}} />
+
+## The amplification trade-off
+
+Every storage engine balances three costs:
+
+- **Write amplification** — bytes written to disk per byte the user wrote.
+- **Read amplification** — disk reads per lookup.
+- **Space amplification** — bytes on disk per byte of live data.
+
+A B-tree has low read amplification (one path from root to leaf) but
+rewrites a whole page for a small change. An LSM tree turns every write
+into a sequential append, at the cost of rewriting data during compaction
+and checking multiple places on read. You can't minimize all three; the
+compaction strategy picks which one to pay.
+
+## When to choose which
+
+**LSM trees fit** write-heavy workloads: event ingestion, time series,
+logs, messaging, counters — anywhere writes outnumber reads and sequential
+disk bandwidth matters. They also compress well, since files are immutable
+and sorted.
+
+**B-trees fit** read-heavy, point-lookup, transactional workloads where
+predictable read latency matters more than write throughput — the reason
+PostgreSQL and MySQL's InnoDB use them.
+
+The pitfalls of LSM storage are mostly operational: compaction competes
+with foreground traffic for I/O, so latency can spike when it falls
+behind; delete-heavy workloads can drown reads in tombstones; and space
+usage temporarily balloons during large merges. None of these show up in a
+benchmark that runs for five minutes, which is exactly why they're worth
+knowing before you pick one.
