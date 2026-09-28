@@ -1,0 +1,147 @@
+---
+title: "React Reconciliation: What Keys Are Actually For"
+publishedAt: "2026-09-28"
+summary: "The key prop isn't there to silence a console warning. It's how React decides whether an element is the same thing it rendered last time — and getting it wrong moves state to the wrong row. How the diff works, and how to pick a key."
+tags: "JavaScript"
+---
+
+Every React developer has seen the warning: *Each child in a list should
+have a unique "key" prop.* The usual fix is `key={index}`, the warning goes
+away, and everything seems fine. Often it is fine. Sometimes it moves a
+half-typed message from one person's row to another's.
+
+To see why, you need to know what React does between two renders.
+
+## Reconciliation in two rules
+
+When state changes, a component returns a new tree of elements. React
+compares it with the previous tree and works out the smallest set of DOM
+changes. A general tree diff is O(n³), which is far too slow, so React uses
+two heuristics that make it O(n):
+
+1. **Different type, different thing.** If an element changes from
+   `<div>` to `<section>`, or from `<Profile>` to `<Settings>`, React
+   throws the old subtree away — DOM nodes, component instances, state and
+   all — and builds a new one.
+2. **Among siblings, the key is the identity.** When the type is the same,
+   React matches old and new children by key. A matched child keeps its
+   component instance, its state, and its DOM node; only its props are
+   updated.
+
+Without an explicit key, React falls back to position: the first child is
+matched with the old first child, and so on. `key={index}` is the same
+thing, stated out loud.
+
+## Watching it go wrong
+
+<ReconciliationVisualizer />
+
+```jsx
+function Inbox({ users }) {
+  return users.map((user, i) => (
+    <MessageRow key={i} name={user.name} />   // identity = position
+  ));
+}
+
+function MessageRow({ name }) {
+  const [draft, setDraft] = useState('');      // state lives in the instance
+  return (
+    <label>
+      {name}
+      <input value={draft} onChange={(e) => setDraft(e.target.value)} />
+    </label>
+  );
+}
+```
+
+Insert a user at the front. Position 0 existed before, so React reuses that
+instance and passes it a new `name`. The `draft` state belongs to the
+instance, not the name, so it stays put — and now appears next to the wrong
+person. The same applies to anything held by the instance or its DOM node:
+focus, scroll position, a playing video, an uncontrolled `<input>`'s value,
+an in-flight effect.
+
+Change one line and the bug disappears:
+
+```jsx
+<MessageRow key={user.id} name={user.name} />
+```
+
+Now the new user's key is new, so React creates exactly one instance and
+inserts one DOM node. Every existing row is matched by id and moved, state
+intact.
+
+## When index keys are fine
+
+Index keys are only wrong when the index stops meaning the same thing. They
+are safe when **all** of these hold:
+
+- The list is never reordered, filtered, or inserted into anywhere but the
+  end.
+- The rows hold no state of their own (no `useState`, no uncontrolled
+  inputs, nothing focusable you care about).
+- Items have no stable id anyway.
+
+A static list of rendered strings passes. A to-do list, a chat, a sortable
+table, or anything with inputs doesn't.
+
+## Choosing a key
+
+**Use an id from the data.** A database id, a UUID, a slug. It has to be
+stable across renders and unique among siblings — not globally.
+
+**Never generate it during render.** `key={Math.random()}` or
+`key={crypto.randomUUID()}` changes on every render, so React sees a
+completely new list every time: every row unmounts and remounts, state is
+wiped, and performance collapses. If items lack ids, assign them once when
+the data is created or loaded.
+
+**Don't use content that can change or collide.** `key={user.name}` works
+until two users share a name, or someone renames themselves.
+
+## Keys as a reset button
+
+Since a changed key means "this is a different thing," you can change a key
+on purpose to throw away state:
+
+```jsx
+<ProfileForm key={selectedUserId} user={user} />
+```
+
+Switch users and the form remounts with fresh state, instead of carrying the
+previous user's half-edited fields over. This is usually cleaner than a
+`useEffect` that watches `selectedUserId` and resets each field by hand.
+
+## The type rule bites too
+
+The first heuristic causes a related bug. A component defined *inside*
+another component is a new function on every render:
+
+```jsx
+function Page() {
+  function Field() {              // a brand-new component type each render
+    const [v, setV] = useState('');
+    return <input value={v} onChange={(e) => setV(e.target.value)} />;
+  }
+  return <Field />;
+}
+```
+
+Every time `Page` re-renders, `Field` is a different type, so React
+unmounts the old one and mounts the new one. The input loses focus and its
+value after every keystroke. Define components at module level.
+
+Similarly, conditionally rendering `<A />` versus `<B />` in the same
+position always resets state, even if they render identical markup. And
+rendering the same type in the same position *preserves* state, even
+across conditions you might think of as different screens — which is the
+case a key is there to override.
+
+## Takeaway
+
+React doesn't know what your components mean; it only knows type and key.
+A key is a claim: *this element is the same one as last time.* Make that
+claim with something that's actually stable — an id from the data — and
+React's cheap O(n) diff will do the right thing. Make it with an array
+index on a list that changes, and React will faithfully keep state attached
+to a position rather than to the thing you meant.

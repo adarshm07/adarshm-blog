@@ -1,0 +1,164 @@
+---
+title: "Skip Lists: A Balanced Tree Built Out of Coin Flips"
+publishedAt: "2026-09-26"
+summary: "A sorted linked list with express lanes stacked on top. Search, insert and delete in O(log n) expected time, with no rotations and no rebalancing — just a random height for each new node. Why Redis sorted sets use one."
+tags: "DSA"
+---
+
+A sorted linked list has cheap inserts — once you've found the spot,
+splicing in a node is O(1). The problem is finding the spot: you can't
+binary search a linked list, so it's O(n) every time.
+
+Balanced binary search trees fix that, at the cost of rotations, colour
+bits, and some of the fiddliest code in any data structures course. A skip
+list gets the same O(log n) with a different trick: instead of carefully
+balancing, it **randomly** promotes nodes into faster lanes, and lets
+probability do the balancing.
+
+## Express lanes
+
+Picture the list drawn on several levels. Level 1 holds every key. Level 2
+holds about half of them, level 3 about a quarter, and so on. Each level is
+itself a sorted linked list, and every node on a higher level also exists on
+all levels below it.
+
+To search, start at the top-left and follow two rules:
+
+- If the next node on this level is **≤ the target**, move right.
+- Otherwise, **drop down** a level.
+
+<SkipListVisualizer />
+
+The top levels let you skip over long runs of keys, then each drop narrows
+in. It's binary search, reshaped into pointers.
+
+```javascript
+class Node {
+  constructor(key, height) {
+    this.key = key;
+    this.next = new Array(height).fill(null);  // next[i] = successor on level i
+  }
+}
+
+class SkipList {
+  maxHeight = 16;
+  head = new Node(-Infinity, this.maxHeight);
+  height = 1;
+
+  search(key) {
+    let node = this.head;
+    for (let lvl = this.height - 1; lvl >= 0; lvl--) {
+      while (node.next[lvl] && node.next[lvl].key < key) {
+        node = node.next[lvl];
+      }
+    }
+    node = node.next[0];
+    return node && node.key === key ? node : null;
+  }
+}
+```
+
+The code walks while the next key is strictly *less* than the target, then
+checks the node just after it on level 0. It's the same path as the
+visualizer, with the equality check deferred to the bottom.
+
+## Insert is where the coin flips happen
+
+To insert, do the same walk, but remember the last node you visited on
+each level — those are the nodes whose pointers need to change. Then pick a
+height for the new node by flipping a coin until it comes up tails:
+
+```javascript
+randomHeight() {
+  let h = 1;
+  while (h < this.maxHeight && Math.random() < 0.5) h++;
+  return h;
+}
+
+insert(key) {
+  const update = new Array(this.maxHeight).fill(this.head);
+  let node = this.head;
+  for (let lvl = this.height - 1; lvl >= 0; lvl--) {
+    while (node.next[lvl] && node.next[lvl].key < key) {
+      node = node.next[lvl];
+    }
+    update[lvl] = node;              // the last node before key on this level
+  }
+
+  const h = this.randomHeight();
+  this.height = Math.max(this.height, h);
+
+  const fresh = new Node(key, h);
+  for (let lvl = 0; lvl < h; lvl++) {
+    fresh.next[lvl] = update[lvl].next[lvl];
+    update[lvl].next[lvl] = fresh;
+  }
+}
+```
+
+Half of all nodes reach level 2, a quarter reach level 3, and so on. That
+geometric distribution is what gives the structure its shape — no node
+knows about any other, and there's nothing to rebalance. Delete is the
+mirror image: walk, collect `update`, and unlink the node on every level it
+appears.
+
+## Why it's O(log n)
+
+With promotion probability ½, the expected number of levels is about
+log₂ n. The trickier part is how many rightward steps happen on each level.
+
+Trace a search path *backwards*, from the found node up to the head. At
+each node, you either came from the left or from above. You came from above
+exactly when the node was promoted — probability ½. So the expected number
+of left-steps before each up-step is 1, and the whole path is about
+2 · log₂ n steps. Expected O(log n), independent of the order keys were
+inserted in.
+
+That independence matters. A naive BST degrades to a linked list if you
+insert sorted data. A skip list can't be tricked, because the shape comes
+from the coin flips, not from the input.
+
+## Skip list or balanced tree?
+
+<Table data={{
+  headers: ["", "Skip list", "Red-black / AVL tree"],
+  rows: [
+    ["Search / insert / delete", "O(log n) expected", "O(log n) worst case"],
+    ["Code size", "Small; no rotations", "Large; many rebalancing cases"],
+    ["Range scans", "Walk level 1 — it's a linked list", "In-order traversal"],
+    ["Concurrency", "Lock-free versions are practical", "Rotations touch many nodes"],
+    ["Memory", "~2 pointers per node on average", "2 children + balance info"]
+  ]
+}} />
+
+The guarantee is only probabilistic, but the tail is thin: the chance of a
+search taking much longer than 2 log n falls off exponentially.
+
+## Where it shows up
+
+- **Redis sorted sets** (`ZADD`, `ZRANGE`) use a skip list alongside a hash
+  map. The skip list gives ordered range queries; each forward link also
+  stores how many nodes it jumps over, so "rank of this member" is
+  O(log n) too.
+- **LevelDB and RocksDB memtables** — the in-memory sorted buffer an
+  [LSM tree](/blog/lsm-trees-and-write-optimized-storage) writes into
+  before flushing to disk.
+- **Java's `ConcurrentSkipListMap`**, because a lock-free skip list is far
+  easier to get right than a lock-free balanced tree.
+
+## Pitfalls
+
+**Cap the height.** Without `maxHeight`, a long run of heads can build a
+tower taller than the list has any use for. 16–32 levels covers any
+realistic n with p = ½.
+
+**Use a real RNG, and don't let the input choose heights.** If an attacker
+can predict or influence the coin flips, they can build a degenerate list —
+the same class of attack as hash flooding.
+
+**p = ¼ is a legitimate choice.** Redis uses it. Fewer pointers per node,
+slightly longer searches — a memory-for-time dial you get to set.
+
+The broader idea is worth keeping: when maintaining a strict invariant is
+expensive, sometimes you can replace it with randomness and get the same
+average-case bound for a fraction of the code.

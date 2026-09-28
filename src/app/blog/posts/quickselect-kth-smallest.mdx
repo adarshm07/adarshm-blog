@@ -1,0 +1,150 @@
+---
+title: "Quickselect: The kth Smallest Element in Linear Time"
+publishedAt: "2026-09-26"
+summary: "Quicksort recurses into both halves. Quickselect recurses into one — and that single change drops the expected cost from O(n log n) to O(n). How it works, why it's linear, and when a heap is the better call."
+tags: "DSA"
+---
+
+"Find the median of this array." The obvious answer is to sort it and
+read the middle element — O(n log n). But sorting does far more work than
+the question asks for: it puts *every* element in its place, when you only
+care about one.
+
+Quickselect puts exactly one element in its place, and ignores the rest.
+
+## Partition does most of the work
+
+The core of quicksort is the partition step: pick a pivot, move everything
+smaller to its left and everything larger to its right. After one
+partition, the pivot sits at its **final sorted index** — even though
+neither side is sorted.
+
+That's the observation quickselect is built on. If you want index k and the
+pivot landed at p:
+
+- `p === k` — done, the pivot is the answer.
+- `p < k` — the answer is on the right. Throw the left side away.
+- `p > k` — the answer is on the left. Throw the right side away.
+
+<QuickselectVisualizer />
+
+```javascript
+function quickselect(arr, k) {
+  let lo = 0;
+  let hi = arr.length - 1;
+
+  while (true) {
+    const p = partition(arr, lo, hi);
+    if (p === k) return arr[p];
+    if (p < k) lo = p + 1;
+    else hi = p - 1;
+  }
+}
+
+// Lomuto partition: pivot is the last element of the range.
+function partition(arr, lo, hi) {
+  const pivot = arr[hi];
+  let i = lo;
+  for (let j = lo; j < hi; j++) {
+    if (arr[j] < pivot) {
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+      i++;
+    }
+  }
+  [arr[i], arr[hi]] = [arr[hi], arr[i]];
+  return i;
+}
+```
+
+Note there's no recursion — because only one side survives, the recursion
+is a tail call, and a loop is all it takes. Memory is O(1) beyond the
+array itself.
+
+## Why it's O(n) on average
+
+Quicksort's cost is n per level times log n levels, because both halves
+continue. Quickselect only continues into one. With a reasonable pivot the
+range roughly halves each time, so the total work is a geometric series:
+
+```
+n + n/2 + n/4 + n/8 + … ≤ 2n
+```
+
+That's O(n). Even a mediocre pivot — one that splits 25/75 — gives
+`n + 3n/4 + 9n/16 + …` = 4n, still linear. The algorithm is forgiving as
+long as the pivot isn't *consistently* terrible.
+
+## The worst case, and how to dodge it
+
+It can be consistently terrible. Pick the last element as pivot on an
+already-sorted array, and every partition removes exactly one element:
+n + (n−1) + (n−2) + … = O(n²). The visualizer hits one of these bad pivots
+mid-run — 9 is the largest value, so partitioning around it barely shrinks
+the range.
+
+Two standard fixes:
+
+**Random pivot.** Swap a random element into the pivot position before
+partitioning. The worst case is still possible, but no input can reliably
+trigger it, and the expected cost is O(n) for *every* input.
+
+```javascript
+const r = lo + Math.floor(Math.random() * (hi - lo + 1));
+[arr[r], arr[hi]] = [arr[hi], arr[r]];
+```
+
+**Median of medians.** Split into groups of five, take each group's
+median, and recursively find the median of *those* as the pivot. It
+guarantees a 30/70 split or better, which gives worst-case O(n). The
+constant factor is large enough that it's mostly a theoretical result —
+C++'s `std::nth_element` uses introselect instead, which starts with
+quickselect and switches to a guaranteed method only if the recursion goes
+too deep.
+
+## A free bonus: the k smallest
+
+When quickselect returns, the array is partitioned around index k:
+everything at indices `0…k−1` is smaller than or equal to the answer. So
+"the k smallest elements" (unordered) is just `arr.slice(0, k)` afterward,
+also in O(n).
+
+That's the same answer a size-k max-heap gives you in O(n log k). Which one
+should you reach for?
+
+<Table data={{
+  headers: ["", "Quickselect", "Heap of size k"],
+  rows: [
+    ["Time", "O(n) expected", "O(n log k)"],
+    ["Extra memory", "O(1), but mutates the input", "O(k)"],
+    ["Streaming input", "No — needs the whole array", "Yes — one pass"],
+    ["Worst case", "O(n²) without mitigation", "O(n log k) always"]
+  ]
+}} />
+
+If the data is already in an array and you're allowed to reorder it,
+quickselect wins. If it arrives as a stream, is too large to hold, or
+mustn't be mutated, use the [heap](/blog/heaps-and-priority-queues).
+
+## Where it shows up
+
+- **Medians and percentiles.** p50, p99 latency over a batch of samples.
+- **Top-k queries.** "The 10 largest files", "the 100 closest points."
+- **Kth largest element** — the interview classic. Search for index
+  `n − k` instead of k.
+- **Building k-d trees**, which split each level at the median along one
+  axis.
+
+## Pitfalls
+
+**It mutates the array.** Copy first if the caller doesn't expect that.
+
+**Duplicates can hurt Lomuto.** An array of all-equal values makes every
+partition lopsided. Three-way partitioning (less / equal / greater) fixes
+it: if k falls inside the "equal" block, you're done immediately.
+
+**Off-by-one on "kth".** Humans say "the 1st smallest"; arrays say index 0.
+Decide which one your function takes and write it in the name.
+
+The takeaway generalizes beyond selection: when a divide-and-conquer
+algorithm only needs an answer from one side, dropping the other side
+turns an n log n into an n.

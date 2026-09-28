@@ -99,6 +99,11 @@ export const curriculum: CurriculumPhase[] = [
         note: 'Divide-and-conquer and heap ideas applied back to sorting — partitioning shows up far beyond sort itself.',
       },
       {
+        slug: 'quickselect-kth-smallest',
+        difficulty: 'Intermediate',
+        note: 'Partition once, keep only the side with the answer — the kth smallest element in expected O(n).',
+      },
+      {
         slug: 'graph-traversal-bfs-dfs',
         difficulty: 'Intermediate',
         note: 'BFS and DFS are the entry point to every graph problem: reachability, shortest paths, cycles.',
@@ -149,6 +154,11 @@ export const curriculum: CurriculumPhase[] = [
         slug: 'dijkstra-shortest-paths',
         difficulty: 'Advanced',
         note: 'Weighted graphs — where BFS stops working and priority queues take over.',
+      },
+      {
+        slug: 'bellman-ford-negative-edges',
+        difficulty: 'Advanced',
+        note: 'Where Dijkstra’s greedy step breaks: negative edge weights, and detecting negative cycles.',
       },
       {
         slug: 'a-star-pathfinding',

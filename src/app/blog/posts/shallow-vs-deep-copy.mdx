@@ -1,0 +1,164 @@
+---
+title: "Shallow vs Deep Copy in JavaScript, and What structuredClone Can't Copy"
+publishedAt: "2026-09-28"
+summary: "Spread and Object.assign copy one level; everything below is shared. Why that causes “I copied it and the original still changed”, how structuredClone fixes it, and the functions, classes and DOM nodes it refuses to touch."
+tags: "JavaScript"
+---
+
+A bug report that turns up in every JavaScript codebase eventually: *"I
+copied the object before changing it, and the original changed anyway."*
+The copy was real. It just wasn't as deep as the code assumed.
+
+## Values and references
+
+A variable holding a primitive — a number, string, boolean — holds the
+value itself. A variable holding an object holds a **reference**: an
+address pointing to the object on the heap. Assigning or passing that
+variable copies the reference, not the object.
+
+```javascript
+const a = { n: 1 };
+const b = a;       // b points at the same object
+b.n = 2;
+a.n;               // 2
+```
+
+Nobody is surprised by that. The surprise comes one level down.
+
+## Shallow copies
+
+The spread operator, `Object.assign`, `Array.prototype.slice`,
+`Array.from` and `[...arr]` all make a **shallow** copy: a new top-level
+object, whose properties are copied *by value*. For a nested object, the
+"value" is a reference — so the copy and the original end up pointing to
+the same nested object.
+
+<CopyDepthVisualizer />
+
+```javascript
+const user = { name: 'Ada', address: { city: 'Pune' } };
+const copy = { ...user };
+
+copy.name = 'Grace';            // safe — top-level field on the new object
+copy.address.city = 'Oslo';     // shared — changes user.address too
+
+user.name;           // 'Ada'
+user.address.city;   // 'Oslo'
+```
+
+That shared nested object is the whole story. The copy isn't broken; it's
+just one level deep, and the mutation happened two levels deep.
+
+## Deep copies with `structuredClone`
+
+`structuredClone` — available in every modern browser and in Node since
+v17 — copies the entire object graph:
+
+```javascript
+const deep = structuredClone(user);
+deep.address.city = 'Oslo';
+user.address.city;   // 'Pune'
+```
+
+It's the same algorithm the browser uses to send data to a
+[Web Worker](/blog/web-workers-off-the-main-thread) with `postMessage` or
+store it in IndexedDB, and it handles things the old tricks don't:
+
+- **Cycles and shared references.** If two properties point at the same
+  object, the clone has two properties pointing at the same *cloned*
+  object. A cycle stays a cycle instead of recursing forever.
+- **Built-in types**: `Date`, `RegExp`, `Map`, `Set`, `ArrayBuffer`, typed
+  arrays, `Blob`, `File`, `Error`.
+- **`undefined`, `NaN`, `Infinity`, `-0`** survive intact.
+
+## The `JSON.parse(JSON.stringify(x))` trick
+
+This was the standard deep copy for years, and it's still everywhere. It
+works for plain data and fails quietly for anything else:
+
+<Table data={{
+  headers: ["Input", "JSON round-trip", "structuredClone"],
+  rows: [
+    ["Date", "Becomes a string", "Date"],
+    ["Map / Set", "Becomes {}", "Map / Set"],
+    ["undefined property", "Dropped", "Kept"],
+    ["NaN, Infinity", "Become null", "Kept"],
+    ["BigInt", "Throws", "Kept"],
+    ["Circular reference", "Throws", "Kept"],
+    ["Function", "Dropped", "Throws DataCloneError"],
+    ["Class instance", "Plain object", "Plain object"]
+  ]
+}} />
+
+Prefer `structuredClone`. It's correct in more cases, and it fails loudly
+in the cases it can't handle rather than silently producing different
+data.
+
+## What `structuredClone` won't copy
+
+**Functions.** Throws `DataCloneError`. So does any object with a method
+as an own property.
+
+**DOM nodes.** Also throws.
+
+**Class identity.** A cloned class instance comes back as a plain object:
+own data properties are copied, but the prototype isn't. Methods are gone,
+`instanceof` fails, and private `#fields` are not copied at all.
+
+```javascript
+class Point {
+  constructor(x, y) { this.x = x; this.y = y; }
+  norm() { return Math.hypot(this.x, this.y); }
+}
+const p = structuredClone(new Point(3, 4));
+p.x;                  // 3
+p instanceof Point;   // false
+p.norm;               // undefined
+```
+
+**Getters and setters** are evaluated once and stored as plain values. And
+**property descriptors** — non-writable, non-enumerable — are not
+preserved.
+
+For class instances, write the copy yourself: a `clone()` method, or a
+constructor that takes another instance. The class is the only thing that
+knows what "a copy of me" should mean.
+
+## Do you need a deep copy at all?
+
+Often the real goal is "don't mutate the original," and deep-copying
+everything is an expensive way to get it. Two alternatives:
+
+**Copy only the path you change.** This is how
+[immutable updates](/blog/immutability-and-structural-sharing) work in
+React and Redux:
+
+```javascript
+const next = {
+  ...user,
+  address: { ...user.address, city: 'Oslo' },
+};
+```
+
+Only the objects along the changed path are new; everything else is
+shared, safely, because nobody mutates it. It's cheaper than a deep clone
+and makes equality checks (`prev.address === next.address`) meaningful.
+
+**Freeze to catch mistakes.** `Object.freeze` is shallow too, but in
+development a recursive freeze turns accidental mutation into an immediate
+`TypeError` in strict mode, instead of a bug three components away.
+
+## Quick reference
+
+- `=` copies a reference. Nothing is copied.
+- Spread, `Object.assign`, `slice`, `Array.from`: new top level, shared
+  everything below.
+- `structuredClone`: full graph copy of data. No functions, DOM nodes, or
+  prototypes.
+- `JSON.parse(JSON.stringify())`: plain JSON data only; loses types
+  silently.
+- Updating immutably: copy just the path you change.
+
+The bug report at the top of this post is almost always a shallow copy
+doing exactly what it promises. The fix is either to copy deeper — or to
+stop mutating, so the depth of the copy stops mattering.

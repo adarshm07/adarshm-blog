@@ -1,0 +1,169 @@
+---
+title: "Tokenization: How LLMs Actually Read Text"
+publishedAt: "2026-09-28"
+summary: "Models don't see characters or words — they see tokens, produced by byte-pair encoding. How BPE learns its vocabulary, why it explains so many odd LLM behaviours, and what it means for cost and context limits."
+tags: "AI Engineering"
+---
+
+Ask a language model how many r's are in "strawberry" and older models
+would confidently get it wrong. That's not a reasoning failure so much as a
+perception one: the model never saw the letters. It saw something like
+`str` `aw` `berry` — three opaque integers — and had to recall how they're
+spelled.
+
+Every prompt, every [context window](/blog/context-windows-and-caching)
+limit and every bill is measured in these units. They're worth
+understanding.
+
+## Why not characters, or words?
+
+**Characters** give a tiny vocabulary and never hit an unknown symbol, but
+sequences get very long. Attention cost grows with sequence length, and the
+model has to spend capacity learning to assemble letters into meaning.
+
+**Words** give short sequences, but the vocabulary explodes — every
+inflection, name, typo, URL and new coinage needs its own entry, and
+anything missing becomes an "unknown" token that carries no information.
+
+**Subwords** split the difference: common words become one token, rare
+words are built from a few frequent pieces. Byte-pair encoding is the most
+widely used way to choose those pieces.
+
+## Byte-pair encoding
+
+BPE was originally a compression algorithm. As a tokenizer trainer, it's a
+simple loop:
+
+1. Start with every word split into single characters (or bytes).
+2. Count every adjacent pair of tokens across the corpus.
+3. Merge the most frequent pair into a new token everywhere.
+4. Repeat until the vocabulary reaches the size you want.
+
+<BPEVisualizer />
+
+```javascript
+function trainBPE(wordCounts, numMerges) {
+  // word → its current token sequence
+  const seqs = new Map(
+    Object.keys(wordCounts).map((w) => [w, [...w]])
+  );
+  const merges = [];
+
+  for (let m = 0; m < numMerges; m++) {
+    const pairs = new Map();
+    for (const [word, seq] of seqs) {
+      for (let i = 0; i < seq.length - 1; i++) {
+        const key = seq[i] + '\u0000' + seq[i + 1];
+        pairs.set(key, (pairs.get(key) ?? 0) + wordCounts[word]);
+      }
+    }
+    if (pairs.size === 0) break;
+
+    const [best] = [...pairs].reduce((a, b) => (b[1] > a[1] ? b : a));
+    const [left, right] = best.split('\u0000');
+    merges.push([left, right]);
+
+    for (const [word, seq] of seqs) {
+      seqs.set(word, applyMerge(seq, left, right));
+    }
+  }
+  return merges;
+}
+
+function applyMerge(seq, left, right) {
+  const out = [];
+  for (let i = 0; i < seq.length; i++) {
+    if (seq[i] === left && seq[i + 1] === right) {
+      out.push(left + right);
+      i++;
+    } else {
+      out.push(seq[i]);
+    }
+  }
+  return out;
+}
+```
+
+The output of training is the **ordered list of merges**. Encoding new text
+replays them in the same order:
+
+```javascript
+function encode(word, merges) {
+  let seq = [...word];
+  for (const [left, right] of merges) seq = applyMerge(seq, left, right);
+  return seq;
+}
+
+encode('lowest', merges);   // ['low', 'est']
+```
+
+(Production tokenizers don't literally loop over 100k merges per word —
+they repeatedly apply the highest-priority merge present, with caching —
+but the result is the same.)
+
+Nothing about English was built in. The algorithm found `est` and `low`
+because they're frequent, and a word it never saw decomposes into pieces it
+did.
+
+## Byte-level BPE
+
+Real tokenizers — GPT-2 onward, and most current models — run BPE over
+**UTF-8 bytes** rather than characters. The base vocabulary is exactly 256
+byte values, so *any* string, in any language, including emoji and binary
+junk, can be encoded. There is no unknown token, ever.
+
+Before BPE runs, text is usually **pre-tokenized** with a regex that splits
+on spaces, punctuation, and digit runs, so merges never cross those
+boundaries. That's why a leading space is typically part of a token:
+`" the"` and `"the"` are different tokens, and a prompt ending in a
+trailing space can shift what the model predicts next.
+
+## Why tokenization explains so many quirks
+
+**Spelling and counting letters.** A word is one or a few tokens; its
+letters aren't directly visible. Newer models learn spellings well, but
+the task is still recall, not reading.
+
+**Arithmetic.** Numbers split inconsistently — `1234` might be one token
+and `12345` two. Some tokenizers now split digits individually, or in
+fixed groups of three, specifically to make arithmetic more learnable.
+
+**Non-English text costs more.** Tokenizer training corpora are dominated
+by English, so English gets the most merges. The same sentence in Hindi,
+Thai or Amharic can take several times as many tokens — more cost, less
+effective context, and often weaker performance.
+
+**Code and whitespace.** Early tokenizers wasted a token per space of
+indentation. Modern ones include merges for runs of spaces and common code
+patterns.
+
+**Glitch tokens.** A string that was frequent in the tokenizer's corpus
+but rare in the model's training data gets its own token whose embedding
+was barely trained. Prompting with it can produce bizarre output.
+
+## Practical consequences
+
+- **Count tokens, not characters.** For English prose, one token is
+  roughly four characters or three-quarters of a word — but that ratio
+  swings widely for code, JSON, numbers and other languages. Use the
+  provider's token-counting endpoint or tokenizer library for anything
+  that matters, like staying under a context limit.
+- **Tokenizers are model-specific.** A count from one model's tokenizer
+  can be meaningfully off for another's. Budget with the tokenizer of the
+  model you're calling.
+- **Compact formats save money.** Verbose JSON with long keys, repeated
+  boilerplate, and pretty-printing all cost tokens. Stripping them from
+  large contexts is a real cost lever.
+- **Don't split words across prompt boundaries.** Ending a prompt midway
+  through a word forces an unusual tokenization, and the model's
+  continuation can get strange.
+
+## The bigger picture
+
+Tokenization is the one part of an LLM pipeline that isn't learned end to
+end. It's fixed before training starts, and the model spends its entire
+life seeing the world through it. There's active research into
+tokenizer-free models that read raw bytes with smarter architectures, but
+for now, the vocabulary a frequency-counting loop produced is the lens
+every model reads through — and many "why did the model do *that*?"
+questions have their answer at this layer.
