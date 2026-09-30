@@ -74,6 +74,8 @@ import { VectorClockVisualizer } from '@/app/components/vector-clock-visualizer'
 import { ReconciliationVisualizer } from '@/app/components/reconciliation-visualizer'
 import { CopyDepthVisualizer } from '@/app/components/copy-depth-visualizer'
 import { BPEVisualizer } from '@/app/components/bpe-visualizer'
+import { StackHeapVisualizer } from '@/app/components/stack-heap-visualizer'
+import { HiddenClassVisualizer } from '@/app/components/hidden-class-visualizer'
 import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
@@ -272,6 +274,8 @@ const components = {
   ReconciliationVisualizer,
   CopyDepthVisualizer,
   BPEVisualizer,
+  StackHeapVisualizer,
+  HiddenClassVisualizer,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {
