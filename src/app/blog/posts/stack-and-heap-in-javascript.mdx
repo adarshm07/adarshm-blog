@@ -1,0 +1,116 @@
+---
+title: "The Stack and the Heap: Where JavaScript Keeps Your Data"
+publishedAt: "2026-09-30"
+summary: "Local variables vanish when a function returns; objects outlive it. The two regions of memory behind that difference, why assigning an object never copies it, and what it means for closures, performance, and leaks."
+tags: "JavaScript"
+---
+
+JavaScript never asks you to allocate or free memory, so it's easy to go a
+long time without thinking about where your data lives. But a lot of
+everyday behaviour — why changing an object inside a function affects the
+caller, why a closure keeps a variable alive, why some code leaks — comes
+straight from one split: the **stack** and the **heap**.
+
+## Two kinds of memory
+
+**The stack** holds one *frame* per function call that is currently
+running. A frame stores that call's local variables and where to return
+to. Calling a function pushes a frame; returning pops it. It's the same
+stack you see in an error's stack trace, and the one described in
+[recursion and the call stack](/blog/recursion-and-the-call-stack).
+
+**The heap** is a large pool of memory for things whose lifetime can't be
+tied to a single function call: objects, arrays, functions, and most
+strings. Something on the heap stays until nothing refers to it any more.
+
+<StackHeapVisualizer />
+
+## What a variable actually holds
+
+For a small primitive — a number, a boolean, `undefined` — the variable's
+slot can hold the value itself. For an object, the slot holds a
+**reference**: effectively the object's address on the heap.
+
+```javascript
+function makeUser() {
+  const age = 36;                                  // value in the frame
+  const user = { name: 'Ada', tags: ['dev'] };     // object on the heap
+  return user;                                     // returns the reference
+}
+
+let u = makeUser();
+```
+
+When `makeUser` returns, its frame is discarded — `age` and `user` stop
+existing instantly, with no cleanup work at all. The object survives because
+the reference was copied into `u`.
+
+That one fact explains a family of behaviours:
+
+```javascript
+const a = { count: 1 };
+const b = a;          // copies the reference, not the object
+b.count = 2;
+a.count;              // 2 — one object, two names
+
+function bump(obj) { obj.count++; }
+bump(a);              // the function receives a copy of the reference
+a.count;              // 3
+```
+
+JavaScript always passes arguments **by value** — but when the value is a
+reference, the callee and the caller share the object it points to.
+Reassigning the parameter (`obj = {}`) changes only the local copy;
+mutating through it (`obj.count++`) changes the shared object. This is also
+why a spread copy only goes [one level deep](/blog/shallow-vs-deep-copy).
+
+## A simplified model
+
+Real engines are more nuanced than "primitives on the stack, objects on
+the heap":
+
+- **Strings** usually live on the heap even though they're primitives —
+  they can be large, and they're immutable, so sharing them is safe.
+- **Small integers** can be stored directly inside objects and arrays
+  rather than as separate heap values.
+- **Variables captured by a closure** can't live in a frame that's about to
+  be popped, so the engine moves them into a heap-allocated context
+  instead. That's how a [closure](/blog/closures-and-the-module-pattern)
+  keeps using a variable after its function has returned.
+- **Escape analysis** lets an optimizing compiler skip heap allocation for
+  an object that provably never leaves a function.
+
+The mental model still holds: frames are short-lived and automatic, heap
+objects live as long as they're reachable.
+
+## Why the difference matters
+
+**Speed.** Stack allocation is nearly free — move a pointer on entry and
+move it back on return. Heap allocation is cheap in modern engines too,
+but every heap object is something the
+[garbage collector](/blog/javascript-memory-management) later has to track.
+Creating millions of short-lived objects in a hot loop shows up as GC
+pauses.
+
+**Stack overflow.** The stack is small (typically around a megabyte), so
+deep recursion runs out of it long before the heap is under pressure:
+
+```javascript
+function forever(n) { return forever(n + 1); }
+forever(0);   // RangeError: Maximum call stack size exceeded
+```
+
+**Leaks.** Stack memory can't leak — frames are popped no matter what. Heap
+memory leaks whenever something reachable keeps pointing at data you no
+longer need: a global cache, an event listener, a timer's closure.
+
+## The takeaway
+
+- Local variables live in a frame and die when the function returns.
+- Objects live on the heap; variables hold references to them.
+- Assigning or passing an object shares it; it never copies it.
+- The stack cleans itself up; the heap relies on the garbage collector,
+  which frees an object only once nothing can reach it.
+
+Once you picture the two regions, "why did this change over there?" and
+"why is this still in memory?" usually answer themselves.

@@ -160,6 +160,7 @@ const PARTS: Part[] = [
         ),
         demo: <StackHeapVisualizer />,
         keyIdea: 'Local variables live and die with their function. Objects live on the heap until nothing references them.',
+        post: 'stack-and-heap-in-javascript',
       },
       {
         id: 'references',
@@ -244,6 +245,7 @@ const PARTS: Part[] = [
         ),
         demo: <HiddenClassVisualizer />,
         keyIdea: 'Build objects the same way, in the same order, and property access stays fast.',
+        post: 'hidden-classes-and-inline-caches',
       },
       {
         id: 'immutability',

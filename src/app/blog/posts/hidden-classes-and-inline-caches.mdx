@@ -1,0 +1,133 @@
+---
+title: "Hidden Classes and Inline Caches: Why Object Shape Matters"
+publishedAt: "2026-09-30"
+summary: "JavaScript objects look like hash maps, but engines don't treat them that way. How hidden shapes and inline caches turn property access into a single memory load — and the coding habits that quietly switch that optimization off."
+tags: "JavaScript"
+---
+
+In JavaScript you can add a property to any object at any time, delete it,
+or add a hundred more. That flexibility suggests every object is a hash map
+and every `obj.x` is a hash lookup. If that were true, JavaScript would be
+far slower than it is.
+
+Engines make property access fast with two cooperating tricks: **hidden
+classes** (called shapes, maps, or structures depending on the engine) and
+**inline caches**.
+
+## Hidden classes
+
+Instead of storing property names in every object, the engine keeps them
+in a separate, shared *shape* that describes the layout: which properties
+exist and which slot each one lives in. The object itself stores only its
+values, in order, plus a pointer to its shape.
+
+Shapes are built by **transitions**. An empty object starts with an empty
+shape. Adding `x` moves it to a shape that says "x is in slot 0". Adding
+`y` next moves it to "x in slot 0, y in slot 1". The engine remembers these
+transitions, so the next object that adds `x` then `y` walks the same path
+and ends up with the **same** shape.
+
+<HiddenClassVisualizer />
+
+```javascript
+function Point(x, y) {
+  this.x = x;   // empty → { x }
+  this.y = y;   // { x } → { x, y }
+}
+
+const p = new Point(1, 2);
+const q = new Point(3, 4);   // same transitions, same shape as p
+```
+
+A million `Point`s share one shape, and each object is little more than
+two values.
+
+## Inline caches
+
+Shapes make objects compact. Inline caches make reading them fast.
+
+Each place in your code that reads a property — each `o.x` — gets its own
+small cache. The first time it runs, the engine does the slow lookup: find
+the shape, find `x` in it, get the slot. Then it records the answer right
+there: *if the object has shape S2, x is in slot 0.*
+
+```javascript
+function getX(o) {
+  return o.x;   // this exact spot gets an inline cache
+}
+
+getX(p);   // slow lookup, then cache "S2 → slot 0"
+getX(q);   // shape is S2: check, load slot 0, done
+```
+
+After that, reading `o.x` is a single comparison and a memory load — close
+to what a statically typed language does with a struct. The
+[optimizing compiler](/learn#the-engine) goes further and bakes the cached
+layout directly into machine code.
+
+## Monomorphic, polymorphic, megamorphic
+
+An inline cache's speed depends on how many shapes it sees:
+
+<Table data={{
+  headers: ["State", "Shapes seen", "Cost"],
+  rows: [
+    ["Monomorphic", "1", "One check and a load — fastest"],
+    ["Polymorphic", "2 to about 4", "A few checks — still fast"],
+    ["Megamorphic", "Many", "Falls back to a generic lookup — slow"]
+  ]
+}} />
+
+The surprise is how easily you can create extra shapes without meaning to.
+Property **order** matters:
+
+```javascript
+const a = { x: 1, y: 2 };   // empty → { x } → { x, y }
+const b = { y: 2, x: 1 };   // empty → { y } → { y, x }   a different shape
+```
+
+Same properties, different order, different shape — so a function that
+receives both is already polymorphic.
+
+## Habits that keep shapes stable
+
+**Initialize every property in the constructor, in the same order.**
+Adding properties later, or only on some paths, forks the shape tree:
+
+```javascript
+// Two shapes, depending on the argument
+function User(name, admin) {
+  this.name = name;
+  if (admin) this.role = 'admin';
+}
+
+// One shape for everyone
+function User(name, admin) {
+  this.name = name;
+  this.role = admin ? 'admin' : null;
+}
+```
+
+**Avoid `delete`.** Removing a property usually drops the object out of
+the fast shape system and into slow "dictionary mode". Set the property to
+`undefined` or `null` instead, or build a new object without it.
+
+**Use a `Map` for dictionary-like data.** An object used as a lookup table
+with arbitrary, changing keys will never have a stable shape. That's what
+[`Map`](/blog/hash-maps-under-the-hood) is designed for.
+
+**Keep value types consistent.** Engines also track what kind of value
+each property holds. A field that is always a small integer can be stored
+and read more efficiently than one that is sometimes a string.
+
+## Keep it in proportion
+
+None of this is worth contorting readable code for. The engine is very
+good, and most code is nowhere near hot enough for shapes to matter.
+Classes and object literals written the normal way already produce stable
+shapes.
+
+It matters in the hot paths — a function called millions of times in a
+render loop, a parser, a game tick — and when a profiler points at
+property access. There, the rule is simple: **create objects the same way,
+in the same order, and don't reshape them afterwards.**
