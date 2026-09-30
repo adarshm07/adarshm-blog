@@ -81,6 +81,7 @@ array of steps and renders one frame per index. Data is deterministic — no
 | Route | File | Purpose |
 |-------|------|---------|
 | `/about` | `src/app/about/page.tsx` | Bio, personal stack, and how the site is built |
+| `/learn` | `src/app/learn/page.tsx` | "How JavaScript Works" — one guided page of chapters, each built on an existing visualizer; chapter `post` slugs are checked at build time |
 | `/tools` | `src/app/tools/` | System design practice (BYOK Claude), capacity calculator, regex backtracking checker |
 | `/dsa` | `src/app/dsa/page.tsx` | Ordered learning path from `curriculum.ts` |
 | `/dsa/patterns` | `src/app/dsa/patterns/` | Practice questions grouped by pattern, authored as MDX |
