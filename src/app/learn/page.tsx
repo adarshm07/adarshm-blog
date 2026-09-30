@@ -20,6 +20,10 @@ import { SignalTimeline } from '@/app/components/signal-timeline'
 import { WorkerThreadVisualizer } from '@/app/components/worker-thread-visualizer'
 import { ReconciliationVisualizer } from '@/app/components/reconciliation-visualizer'
 import { BackpressureVisualizer } from '@/app/components/backpressure-visualizer'
+import { StackHeapVisualizer } from '@/app/components/stack-heap-visualizer'
+import { GCMarkSweepVisualizer } from '@/app/components/gc-mark-sweep-visualizer'
+import { HiddenClassVisualizer } from '@/app/components/hidden-class-visualizer'
+import { CoercionVisualizer } from '@/app/components/coercion-visualizer'
 
 const TITLE = 'How JavaScript Works'
 const DESCRIPTION =
@@ -139,10 +143,24 @@ const PARTS: Part[] = [
     ],
   },
   {
-    id: 'values-and-objects',
-    title: 'Values and objects',
-    blurb: 'What a variable actually holds, and how objects share behaviour.',
+    id: 'memory',
+    title: 'Memory',
+    blurb: 'Where your data lives, and how the engine cleans up after you.',
     chapters: [
+      {
+        id: 'stack-and-heap',
+        title: 'The stack and the heap',
+        body: (
+          <>
+            A running program uses two kinds of memory. The <em>stack</em>{' '}
+            holds each function&apos;s local variables and disappears the
+            moment the function returns. The <em>heap</em> holds objects, which
+            live on for as long as something still points to them.
+          </>
+        ),
+        demo: <StackHeapVisualizer />,
+        keyIdea: 'Local variables live and die with their function. Objects live on the heap until nothing references them.',
+      },
       {
         id: 'references',
         title: 'Values, references, and copying',
@@ -159,6 +177,44 @@ const PARTS: Part[] = [
         post: 'shallow-vs-deep-copy',
       },
       {
+        id: 'garbage-collection',
+        title: 'Garbage collection',
+        body: (
+          <>
+            You never free memory yourself in JavaScript. Every so often the
+            garbage collector starts from the <em>roots</em> — globals and the
+            variables of running functions — marks everything it can reach,
+            and frees the rest. Objects that only point at each other still get
+            collected.
+          </>
+        ),
+        demo: <GCMarkSweepVisualizer />,
+        keyIdea: 'Reachable from a root = kept. Unreachable = freed. A memory leak is something you forgot is still reachable.',
+        post: 'javascript-memory-management',
+      },
+    ],
+  },
+  {
+    id: 'values-and-objects',
+    title: 'Values and objects',
+    blurb: 'How values convert, how objects share behaviour, and how the engine keeps them fast.',
+    chapters: [
+      {
+        id: 'type-coercion',
+        title: 'Type coercion',
+        body: (
+          <>
+            When an operator gets values of the wrong type, JavaScript quietly
+            converts them. The rules are consistent, but they combine into
+            famous surprises like <C>{"'5' + 1"}</C> being <C>{"'51'"}</C>.
+            Knowing the few rules — and using <C>===</C> — removes the mystery.
+          </>
+        ),
+        demo: <CoercionVisualizer />,
+        keyIdea: '+ with a string joins text; every other math operator converts to numbers; == converts, === never does.',
+        post: 'javascript-type-coercion',
+      },
+      {
         id: 'prototypes',
         title: 'Prototypes',
         body: (
@@ -173,6 +229,21 @@ const PARTS: Part[] = [
         demo: <PrototypeChainVisualizer />,
         keyIdea: 'Missing property? Walk up the chain. That walk is inheritance.',
         post: 'javascript-prototypes-explained',
+      },
+      {
+        id: 'hidden-classes',
+        title: 'Hidden classes and inline caches',
+        body: (
+          <>
+            Property lookups are fast because the engine quietly gives every
+            object a hidden <em>shape</em>: a layout that says which property
+            sits in which slot. Objects built the same way share a shape, and
+            each property access remembers the shapes it has seen, so it can
+            skip the lookup next time.
+          </>
+        ),
+        demo: <HiddenClassVisualizer />,
+        keyIdea: 'Build objects the same way, in the same order, and property access stays fast.',
       },
       {
         id: 'immutability',
