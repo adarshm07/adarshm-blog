@@ -19,7 +19,9 @@ export function Navbar({ search }: { search?: ReactNode }) {
   return (
     <nav className="mb-12 flex flex-wrap items-center gap-x-1 gap-y-2 border-b border-neutral-100 dark:border-neutral-800 pb-6">
       {Object.entries(navItems).map(([path, { name }]) => {
-        const isActive = pathname === path
+        // Sections stay highlighted on their sub-pages (/learn/web, /blog/some-post).
+        const isActive =
+          pathname === path || (path.startsWith('/') && path !== '/' && pathname.startsWith(`${path}/`))
         return (
           <Link
             key={path}
