@@ -1,0 +1,136 @@
+---
+title: "let, const, and var: Which One and Why"
+publishedAt: "2026-10-05"
+summary: "Three ways to declare a variable, and the differences that actually matter: block scope vs function scope, the loop bug that var causes, and what const does (and doesn't) protect. A beginner's guide with one simple rule at the end."
+tags: "JavaScript"
+---
+
+JavaScript has three keywords for declaring a variable. Older code is full
+of `var`; modern code uses `let` and `const`. They look interchangeable,
+but they behave differently in ways that cause real bugs.
+
+<VariableScopeVisualizer />
+
+## Scope: where a variable exists
+
+A variable's **scope** is the part of the code where it can be used.
+
+`let` and `const` are **block-scoped**: they exist only inside the nearest
+pair of curly braces `{ }` — an `if`, a loop, a function body.
+
+```javascript
+if (true) {
+  let message = 'hi';
+  console.log(message);   // 'hi'
+}
+console.log(message);     // ReferenceError: message is not defined
+```
+
+`var` is **function-scoped**: it ignores blocks and belongs to the whole
+function it's declared in (or the whole script, outside any function).
+
+```javascript
+if (true) {
+  var message = 'hi';
+}
+console.log(message);     // 'hi' — it leaked out of the block
+```
+
+Block scope is what you'd expect from almost any other language, and it
+keeps variables close to where they're used.
+
+## The loop bug
+
+This is the most famous `var` problem:
+
+```javascript
+for (var i = 0; i < 3; i++) {
+  setTimeout(() => console.log(i));
+}
+// 3, 3, 3
+```
+
+There's only one `i` for the whole loop. The timers run after the loop has
+finished, when that single `i` is 3 — so all three print 3.
+
+Switch to `let`, and each iteration gets its **own** `i`:
+
+```javascript
+for (let i = 0; i < 3; i++) {
+  setTimeout(() => console.log(i));
+}
+// 0, 1, 2
+```
+
+Each callback remembers the `i` from its own iteration — which is a
+[closure](/blog/closures-and-the-module-pattern) doing exactly what you'd
+want.
+
+## const: can't reassign, can still change
+
+`const` means the variable can't be pointed at a different value:
+
+```javascript
+const max = 10;
+max = 20;   // TypeError: Assignment to constant variable.
+```
+
+But it does **not** make the value itself unchangeable. If it holds an
+object or array, you can still modify what's inside:
+
+```javascript
+const user = { name: 'Ada' };
+user.name = 'Grace';   // fine — same object, changed contents
+user = {};             // TypeError — can't point user at a new object
+
+const list = [1, 2];
+list.push(3);          // fine
+```
+
+`const` protects the *variable*, not the *data*. (To freeze the data,
+there's `Object.freeze` — but you rarely need it.)
+
+## Using a variable too early
+
+With `var`, reading a variable before its declaration line gives
+`undefined` instead of an error:
+
+```javascript
+console.log(count);   // undefined
+var count = 5;
+```
+
+With `let` and `const`, it's an error — which is better, because using a
+variable before you've set it is almost always a mistake:
+
+```javascript
+console.log(total);   // ReferenceError: Cannot access 'total' before initialization
+let total = 5;
+```
+
+The full story of why is in
+[hoisting and the temporal dead zone](/blog/hoisting-and-the-temporal-dead-zone).
+
+## Side by side
+
+<Table data={{
+  headers: ["", "var", "let", "const"],
+  rows: [
+    ["Scope", "Function", "Block", "Block"],
+    ["Can reassign", "Yes", "Yes", "No"],
+    ["Can redeclare in same scope", "Yes", "No", "No"],
+    ["Use before declaration", "undefined", "Error", "Error"],
+    ["New copy per loop iteration", "No", "Yes", "Yes"]
+  ]
+}} />
+
+## The rule
+
+1. Use **`const`** by default.
+2. Use **`let`** when you genuinely need to reassign — a counter, a value
+   that changes in a loop.
+3. Don't use **`var`** in new code.
+
+Starting from `const` has a nice side effect: when you see `let`, it's a
+signal to the reader that this value is going to change, so it's worth
+watching.

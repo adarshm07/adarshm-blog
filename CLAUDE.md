@@ -72,6 +72,16 @@ play/pause/step/reset and a `StepNote` caption; a visualizer supplies an
 array of steps and renders one frame per index. Data is deterministic — no
 `Math.random()` at render time, or the server and client markup diverge.
 
+Two data-driven renderers cover common shapes, so a visualizer can be just a
+steps array: `SequenceDiagram` (messages between actors — HTTP, DNS, TLS) and
+`CodeTrace` (highlighted code plus name → value panels). Grouped wrappers live
+in `web-visualizers.tsx`, `typescript-visualizers.tsx` and
+`beginner-js-visualizers.tsx`.
+
+`global.css` scopes every `.prose` rule with `:not(.not-prose *)`, so
+visualizers (whose root is `not-prose`) are styled only by their own
+utilities. Keep that suffix on any new `.prose` rule.
+
 **MDX object props need `blockJS: false`.** Both MDX routes pass
 `options={{ blockJS: false }}` to `CustomMDX`; without it, object props like
 `<Table data={{...}}>` are stripped and arrive as `undefined`.
@@ -81,7 +91,8 @@ array of steps and renders one frame per index. Data is deterministic — no
 | Route | File | Purpose |
 |-------|------|---------|
 | `/about` | `src/app/about/page.tsx` | Bio, personal stack, and how the site is built |
-| `/learn` | `src/app/learn/page.tsx` | "How JavaScript Works" — one guided page of chapters, each built on an existing visualizer; chapter `post` slugs are checked at build time |
+| `/learn` | `src/app/learn/page.tsx` | Hub listing the guides |
+| `/learn/web`, `/learn/javascript` | `src/app/learn/{web,javascript}/page.tsx` | One-page animated guides. Content lives in `learn/guides/*.tsx` as `Guide` data; `learn/guide.tsx` renders it and checks every chapter's `post` slug at build time |
 | `/tools` | `src/app/tools/` | System design practice (BYOK Claude), capacity calculator, regex backtracking checker |
 | `/dsa` | `src/app/dsa/page.tsx` | Ordered learning path from `curriculum.ts` |
 | `/dsa/patterns` | `src/app/dsa/patterns/` | Practice questions grouped by pattern, authored as MDX |
@@ -104,8 +115,9 @@ it in a module variable.
 
 ### Local progress tracking
 
-`src/app/lib/dsa-progress.ts` owns both tracks: `dsa-path-progress`
-(articles read) and `dsa-patterns-progress` (questions solved). Values are
+`src/app/lib/dsa-progress.ts` owns all three tracks: `dsa-path-progress`
+(articles read), `dsa-patterns-progress` (questions solved), and
+`learn-progress` (guide chapters, keyed `guide/chapter`). Values are
 `slug → ISO date`; a v1 bare-array format is migrated on read, so never write
 the old shape back. Components subscribe with `onProgressChange`, which
 covers same-tab updates and cross-tab `storage` events.

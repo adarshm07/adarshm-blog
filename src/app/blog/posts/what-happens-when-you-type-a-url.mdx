@@ -1,0 +1,109 @@
+---
+title: "What Happens When You Type a URL and Press Enter"
+publishedAt: "2026-10-01"
+summary: "The classic question, answered step by step: URL parsing, DNS, TCP, TLS, HTTP, and rendering. A map of the whole trip, with links to a deeper post for each stop."
+tags: "Web"
+---
+
+It's one of the most common interview questions for a reason. Answering it
+well means knowing how a browser, the network, and a server cooperate —
+and almost every web performance or security problem lives at one of its
+steps.
+
+Here's the whole trip at a glance. Each step has its own post if you want
+to go deeper.
+
+<UrlJourneyVisualizer />
+
+## 1. The browser reads what you typed
+
+The address bar first decides whether you typed a URL or a search. Given
+`example.com`, it fills in the missing pieces to make a full URL:
+
+```
+https://example.com:443/
+└─┬─┘   └────┬────┘ └┬┘ └ path
+scheme     host    port
+```
+
+The **scheme** says which protocol to use, the **host** says which machine,
+and the **path** says which thing on that machine. The port is implied by
+the scheme: 443 for HTTPS, 80 for HTTP.
+
+Modern browsers also check a built-in list of sites that must always use
+HTTPS (the HSTS preload list), so typing `http://` for those sites never
+even leaves your machine unencrypted.
+
+## 2. Check the caches
+
+Before going to the network, the browser looks for shortcuts: a cached DNS
+answer, an already-open connection to the same server, or a cached copy of
+the page itself. Most "the second visit is faster" effects come from here.
+
+## 3. DNS: name → address
+
+Networks route by IP address, not by name. The browser asks DNS to turn
+`example.com` into something like `203.0.113.10`. That can involve a chain
+of servers — your resolver, a root server, the `.com` servers, and the
+domain's own nameservers — but the answer is cached aggressively at every
+level. → [How DNS works](/blog/dns-explained)
+
+## 4. Connect: TCP, then TLS
+
+With an address in hand, the browser opens a TCP connection, which gives
+both sides a reliable stream of bytes. Then a TLS handshake agrees on
+encryption keys and checks the server's certificate, proving it really is
+`example.com`. → [HTTPS and the TLS handshake](/blog/https-and-tls-handshake)
+
+Newer browsers often use HTTP/3, which runs over QUIC instead of TCP and
+folds the connection and encryption setup into a single round trip.
+
+## 5. Send an HTTP request
+
+Now the actual question: `GET /` — "give me the page at this path" — plus
+headers describing the browser, the languages it prefers, any cookies it
+holds for this site, and which formats it accepts.
+→ [HTTP requests and responses](/blog/http-requests-and-responses)
+
+## 6. The server responds
+
+The request might pass through a CDN, a load balancer, and finally an
+application server that runs code, queries a database, and builds the HTML.
+The response comes back with a status code (`200 OK`), headers, and the
+HTML body.
+
+## 7. Parse, fetch more, render
+
+The browser reads the HTML from top to bottom and builds the DOM. Every
+`<link rel="stylesheet">`, `<script>` and `<img>` it finds becomes another
+request — usually dozens of them, reusing the same connection. Then it
+calculates styles, lays out every box, paints pixels, and runs your
+JavaScript.
+→ [The browser rendering pipeline](/blog/rendering-pipeline-reflow-repaint)
+
+## Where the time goes
+
+<Table data={{
+  headers: ["Step", "Typical cost", "How sites make it faster"],
+  rows: [
+    ["DNS", "0–100 ms", "Caching (TTLs), fast resolvers"],
+    ["TCP + TLS", "1–2 round trips", "Connection reuse, TLS 1.3, HTTP/3"],
+    ["Request → first byte", "Server time + 1 round trip", "CDNs close to users, caching"],
+    ["Download", "Depends on size", "Compression, smaller bundles"],
+    ["Render", "Depends on the page", "Less blocking CSS/JS, fewer layout changes"]
+  ]
+}} />
+
+A **round trip** is the time for a message to reach the server and a reply
+to come back — tens of milliseconds within a continent, 150 ms or more
+across the world. Because several steps each cost a round trip, distance
+to the server matters more than bandwidth for most page loads. That's the
+whole reason CDNs exist: put a copy of the site near the user, and every
+round trip gets shorter.
+
+## The one-sentence version
+
+The browser turns the name into an address (DNS), opens a secure
+connection (TCP + TLS), asks for the page (HTTP), and turns the HTML it
+gets back into pixels (rendering) — and caching at every step is what
+makes it fast.

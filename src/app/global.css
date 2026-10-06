@@ -52,14 +52,14 @@ html {
   }
 }
 
-.prose h2,
-.prose h3 {
+.prose h2:not(.not-prose *),
+.prose h3:not(.not-prose *) {
   scroll-margin-top: 2rem;
 }
 
 /* ── Prose ───────────────────────────────────────────────── */
 
-.prose .anchor {
+.prose .anchor:not(.not-prose *) {
   @apply absolute invisible no-underline;
   margin-left: -1em;
   padding-right: 0.5em;
@@ -72,22 +72,22 @@ html {
   @apply visible;
 }
 
-.prose *:hover > .anchor {
+.prose *:hover > .anchor:not(.not-prose *) {
   @apply visible;
 }
 
-.prose .anchor:after {
+.prose .anchor:after:not(.not-prose *) {
   content: "#";
   color: #d1d5db;
 }
 
 @media (prefers-color-scheme: dark) {
-  .prose .anchor:after {
+  .prose .anchor:after:not(.not-prose *) {
     color: #374151;
   }
 }
 
-.prose a {
+.prose a:not(.not-prose *) {
   text-decoration: underline;
   text-underline-offset: 3px;
   text-decoration-thickness: 1px;
@@ -95,20 +95,20 @@ html {
   transition: text-decoration-color 0.15s;
 }
 
-.prose a:hover {
+.prose a:hover:not(.not-prose *) {
   text-decoration-color: #16a34a;
 }
 
 @media (prefers-color-scheme: dark) {
-  .prose a {
+  .prose a:not(.not-prose *) {
     text-decoration-color: #374151;
   }
-  .prose a:hover {
+  .prose a:hover:not(.not-prose *) {
     text-decoration-color: #22c55e;
   }
 }
 
-.prose pre {
+.prose pre:not(.not-prose *) {
   @apply rounded-xl overflow-x-auto py-4 px-5 text-sm my-6;
   background-color: #f6f8fa;
   border: 1px solid #d1d9e0;
@@ -116,26 +116,26 @@ html {
 }
 
 @media (prefers-color-scheme: dark) {
-  .prose pre {
+  .prose pre:not(.not-prose *) {
     background-color: #0d1117;
     border-color: #21262d;
   }
 }
 
-.prose code {
+.prose code:not(.not-prose *) {
   @apply px-1.5 py-0.5 rounded-md text-sm;
   background-color: #f3f4f6;
   color: #111827;
 }
 
 @media (prefers-color-scheme: dark) {
-  .prose code {
+  .prose code:not(.not-prose *) {
     background-color: #1f2937;
     color: #e5e7eb;
   }
 }
 
-.prose pre code {
+.prose pre code:not(.not-prose *) {
   @apply p-0 text-sm;
   background-color: transparent;
   color: #1f2328;
@@ -143,147 +143,151 @@ html {
 }
 
 @media (prefers-color-scheme: dark) {
-  .prose pre code {
+  .prose pre code:not(.not-prose *) {
     color: #e6edf3;
   }
 }
 
-.prose code span {
+.prose code span:not(.not-prose *) {
   @apply font-medium;
 }
 
-.prose img {
+.prose img:not(.not-prose *) {
   @apply m-0 rounded-xl;
 }
 
-.prose p {
+.prose p:not(.not-prose *) {
   @apply my-5 leading-relaxed;
   color: #374151;
 }
 
 @media (prefers-color-scheme: dark) {
-  .prose p {
+  .prose p:not(.not-prose *) {
     color: #d1d5db;
   }
 }
 
-.prose h1 {
+.prose h1:not(.not-prose *) {
   @apply text-3xl font-semibold tracking-tight mt-10 mb-4;
   color: #111827;
 }
 
-.prose h2 {
+.prose h2:not(.not-prose *) {
   @apply text-2xl font-semibold tracking-tight mt-10 mb-3;
   color: #111827;
 }
 
-.prose h3 {
+.prose h3:not(.not-prose *) {
   @apply text-xl font-semibold tracking-tight mt-8 mb-3;
   color: #111827;
 }
 
-.prose h4 {
+.prose h4:not(.not-prose *) {
   @apply text-lg font-semibold tracking-tight mt-6 mb-2;
   color: #111827;
 }
 
 @media (prefers-color-scheme: dark) {
-  .prose h1,
-  .prose h2,
-  .prose h3,
-  .prose h4 {
+  .prose h1:not(.not-prose *),
+  .prose h2:not(.not-prose *),
+  .prose h3:not(.not-prose *),
+  .prose h4:not(.not-prose *) {
     color: #f9fafb;
   }
 }
 
-.prose strong {
+.prose strong:not(.not-prose *) {
   @apply font-semibold;
   color: #111827;
 }
 
 @media (prefers-color-scheme: dark) {
-  .prose strong {
+  .prose strong:not(.not-prose *) {
     color: #f3f4f6;
   }
 }
 
-.prose ul {
+.prose ul:not(.not-prose *) {
   @apply list-disc pl-6 my-4 space-y-1;
 }
 
-.prose ol {
+.prose ol:not(.not-prose *) {
   @apply list-decimal pl-6 my-4 space-y-1;
 }
 
-.prose li {
+.prose li:not(.not-prose *) {
   color: #374151;
 }
 
 @media (prefers-color-scheme: dark) {
-  .prose li {
+  .prose li:not(.not-prose *) {
     color: #d1d5db;
   }
 }
 
-.prose blockquote {
+.prose blockquote:not(.not-prose *) {
   @apply border-l-4 pl-4 my-6 italic;
   border-color: #16a34a;
   color: #6b7280;
 }
 
 @media (prefers-color-scheme: dark) {
-  .prose blockquote {
+  .prose blockquote:not(.not-prose *) {
     color: #9ca3af;
   }
 }
 
-.prose hr {
+.prose hr:not(.not-prose *) {
   @apply my-8;
   border-color: #f3f4f6;
 }
 
 @media (prefers-color-scheme: dark) {
-  .prose hr {
+  .prose hr:not(.not-prose *) {
     border-color: #1f2937;
   }
 }
 
-.prose > :first-child {
+.prose > :first-child:not(.not-prose *) {
   margin-top: 1.25em !important;
   margin-bottom: 1.25em !important;
 }
 
-.prose table {
+.prose table:not(.not-prose *) {
   @apply my-6 text-sm;
 }
 
-.prose th,
-.prose td {
+.prose th:not(.not-prose *),
+.prose td:not(.not-prose *) {
   @apply border px-3 py-2 text-left;
   border-color: #e5e7eb;
 }
 
-.prose th {
+.prose th:not(.not-prose *) {
   @apply font-semibold;
   color: #111827;
 }
 
-.prose td {
+.prose td:not(.not-prose *) {
   color: #374151;
 }
 
 @media (prefers-color-scheme: dark) {
-  .prose th,
-  .prose td {
+  .prose th:not(.not-prose *),
+  .prose td:not(.not-prose *) {
     border-color: #1f2937;
   }
-  .prose th {
+  .prose th:not(.not-prose *) {
     color: #f9fafb;
   }
-  .prose td {
+  .prose td:not(.not-prose *) {
     color: #d1d5db;
   }
 }
+
+/* Every .prose rule above ends in :not(.not-prose *), so visualizers and other
+   not-prose blocks inside an article are styled only by their own utilities —
+   an unlayered .prose rule would otherwise beat any Tailwind utility. */
 
 /* ── Utilities ───────────────────────────────────────────── */
 

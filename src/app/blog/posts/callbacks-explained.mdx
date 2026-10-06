@@ -1,0 +1,137 @@
+---
+title: "Callbacks Explained: Passing Functions Around"
+publishedAt: "2026-10-05"
+summary: "A callback is a function you hand to another function to call later. Why JavaScript is built on them, the difference between synchronous and asynchronous callbacks, and how 'callback hell' led to promises and async/await."
+tags: "JavaScript"
+---
+
+In JavaScript, functions are values. You can store one in a variable, put
+it in an array, or — most usefully — pass it to another function. A
+function passed in to be called later is a **callback**.
+
+That one idea runs through all of JavaScript: array methods, event
+handlers, timers, and the history of how async code works.
+
+<CallbackVisualizer />
+
+## The basic idea
+
+```javascript
+function greet(name, done) {
+  console.log('Hi ' + name);
+  done();
+}
+
+greet('Ada', () => console.log('greeted'));
+// Hi Ada
+// greeted
+```
+
+`greet` doesn't know or care what `done` does. It just calls it at the
+right moment. The caller decides the behaviour; `greet` decides the timing.
+
+Note the difference between passing a function and calling one:
+
+```javascript
+greet('Ada', sayBye);     // passes the function — greet calls it later
+greet('Ada', sayBye());   // calls sayBye now and passes its *result*
+```
+
+Forgetting this is one of the most common beginner bugs.
+
+## Synchronous callbacks
+
+Many callbacks run immediately, while the function you passed them to is
+still running. You use these all the time:
+
+```javascript
+[3, 1, 2].forEach((n) => console.log(n));
+const doubled = [1, 2, 3].map((n) => n * 2);
+const sorted = [3, 1, 2].sort((a, b) => a - b);
+```
+
+`map` calls your function once per item, right now, and collects the
+results. Nothing is "later" here — the callback is just a way to plug your
+logic into someone else's loop. See
+[map, filter and reduce](/blog/array-methods-map-filter-reduce).
+
+## Asynchronous callbacks
+
+Other callbacks run **later**, after something finishes:
+
+```javascript
+console.log('A');
+setTimeout(() => console.log('B'), 1000);
+console.log('C');
+// A, C, … one second later … B
+```
+
+`setTimeout` doesn't pause your program. It registers the callback with the
+browser's timer and returns straight away, so `C` prints before `B`. When
+the timer fires, the callback is queued and run by the
+[event loop](/blog/javascript-event-loop).
+
+Event handlers work the same way:
+
+```javascript
+button.addEventListener('click', () => {
+  console.log('clicked');
+});
+```
+
+The callback runs every time the event happens — maybe never, maybe a
+hundred times.
+
+## Callback hell
+
+Before promises, every asynchronous step took a callback. Doing several
+steps in order meant nesting them:
+
+```javascript
+getUser(id, (err, user) => {
+  if (err) return handle(err);
+  getOrders(user, (err, orders) => {
+    if (err) return handle(err);
+    getDetails(orders[0], (err, details) => {
+      if (err) return handle(err);
+      render(details);
+    });
+  });
+});
+```
+
+This is the "pyramid of doom": hard to read, easy to forget an error check,
+and awkward to run steps in parallel. (The `(err, result)` shape is the
+"error-first" convention Node.js used for its callback APIs.)
+
+## How promises and async/await fixed it
+
+[Promises](/blog/javascript-promises-in-depth) represent a future result as
+a value you can chain, and `async`/`await` lets you write the same flow
+top to bottom:
+
+```javascript
+try {
+  const user = await getUser(id);
+  const orders = await getOrders(user);
+  const details = await getDetails(orders[0]);
+  render(details);
+} catch (err) {
+  handle(err);
+}
+```
+
+Under the hood, it's still callbacks — `await` registers the rest of the
+function as a callback to run when the promise settles. You just don't
+have to write them by hand any more.
+
+## The takeaway
+
+- A callback is a function passed to another function, to be called by it.
+- **Synchronous** callbacks run right away (`map`, `forEach`, `sort`).
+- **Asynchronous** callbacks run later (`setTimeout`, events, network
+  replies).
+- Pass the function (`fn`), don't call it (`fn()`).
+
+Once callbacks click, a lot of JavaScript stops looking like magic: it's
+mostly functions handing other functions to each other.

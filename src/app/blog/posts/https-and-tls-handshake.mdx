@@ -1,0 +1,101 @@
+---
+title: "HTTPS and the TLS Handshake, Explained Simply"
+publishedAt: "2026-10-01"
+summary: "Two strangers on an open network agree on a secret key that eavesdroppers can't learn, and one proves its identity to the other. What the TLS handshake does, what certificates prove, and what HTTPS does and doesn't hide."
+tags: "Web"
+---
+
+Everything you send over the internet passes through machines you don't
+control: your Wi-Fi router, your ISP, a dozen routers in between. Plain
+HTTP is readable — and changeable — by any of them. HTTPS fixes that by
+sending HTTP through a **TLS** connection, which gives you three
+guarantees:
+
+- **Confidentiality** — nobody in the middle can read the data.
+- **Integrity** — nobody in the middle can change it without being
+  detected.
+- **Authentication** — you're really talking to the site you asked for, not
+  an impostor.
+
+The **handshake** is the short conversation at the start of a connection
+that sets all three up.
+
+## The handshake, step by step
+
+<TlsHandshakeVisualizer />
+
+## Problem 1: agreeing on a key in public
+
+To encrypt anything, both sides need the same secret key. But they've
+never met, and everything they say can be overheard. How do you agree on a
+secret in public?
+
+The answer is a **Diffie–Hellman key exchange**. Each side picks a random
+private number, derives a public value from it, and sends only the public
+value. Each side then combines its own private number with the other's
+public value — and the math works out so both get the **same** result. An
+eavesdropper who saw both public values still can't compute it.
+
+The classic analogy is mixing paint: we agree on a common colour, each mix
+in a secret colour, and swap the mixtures. Each of us adds our secret
+colour again and ends up with the same final shade. Someone who saw only
+the mixtures can't separate them back out.
+
+Because fresh random numbers are used for every connection, recording
+today's traffic and stealing the server's key next year still doesn't let
+anyone decrypt it. That property is called **forward secrecy**, and TLS
+1.3 requires it.
+
+## Problem 2: knowing who you're talking to
+
+Encryption alone isn't enough. If an attacker sits in the middle, they can
+run a key exchange with you *and* one with the real server, and relay
+everything — both connections would be encrypted, just to the wrong party.
+
+**Certificates** stop this. A certificate says "this public key belongs to
+`example.com`", and it's signed by a **certificate authority** (CA) your
+browser or operating system already trusts. During the handshake the
+server sends its certificate and signs the handshake with the matching
+private key. Your browser checks:
+
+1. The certificate chains up to a trusted root CA.
+2. It covers the name you asked for.
+3. It hasn't expired or been revoked.
+4. The server's signature proves it holds the private key.
+
+An impostor can copy the certificate — it's public — but can't produce the
+signature without the private key. That's the padlock.
+
+## Why HTTPS is fast now
+
+Older TLS versions took two round trips before any data could flow. TLS 1.3
+takes one, and on a repeat visit it can resume with zero (sending data in
+the first message). HTTP/3 goes further by merging the transport and TLS
+handshakes into one. On most sites the encryption cost is now negligible —
+there is no performance reason left to serve plain HTTP.
+
+## What HTTPS does and doesn't hide
+
+<Table data={{
+  headers: ["Visible to the network", "Hidden by HTTPS"],
+  rows: [
+    ["The server's IP address", "The URL path and query string"],
+    ["Usually the hostname (sent in the ClientHello)", "Headers and cookies"],
+    ["When you connected and roughly how much data moved", "Form data, passwords, page content"]
+  ]
+}} />
+
+And HTTPS says nothing about whether a site is *trustworthy* — only that
+you're connected to the domain in the address bar. A phishing site at
+`paypa1-login.example` can have a perfectly valid certificate. The padlock
+means "private connection to this name", not "safe".
+
+## In practice
+
+- Use HTTPS everywhere; free certificates from Let's Encrypt and automatic
+  renewal make it effortless.
+- Send the `Strict-Transport-Security` header so browsers refuse to connect
+  over plain HTTP in future.
+- Mark cookies `Secure` so they're never sent unencrypted.
+- Never tell users to "click through" a certificate warning. That warning is
+  the system working.

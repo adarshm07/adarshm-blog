@@ -12,6 +12,8 @@
 
 export const PATH_KEY = 'dsa-path-progress'
 export const QUESTIONS_KEY = 'dsa-patterns-progress'
+/** /learn guide chapters, keyed `guide/chapter` (e.g. `web/dns`). */
+export const LEARN_KEY = 'learn-progress'
 const CHANGE_EVENT = 'dsa-progress-change'
 
 export type Progress = Record<string, string> // slug → ISO date (YYYY-MM-DD)
@@ -78,6 +80,7 @@ export function createProgressStore(key: string) {
 
 export const pathProgress = createProgressStore(PATH_KEY)
 export const questionProgress = createProgressStore(QUESTIONS_KEY)
+export const learnProgress = createProgressStore(LEARN_KEY)
 
 /** Subscribe to changes from this tab and from other tabs. */
 export function onProgressChange(handler: () => void) {

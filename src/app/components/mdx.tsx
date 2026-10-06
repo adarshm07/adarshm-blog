@@ -76,6 +76,32 @@ import { CopyDepthVisualizer } from '@/app/components/copy-depth-visualizer'
 import { BPEVisualizer } from '@/app/components/bpe-visualizer'
 import { StackHeapVisualizer } from '@/app/components/stack-heap-visualizer'
 import { HiddenClassVisualizer } from '@/app/components/hidden-class-visualizer'
+import {
+  ApiRequestVisualizer,
+  CookieSessionVisualizer,
+  CorsVisualizer,
+  DnsLookupVisualizer,
+  HttpCacheVisualizer,
+  HttpExchangeVisualizer,
+  TlsHandshakeVisualizer,
+  UrlJourneyVisualizer,
+} from '@/app/components/web-visualizers'
+import {
+  DiscriminatedUnionVisualizer,
+  GenericsVisualizer,
+  MappedTypeVisualizer,
+  NarrowingVisualizer,
+  StructuralTypingVisualizer,
+  TypeErasureVisualizer,
+} from '@/app/components/typescript-visualizers'
+import {
+  ArrayMethodsVisualizer,
+  CallbackVisualizer,
+  VariableScopeVisualizer,
+} from '@/app/components/beginner-js-visualizers'
+import { DomTreeVisualizer } from '@/app/components/dom-tree-visualizer'
+import { ArrayVsListVisualizer } from '@/app/components/array-vs-list-visualizer'
+import { HashFunctionVisualizer } from '@/app/components/hash-function-visualizer'
 import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
@@ -276,6 +302,26 @@ const components = {
   BPEVisualizer,
   StackHeapVisualizer,
   HiddenClassVisualizer,
+  UrlJourneyVisualizer,
+  DnsLookupVisualizer,
+  TlsHandshakeVisualizer,
+  HttpExchangeVisualizer,
+  CookieSessionVisualizer,
+  CorsVisualizer,
+  HttpCacheVisualizer,
+  ApiRequestVisualizer,
+  TypeErasureVisualizer,
+  NarrowingVisualizer,
+  GenericsVisualizer,
+  DiscriminatedUnionVisualizer,
+  MappedTypeVisualizer,
+  StructuralTypingVisualizer,
+  VariableScopeVisualizer,
+  CallbackVisualizer,
+  ArrayMethodsVisualizer,
+  DomTreeVisualizer,
+  ArrayVsListVisualizer,
+  HashFunctionVisualizer,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {

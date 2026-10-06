@@ -23,6 +23,8 @@ export default async function sitemap() {
     '/blog',
     '/about',
     '/learn',
+    '/learn/web',
+    '/learn/javascript',
     '/tools',
     '/tools/system-design',
     '/tools/capacity',

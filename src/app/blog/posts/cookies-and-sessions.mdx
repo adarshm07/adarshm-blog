@@ -1,0 +1,116 @@
+---
+title: "Cookies and Sessions: How Websites Remember You"
+publishedAt: "2026-10-02"
+summary: "HTTP forgets you after every request, yet you stay logged in for weeks. How Set-Cookie and session IDs work, what HttpOnly, Secure and SameSite protect against, and how sessions compare with tokens like JWTs."
+tags: "Web"
+---
+
+HTTP is **stateless**: each request is handled on its own, and the server
+keeps no memory of the last one. Yet you log in once and stay logged in
+across pages, tabs and days. The mechanism that bridges that gap is the
+cookie.
+
+## What a cookie is
+
+A cookie is a small piece of text a server asks the browser to store, and
+that the browser then sends back on every later request to the same site.
+The server sets it with a response header:
+
+```http
+Set-Cookie: sid=s_8f2c91; HttpOnly; Secure; SameSite=Lax; Max-Age=1209600
+```
+
+And from then on, the browser adds it to requests automatically:
+
+```http
+GET /account HTTP/1.1
+Host: shop.example
+Cookie: sid=s_8f2c91
+```
+
+Your JavaScript doesn't need to do anything. That automatic sending is what
+makes cookies convenient — and, as we'll see, what makes them a security
+topic.
+
+## Sessions: a key, not the data
+
+The usual pattern for login is a **session**:
+
+<CookieSessionVisualizer />
+
+1. You log in. The server checks your password.
+2. It creates a session record on the server — "session `s_8f2c91`
+   belongs to user 42" — in a database or a store like Redis.
+3. It sends only the random session ID to the browser as a cookie.
+4. Every later request carries the ID; the server looks it up to find out
+   who you are.
+
+The cookie holds no personal data — just an unguessable key. Logging out
+deletes the record on the server, which instantly makes the key useless,
+wherever it might have been copied.
+
+## The attributes that matter
+
+<Table data={{
+  headers: ["Attribute", "What it does", "Protects against"],
+  rows: [
+    ["HttpOnly", "JavaScript can't read the cookie", "Stealing sessions via injected scripts (XSS)"],
+    ["Secure", "Only sent over HTTPS", "Eavesdropping on unencrypted connections"],
+    ["SameSite=Lax", "Not sent on most cross-site requests", "Other sites triggering actions as you (CSRF)"],
+    ["Max-Age / Expires", "When the browser deletes it", "Sessions living forever"],
+    ["Domain / Path", "Which URLs it's sent to", "Leaking it to parts of the site that don't need it"]
+  ]
+}} />
+
+For a session cookie, `HttpOnly; Secure; SameSite=Lax` is the sensible
+default. Browsers now treat cookies without a `SameSite` attribute as
+`Lax` anyway.
+
+**CSRF in one paragraph:** because cookies are sent automatically, a
+malicious page could make your browser submit a form to your bank, and the
+bank would see your valid cookie. `SameSite` stops the browser attaching
+the cookie when the request starts on another site. For extra safety,
+sensitive actions also check a CSRF token or the `Origin` header.
+
+## Sessions vs tokens
+
+The common alternative is a **token** such as a JWT: instead of a key to
+server-side data, the client holds a signed blob that *contains* the
+user's identity, and the server verifies the signature instead of looking
+anything up.
+
+<Table data={{
+  headers: ["", "Server session + cookie", "Signed token (e.g. JWT)"],
+  rows: [
+    ["Where state lives", "On the server", "Inside the token"],
+    ["Lookup per request", "Yes (fast, cacheable)", "No — verify a signature"],
+    ["Log out / revoke", "Delete the session — instant", "Hard until it expires, unless you keep a deny list"],
+    ["Good fit", "Websites, same-site apps", "Service-to-service calls, APIs used by many clients"]
+  ]
+}} />
+
+For a normal website with a login, server sessions in an `HttpOnly` cookie
+are simpler and safer. Tokens shine when many independent services need to
+verify identity without sharing a session store. Note that a token can be
+*stored* in a cookie too — the two ideas aren't exclusive.
+
+## Other things cookies are used for
+
+- **Preferences** — theme, language, a dismissed banner.
+- **Shopping carts** for visitors who haven't logged in.
+- **Third-party tracking** — cookies set by a different domain embedded on
+  many sites. Browsers increasingly block these by default, which is why
+  you see fewer of them over time.
+
+## Pitfalls
+
+- Never put secrets or personal data directly in a cookie value; store a
+  random ID and keep the data on the server.
+- Generate session IDs with a cryptographically secure random generator,
+  and issue a **new** one after login so an attacker can't plant a known ID
+  beforehand.
+- Expire sessions — both an idle timeout and an absolute maximum.
+- Cookies are limited to about 4 KB each; they're for keys, not data.
+
+The short version: the server remembers, the cookie only reminds it which
+memory is yours.

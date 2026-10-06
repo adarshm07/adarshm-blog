@@ -1,0 +1,128 @@
+---
+title: "TypeScript Generics: Functions That Work for Any Type"
+publishedAt: "2026-10-04"
+summary: "A generic is a type parameter — a placeholder for a type, filled in at each call. How generics keep reusable code type-safe, how inference fills them in, and how constraints with extends limit them to types that make sense."
+tags: "TypeScript"
+---
+
+Say you want a function that returns the first item of an array. Without
+generics, you have two bad options:
+
+```typescript
+function firstNumber(items: number[]): number | undefined { … }
+function firstString(items: string[]): string | undefined { … }
+// …one per type, forever
+
+function first(items: any[]): any { … }
+// …one function, but every caller loses its types
+```
+
+Generics give you the third option: one function that works for every
+type *and* keeps track of which one it was given.
+
+## A type parameter
+
+```typescript
+function first<T>(items: T[]): T | undefined {
+  return items[0];
+}
+```
+
+`<T>` declares a **type parameter**. It works like a function parameter,
+but for types: a placeholder that gets filled in each time the function is
+called. This signature reads as "for any type T, take an array of T and
+return a T or undefined."
+
+<GenericsVisualizer />
+
+You almost never fill in T yourself — TypeScript infers it from the
+arguments:
+
+```typescript
+const n = first([1, 2, 3]);        // T = number   → n: number | undefined
+const s = first(['a', 'b']);       // T = string   → s: string | undefined
+const u = first([{ id: 1 }]);      // T = { id: number }
+```
+
+You can pass it explicitly when inference can't work it out, such as an
+empty array: `first<string>([])`.
+
+## Constraints: `extends`
+
+Inside `first`, TypeScript knows nothing about T, so you can't do anything
+type-specific with it. When you need to, add a **constraint**:
+
+```typescript
+function longest<T extends { length: number }>(a: T, b: T): T {
+  return a.length >= b.length ? a : b;
+}
+
+longest([1], [1, 2]);   // T = number[]  ✓
+longest('hi', 'hey');   // strings have length ✓
+longest(10, 20);        // error: Argument of type 'number' is not assignable
+                        //        to parameter of type '{ length: number; }'.
+```
+
+`T extends { length: number }` means "T can be any type, as long as it has
+a numeric `length`". Now `a.length` is allowed inside, and callers can't
+pass something without one.
+
+## `keyof`: generics that relate two parameters
+
+Generics shine when one parameter's type depends on another's:
+
+```typescript
+function getProp<T, K extends keyof T>(obj: T, key: K): T[K] {
+  return obj[key];
+}
+
+const user = { id: 1, name: 'Ada' };
+getProp(user, 'name');    // string
+getProp(user, 'id');      // number
+getProp(user, 'email');   // error — 'email' isn't a key of user
+```
+
+`keyof T` is the union of T's property names, and `T[K]` is the type of
+the property at key K. The return type follows whichever key you pass.
+
+## Generic types, not just functions
+
+Types and classes take parameters too, and you already use them:
+
+```typescript
+const ids: Array<number> = [1, 2];          // same as number[]
+const cache = new Map<string, User>();      // keys are strings, values Users
+const pending: Promise<User> = fetchUser(); // resolves to a User
+```
+
+And you can write your own:
+
+```typescript
+type ApiResponse<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: string };
+
+async function getUser(id: number): Promise<ApiResponse<User>> { … }
+```
+
+One `ApiResponse` definition now describes the response for users, orders
+and everything else, each with the right `data` type.
+
+## When not to use a generic
+
+A type parameter that appears only once isn't doing anything:
+
+```typescript
+function log<T>(value: T): void { console.log(value); }   // T adds nothing
+function log(value: unknown): void { console.log(value); } // clearer
+```
+
+The rule of thumb: a generic earns its place when it **connects** two
+things — an input to an output, or one parameter to another. If it doesn't
+relate anything, use a plain type.
+
+## The takeaway
+
+Generics let you write code once and keep exact types for every caller.
+Read `<T>` as "some type, decided by the caller", `extends` as "but only
+types that have these features", and let inference do the rest.

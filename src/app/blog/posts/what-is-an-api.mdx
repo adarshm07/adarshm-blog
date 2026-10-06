@@ -1,0 +1,132 @@
+---
+title: "What Is an API? A Beginner's Guide to REST and JSON"
+publishedAt: "2026-10-03"
+summary: "An API is a menu of requests one program agrees to answer for another. What that means on the web, how REST maps resources to URLs and actions to HTTP methods, what JSON looks like, and how to call an API from JavaScript."
+tags: "Web"
+---
+
+Your weather app doesn't measure the weather. Your shopping app doesn't
+store prices on your phone. They ask another program — over the network —
+and get an answer back. The agreed way of asking is called an **API**:
+an *Application Programming Interface*.
+
+## The restaurant analogy
+
+You don't walk into a restaurant's kitchen. You read a menu, give your
+order to a waiter, and get food back. You don't need to know how the
+kitchen works, and the kitchen can change its ovens without telling you.
+
+An API is the menu and the waiter. It lists what you can ask for, in what
+format, and what you'll get back — and it hides everything else.
+
+## A web API in action
+
+Most APIs you'll use are **web APIs**: you send an HTTP request to a URL,
+and you get data back, usually as JSON.
+
+<ApiRequestVisualizer />
+
+```javascript
+const res = await fetch('https://api.example/users/42', {
+  headers: { Authorization: `Bearer ${token}` },
+});
+
+if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+
+const user = await res.json();
+console.log(user.name);   // "Ada"
+```
+
+That's the whole interaction: a URL, a method, maybe a token, and a JSON
+response.
+
+## REST: resources and methods
+
+**REST** is the most common style for web APIs. Its core idea is simple:
+things are **resources** with URLs, and you act on them with HTTP methods.
+
+<Table data={{
+  headers: ["Request", "Means"],
+  rows: [
+    ["GET /users", "List users"],
+    ["GET /users/42", "Get user 42"],
+    ["POST /users", "Create a user (data in the body)"],
+    ["PATCH /users/42", "Update part of user 42"],
+    ["DELETE /users/42", "Delete user 42"]
+  ]
+}} />
+
+URLs name *things* (nouns), and methods say what to *do*. Once you've seen
+one REST API, you can usually guess how the next one works.
+
+The response's status code tells you how it went — 200 OK, 201 Created,
+400 for a bad request, 401 if you're not logged in, 404 if it doesn't
+exist, 500 if the server broke. See
+[HTTP requests and responses](/blog/http-requests-and-responses) for the
+full picture.
+
+## JSON
+
+JSON (JavaScript Object Notation) is the format most APIs speak. It looks
+almost exactly like a JavaScript object:
+
+```json
+{
+  "id": 42,
+  "name": "Ada",
+  "roles": ["admin", "editor"],
+  "active": true,
+  "manager": null
+}
+```
+
+The differences from JavaScript: keys must be in double quotes, strings
+use double quotes, and there are no functions, comments, dates or
+`undefined` — only strings, numbers, booleans, `null`, arrays and objects.
+`JSON.parse` turns JSON text into a JavaScript value; `JSON.stringify` does
+the reverse.
+
+## Sending data
+
+To create or update something, you send JSON in the request body and say
+so in a header:
+
+```javascript
+await fetch('https://api.example/users', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ name: 'Grace' }),
+});
+```
+
+## Authentication
+
+Most APIs need to know who's calling:
+
+- **API keys** — a secret string identifying your app. Keep them on your
+  server; anything shipped to a browser is public.
+- **Bearer tokens** — sent as `Authorization: Bearer <token>`, often
+  obtained by logging in (OAuth is the standard way to get one on a user's
+  behalf).
+- **Cookies** — for an API used by its own website.
+
+## Why APIs matter
+
+The API is a **contract**. As long as it keeps answering the same requests
+the same way, the server can switch databases, rewrite its code, or move
+to another cloud, and every app using it keeps working. That's what lets
+one backend serve a website, a phone app, and other companies' software at
+the same time.
+
+## Beyond REST
+
+- **GraphQL** — one endpoint where the client describes exactly which
+  fields it wants.
+- **gRPC** — compact binary messages, popular between internal services.
+- **Webhooks** — the API calls *you* when something happens, instead of you
+  asking repeatedly.
+- **WebSockets** — a long-lived two-way connection for real-time data
+  ([compared here](/blog/websockets-sse-polling)).
+
+But almost all of them build on the same idea you've seen here: a
+well-defined request, a predictable response, and a hidden kitchen.

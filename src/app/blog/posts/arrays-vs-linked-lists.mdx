@@ -1,0 +1,118 @@
+---
+title: "Arrays vs Linked Lists: How Data Sits in Memory"
+publishedAt: "2026-10-05"
+summary: "The two most basic ways to store a sequence. Arrays keep items side by side for instant access by position; linked lists chain scattered nodes for cheap inserts. What each operation costs, and why arrays win most of the time anyway."
+tags: "DSA"
+---
+
+Almost every program stores sequences of things: messages, scores, rows,
+pixels. There are two fundamental ways to lay a sequence out in memory,
+and nearly every other data structure is built from one or both of them.
+
+<ArrayVsListVisualizer />
+
+## Arrays: one continuous block
+
+An array stores its items **next to each other** in one block of memory.
+If the array starts at address 100 and each item takes 4 bytes, item 0 is
+at 100, item 1 at 104, item 2 at 108, and so on.
+
+That makes **reading by position instant**. To find item `i`, the computer
+does one calculation:
+
+```
+address of item i = start + i × item size
+```
+
+No searching, no matter how long the array is. That's O(1) — constant
+time — and it's the array's superpower.
+
+The downside shows up when you **insert or remove in the middle or at the
+front**. The items are packed tightly, so to make room at position 0,
+every item has to shift one place to the right:
+
+```javascript
+const arr = ['A', 'B', 'C', 'D'];
+arr.unshift('X');   // X A B C D — every item moved
+```
+
+That's O(n): the work grows with the length of the array.
+
+## Linked lists: scattered nodes with pointers
+
+A linked list stores each item in a separate **node**, which can live
+anywhere in memory. Each node holds its value and a pointer to the next
+node:
+
+```javascript
+class Node {
+  constructor(value, next = null) {
+    this.value = value;
+    this.next = next;
+  }
+}
+
+// A → B → C
+const list = new Node('A', new Node('B', new Node('C')));
+```
+
+**Inserting at the front is instant**: make a node and point it at the old
+first node. Nothing else moves.
+
+```javascript
+const newHead = new Node('X', list);   // X → A → B → C
+```
+
+But **reading by position is slow**. There's no formula for where node 3
+is — the only way to get there is to start at the head and follow pointers
+one at a time. That's O(n).
+
+## What each operation costs
+
+<Table data={{
+  headers: ["Operation", "Array", "Linked list"],
+  rows: [
+    ["Read item at index i", "O(1)", "O(n) — walk from the head"],
+    ["Insert/remove at the front", "O(n) — shift everything", "O(1)"],
+    ["Insert/remove at the end", "O(1) on average", "O(1) with a tail pointer"],
+    ["Insert/remove in the middle", "O(n) — shift the rest", "O(1) once you're there (but getting there is O(n))"],
+    ["Search for a value", "O(n)", "O(n)"],
+    ["Extra memory", "None per item", "A pointer per item"]
+  ]
+}} />
+
+## Why arrays win in practice
+
+On paper, linked lists look better for lots of inserts. In practice,
+arrays are almost always faster, for a reason Big-O doesn't show: **the
+CPU cache**.
+
+When the CPU reads one array item, it loads a whole chunk of neighbouring
+memory along with it. The next few items are already waiting in the fast
+cache. Linked list nodes are scattered, so following each pointer can mean
+a slow trip to main memory. Looping over a million-item array can be many
+times faster than looping over a million-node list.
+
+That's why JavaScript arrays, Python lists, Java's `ArrayList` and C++'s
+`vector` are all array-based, and why "use an array" is the right default.
+
+## Where linked lists still shine
+
+- When you hold a reference to a node and need to insert or remove right
+  there in O(1) — the trick behind an
+  [LRU cache](/blog/lru-cache-from-scratch).
+- Queues where you only add at one end and remove at the other.
+- Low-level systems code, like an operating system's lists of free memory
+  blocks.
+
+And they're a classic interview topic, because pointer manipulation tests
+careful thinking — see
+[linked lists and cycle detection](/blog/linked-lists-and-cycle-detection).
+
+## The takeaway
+
+An **array** is a row of numbered boxes: jump to any box instantly, but
+inserting means shuffling boxes along. A **linked list** is a treasure
+hunt: each clue points to the next, so adding a clue is easy, but finding
+the tenth one means following nine. Default to arrays; reach for a linked
+list when you need cheap inserts at a position you already hold.

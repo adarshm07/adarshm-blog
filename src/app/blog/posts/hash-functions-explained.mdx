@@ -1,0 +1,132 @@
+---
+title: "Hash Functions Explained: Turning Anything Into a Number"
+publishedAt: "2026-10-06"
+summary: "A hash function maps any input to a fixed-size number, the same input always to the same number. How a simple one works, why collisions are unavoidable, what makes a hash good, and how the same idea powers hash maps, caches and passwords."
+tags: "DSA"
+---
+
+How does a JavaScript object, a `Map`, or a Python dictionary find a value
+by its key instantly, even with a million keys? It doesn't search. It
+computes where the value must be, using a **hash function**.
+
+## What a hash function does
+
+A hash function takes any input — a word, a number, a whole file — and
+turns it into a number, called the **hash**. It has one absolute rule:
+
+> **The same input always produces the same hash.**
+
+And one strong wish:
+
+> **Different inputs should produce different-looking hashes**, spread
+> evenly across all the possible values.
+
+A hash map uses that number to pick one of a fixed number of **buckets**,
+usually with the remainder operator: `bucket = hash % numberOfBuckets`. To
+look a key up later, it hashes the key again, goes straight to that bucket,
+and checks the few items there.
+
+<HashFunctionVisualizer />
+
+## A first attempt: add up the letters
+
+Every character has a numeric code: `'c'` is 99, `'a'` is 97, `'t'` is 116.
+The simplest possible hash adds them up:
+
+```javascript
+function sumHash(str) {
+  let total = 0;
+  for (const ch of str) total += ch.charCodeAt(0);
+  return total;
+}
+
+sumHash('cat');   // 312
+sumHash('act');   // 312 — same letters, same hash
+```
+
+It follows the rule — same input, same output — but it's a bad hash.
+Every anagram collides, and short words all land in a narrow range of
+numbers.
+
+## A better recipe: let position matter
+
+Multiply the running total by a number (31 is traditional) before adding
+each character:
+
+```javascript
+function hash(str) {
+  let h = 0;
+  for (const ch of str) {
+    h = (h * 31 + ch.charCodeAt(0)) >>> 0;   // >>> 0 keeps it a 32-bit unsigned int
+  }
+  return h;
+}
+
+hash('cat');   // 98262
+hash('act');   // 96402
+hash('dog');   // 99644
+```
+
+Now the order of the characters changes the result, and similar words
+spread out. This is essentially how Java computes `String.hashCode`.
+
+## Collisions are unavoidable
+
+There are infinitely many possible strings, but only a fixed number of
+hashes — and far fewer buckets. So some different keys *must* end up in
+the same bucket. That's a **collision**, and every hash map handles them —
+usually by keeping a small list in each bucket, or by probing for the next
+free slot. See [hash maps under the hood](/blog/hash-maps-under-the-hood)
+for both approaches.
+
+A good hash function can't prevent collisions; it makes them **rare and
+evenly spread**, so no bucket gets crowded. That's what keeps lookups at
+O(1) on average.
+
+## What makes a hash function good
+
+- **Deterministic** — same input, same output, every time.
+- **Fast** — it runs on every lookup.
+- **Uniform** — outputs spread evenly across the range.
+- **Sensitive** — small changes to the input change the output a lot.
+
+## Two families of hash functions
+
+The same idea is used for very different jobs, with different priorities:
+
+<Table data={{
+  headers: ["", "Hash-table hashes", "Cryptographic hashes"],
+  rows: [
+    ["Examples", "Java's hashCode, MurmurHash, xxHash", "SHA-256, SHA-3, BLAKE3"],
+    ["Priority", "Speed and even spread", "Impossible to reverse or forge"],
+    ["Output size", "32–64 bits", "256 bits or more"],
+    ["Used for", "Hash maps, sets, Bloom filters", "File checksums, signatures, Git commit IDs"]
+  ]
+}} />
+
+A cryptographic hash is designed so that nobody can find an input that
+produces a given hash, or two inputs with the same hash. Your `cat` hash is
+trivially reversible; SHA-256 is not.
+
+**Passwords** need yet another kind: deliberately *slow* hashes like
+bcrypt, scrypt or Argon2, so that an attacker who steals the stored hashes
+can't try billions of guesses per second.
+
+## Where hashing shows up
+
+- **Hash maps and sets** — every object, `Map`, `Set` and dictionary.
+- **Caches** — hashing a request or file content to find a stored result.
+- **Checksums** — checking a download wasn't corrupted.
+- **Git** — every commit and file is identified by a hash of its contents.
+- **Load balancing** — [consistent hashing](/blog/consistent-hashing) picks
+  a server for each key.
+- **Bloom filters** — several hashes per item to test set membership in
+  very little memory ([explained here](/blog/bloom-filters-explained)).
+
+## The takeaway
+
+A hash function is a recipe that turns any input into a number, always the
+same number for the same input. Spread those numbers evenly, take the
+remainder by the number of buckets, and you can find anything in a single
+step — which is the trick behind one of the most-used data structures in
+programming.

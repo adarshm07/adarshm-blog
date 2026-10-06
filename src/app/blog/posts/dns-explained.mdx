@@ -1,0 +1,103 @@
+---
+title: "DNS: How a Name Becomes an Address"
+publishedAt: "2026-10-01"
+summary: "No single server knows every domain. How resolvers walk from the root to the .com servers to a domain's own nameservers, what A, CNAME and MX records are, and why TTLs decide how fast a DNS change takes effect."
+tags: "Web"
+---
+
+Every connection on the internet is made to an IP address. People don't
+remember IP addresses; they remember names. DNS — the Domain Name System —
+is the distributed database that translates one into the other, billions of
+times a second.
+
+## No one server knows everything
+
+DNS is split by the dots in a name, read right to left. For
+`www.example.com`:
+
+- The **root** servers know who runs each top-level domain (`.com`, `.org`,
+  `.in`, …).
+- The **.com** servers know which nameservers are responsible for
+  `example.com`.
+- **example.com's own nameservers** — the *authoritative* ones — hold its
+  actual records.
+
+Each level only needs to know about the level directly below it. That's
+what lets the system scale to hundreds of millions of domains with no
+central list.
+
+## A lookup, step by step
+
+<DnsLookupVisualizer />
+
+Your device doesn't do this walk itself. It asks a **recursive resolver** —
+usually run by your ISP, or a public one like `1.1.1.1` or `8.8.8.8` — and
+the resolver does the legwork: root, then `.com`, then the authoritative
+server, following each referral until it gets a real answer.
+
+You can watch the same walk with `dig`:
+
+```bash
+dig +trace example.com
+```
+
+## Records: what DNS actually stores
+
+A domain's nameservers hold a set of **records**, each with a type:
+
+<Table data={{
+  headers: ["Type", "Maps", "Example"],
+  rows: [
+    ["A", "Name → IPv4 address", "example.com → 203.0.113.10"],
+    ["AAAA", "Name → IPv6 address", "example.com → 2001:db8::10"],
+    ["CNAME", "Name → another name (an alias)", "www.example.com → example.com"],
+    ["MX", "Domain → mail servers", "example.com → mail.example.com"],
+    ["TXT", "Domain → arbitrary text", "Domain ownership checks, SPF/DKIM email policies"],
+    ["NS", "Domain → its nameservers", "example.com → ns1.dns-host.example"]
+  ]
+}} />
+
+A CNAME is a pointer: looking up `www.example.com` returns "go look up
+`example.com` instead", and the resolver follows it. It's how you point a
+domain at a hosting provider without hard-coding their IP addresses.
+
+## Caching and TTLs
+
+Doing three network hops for every lookup would be slow, so every answer
+carries a **TTL** — time to live, in seconds — and every layer caches it
+for that long: the resolver, your operating system, and your browser.
+
+That's why DNS is fast in practice: popular names are almost always already
+cached by your resolver. It's also why DNS changes "take time to
+propagate". Nothing is actually propagating — old answers are sitting in
+caches around the world until their TTLs run out.
+
+The practical trick: before changing a record (say, moving to a new
+server), lower its TTL to a few minutes a day ahead. Make the change, and
+caches pick it up within minutes. Raise the TTL again once you're happy.
+
+## Common things that go wrong
+
+**"It works for me but not for them."** Different resolvers have different
+cached answers. Check with `dig @1.1.1.1 example.com` and
+`dig @8.8.8.8 example.com` to see what each one currently returns.
+
+**A CNAME at the root of a domain.** The DNS rules don't allow a CNAME on
+`example.com` itself alongside its other records. Many DNS providers offer
+an "ALIAS" or "flattened CNAME" to get the same effect.
+
+**Negative caching.** If you query a name before creating it, the "doesn't
+exist" answer is cached too, for a time set by the zone's settings.
+
+## Privacy
+
+Classic DNS queries travel unencrypted, so anyone on the network path can
+see which names you look up. DNS over HTTPS (DoH) and DNS over TLS (DoT)
+encrypt the conversation between your device and the resolver; most
+browsers now support DoH.
+
+## In one sentence
+
+DNS turns names into addresses by asking a chain of servers — root, then
+top-level domain, then the domain's own nameservers — and caches every
+answer for its TTL so that almost no lookup has to make the full trip.

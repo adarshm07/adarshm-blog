@@ -1,0 +1,141 @@
+---
+title: "The DOM Explained: How JavaScript Sees a Web Page"
+publishedAt: "2026-10-06"
+summary: "The browser turns your HTML into a tree of objects, and that tree — not the HTML file — is what's on screen and what JavaScript changes. How to find, change, create and remove elements, and how events travel through the tree."
+tags: "JavaScript"
+---
+
+When people say JavaScript "changes the page", what it actually changes is
+the **DOM** — the Document Object Model. Understanding what the DOM is
+makes the rest of front-end development much easier to follow.
+
+## HTML is text; the DOM is a tree
+
+Your HTML file is just text. When the browser loads it, it reads that text
+and builds a **tree of objects** in memory, one object per element:
+
+<DomTreeVisualizer />
+
+```html
+<body>
+  <h1>Groceries</h1>
+  <ul id="list">
+    <li>Milk</li>
+    <li>Eggs</li>
+  </ul>
+</body>
+```
+
+becomes:
+
+```
+document
+└ body
+  └ h1   "Groceries"
+  └ ul#list
+    └ li  "Milk"
+    └ li  "Eggs"
+```
+
+Nesting becomes parent and child. This tree is what the browser draws, and
+it's what JavaScript reads and changes. The original HTML file is never
+touched — which is why "view source" shows the original HTML, while the
+DevTools **Elements** panel shows the live DOM.
+
+## Finding elements
+
+```javascript
+const list = document.querySelector('#list');        // first match
+const items = document.querySelectorAll('li');      // all matches
+```
+
+`querySelector` takes a CSS selector — the same syntax as your stylesheets:
+`#id`, `.class`, `tag`, `ul > li`. It returns the first matching element,
+or `null` if there isn't one. `querySelectorAll` returns all matches.
+
+## Changing elements
+
+Once you have an element, you change it through its properties:
+
+```javascript
+const heading = document.querySelector('h1');
+
+heading.textContent = 'Shopping list';      // change the text
+heading.classList.add('highlight');         // add a CSS class
+heading.style.color = 'green';              // set an inline style
+link.setAttribute('href', '/about');        // change an attribute
+```
+
+The page updates immediately. Prefer `textContent` over `innerHTML` for
+text: `innerHTML` parses its value as HTML, so putting user input into it
+can let someone inject a script.
+
+## Creating and removing elements
+
+```javascript
+const item = document.createElement('li');   // a new, detached element
+item.textContent = 'Bread';
+list.append(item);                           // now it's on the page
+
+item.remove();                               // and now it's gone
+```
+
+`createElement` makes a node that isn't in the tree yet — nothing shows up
+until you attach it with `append`, `prepend`, or `before`/`after`.
+
+## Events
+
+Elements also announce what happens to them — clicks, key presses, form
+input:
+
+```javascript
+button.addEventListener('click', () => {
+  console.log('clicked!');
+});
+```
+
+The function is a [callback](/blog/callbacks-explained): the browser calls
+it every time the event happens.
+
+Events **bubble**: a click on an `li` is also a click on its parent `ul`,
+then `body`, then the document. So one listener on a parent can handle
+clicks on all its children, even ones added later:
+
+```javascript
+list.addEventListener('click', (event) => {
+  if (event.target.matches('li')) {
+    event.target.remove();
+  }
+});
+```
+
+`event.target` is the element that was actually clicked. This pattern is
+called [event delegation](/blog/event-delegation-and-propagation).
+
+## Waiting for the DOM
+
+A script that runs before the HTML below it has been parsed won't find
+those elements. The simplest fix is to load scripts with `defer`:
+
+```html
+<script src="app.js" defer></script>
+```
+
+`defer` downloads the script in parallel and runs it after the whole
+document has been parsed.
+
+## Frameworks and the DOM
+
+React, Vue, Svelte and others don't replace the DOM — they manage it for
+you. You describe what the page should look like for the current data, and
+they work out which DOM operations to perform.
+[How React decides what to update](/blog/react-reconciliation-and-keys) is
+its own topic, but underneath, it ends up calling the same
+`createElement`, `append` and `remove` you've just seen.
+
+## The takeaway
+
+The DOM is the browser's live, in-memory tree version of your page. You
+**find** nodes with selectors, **change** them through properties,
+**create** and **remove** them with methods, and **listen** for events that
+bubble up the tree. That's most of what "JavaScript on a web page" means.

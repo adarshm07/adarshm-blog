@@ -1,0 +1,147 @@
+---
+title: "map, filter, reduce: Array Methods for Beginners"
+publishedAt: "2026-10-06"
+summary: "Four array methods replace most of the for-loops you'll ever write. What map, filter, reduce and find each do, step by step, how to chain them, and when a plain loop is still the better choice."
+tags: "JavaScript"
+---
+
+A lot of everyday code is loops over arrays: transform every item, keep
+some of them, add them up, find one. JavaScript has a method for each of
+those jobs. Once you know them, your code says *what* it's doing instead
+of *how*.
+
+<ArrayMethodsVisualizer />
+
+## map: transform every item
+
+```javascript
+const prices = [5, 12, 8, 20];
+const doubled = prices.map((n) => n * 2);
+// [10, 24, 16, 40]
+```
+
+`map` calls your function on each item and builds a **new array** of the
+results — always the same length as the original. The original array isn't
+changed.
+
+The same thing with a loop, for comparison:
+
+```javascript
+const doubled = [];
+for (const n of prices) {
+  doubled.push(n * 2);
+}
+```
+
+Use `map` whenever you think "turn each X into a Y": numbers to strings,
+users to their names, data to list items.
+
+```javascript
+const names = users.map((user) => user.name);
+```
+
+## filter: keep some items
+
+```javascript
+const big = prices.filter((n) => n > 10);
+// [12, 20]
+```
+
+`filter` keeps the items for which your function returns `true`, in their
+original order. The result can be shorter than the original, never longer.
+
+## reduce: combine everything into one value
+
+```javascript
+const total = prices.reduce((sum, n) => sum + n, 0);
+// 45
+```
+
+`reduce` is the most powerful and the least obvious. It carries a running
+value — the **accumulator** — through the array:
+
+1. `sum` starts as the `0` you passed in.
+2. For each item, your function returns the new `sum`.
+3. After the last item, `reduce` returns the final `sum`.
+
+```
+0 + 5  = 5
+5 + 12 = 17
+17 + 8 = 25
+25 + 20 = 45
+```
+
+Always pass the starting value (the `0`). Without it, `reduce` uses the
+first item instead, and throws on an empty array.
+
+`reduce` can build any kind of result — a number, an object, another array:
+
+```javascript
+const countByCity = users.reduce((counts, user) => {
+  counts[user.city] = (counts[user.city] ?? 0) + 1;
+  return counts;
+}, {});
+```
+
+## find: get the first match
+
+```javascript
+const firstBig = prices.find((n) => n > 10);
+// 12
+```
+
+`find` returns the first item that matches and **stops looking**. If
+nothing matches, it returns `undefined`. Its cousins: `findIndex` (the
+position instead), `some` (is there at least one?) and `every` (do all of
+them match?).
+
+## Chaining
+
+Because `map` and `filter` return new arrays, you can chain them:
+
+```javascript
+const total = orders
+  .filter((order) => order.status === 'paid')
+  .map((order) => order.amount)
+  .reduce((sum, amount) => sum + amount, 0);
+```
+
+Read it top to bottom: paid orders → their amounts → added up. Each step
+does one thing.
+
+## Cheat sheet
+
+<Table data={{
+  headers: ["Method", "Question it answers", "Returns"],
+  rows: [
+    ["map", "What does each item become?", "New array, same length"],
+    ["filter", "Which items do I keep?", "New array, same or shorter"],
+    ["reduce", "What do they add up to?", "One value of any type"],
+    ["find", "Which is the first match?", "One item, or undefined"],
+    ["some / every", "Does any / every item match?", "true or false"],
+    ["forEach", "Do something with each item", "undefined"]
+  ]
+}} />
+
+## When to use a plain loop
+
+- You need to **stop early** in a way the methods don't support (though
+  `find` and `some` do stop early).
+- You're doing something with side effects for each item — `for…of` is
+  often clearer than `forEach`.
+- Performance-critical code over huge arrays, where creating intermediate
+  arrays in a long chain adds up.
+
+## Common mistakes
+
+- **Forgetting to return** in a callback with braces:
+  `arr.map((n) => { n * 2 })` returns `[undefined, …]`. Either drop the
+  braces or write `return`.
+- **Using `map` just to loop.** If you're not using the returned array,
+  you wanted `forEach` or `for…of`.
+- **Mutating inside `map`.** Return new values instead of changing the
+  originals.
+
+These four methods each take a [callback](/blog/callbacks-explained) — a
+small function describing the work for one item — and handle the looping
+for you. That split is what makes them so readable.

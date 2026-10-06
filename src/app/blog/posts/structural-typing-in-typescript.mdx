@@ -1,0 +1,124 @@
+---
+title: "Structural Typing: Why TypeScript Cares About Shape, Not Names"
+publishedAt: "2026-10-05"
+summary: "In TypeScript, a value fits a type if it has the right properties — no matter what it's called or where it came from. How structural typing works, the excess-property check that seems to contradict it, and how to opt into nominal types with brands."
+tags: "TypeScript"
+---
+
+In Java or C#, a function that asks for a `Point` wants an instance of the
+class `Point` (or something that explicitly declares itself one). In
+TypeScript, it wants **anything shaped like a Point**. Two types are
+compatible if their structure is compatible — names don't come into it.
+
+This is called **structural typing**, and it's the reason TypeScript fits
+JavaScript so well.
+
+<StructuralTypingVisualizer />
+
+## Shape is what counts
+
+```typescript
+type Point = { x: number; y: number };
+
+function len(p: Point) {
+  return Math.hypot(p.x, p.y);
+}
+
+const a = { x: 3, y: 4 };
+len(a);   // ✓ — a was never declared as a Point, but it has x and y
+```
+
+Classes are no different. A class that never mentions `Point` is accepted
+if its instances have the right properties:
+
+```typescript
+class Vec {
+  constructor(public x: number, public y: number) {}
+}
+len(new Vec(1, 2));   // ✓
+```
+
+## Extra properties are fine — usually
+
+A value with *more* than the type needs still fits:
+
+```typescript
+const b = { x: 3, y: 4, z: 5 };
+len(b);   // ✓ — b has everything a Point needs
+```
+
+That's why you can pass a rich object to a function that only needs a
+couple of its fields. The function's type describes what it *uses*, not
+everything the object might carry.
+
+## The exception: fresh object literals
+
+```typescript
+len({ x: 3, y: 4, z: 5 });
+// error: Object literal may only specify known properties,
+//        and 'z' does not exist in type 'Point'.
+```
+
+Same shape as `b`, different result. When you write an object literal
+directly where a type is expected, TypeScript runs an extra **excess
+property check**: nothing else can ever see that `z`, so it's almost
+certainly a typo or a misunderstanding — like `{ colour: 'red' }` for an
+option called `color`. It's a lint-style check layered on top of
+structural typing, applied only where it catches mistakes.
+
+## Missing properties are always errors
+
+```typescript
+len({ x: 3 });
+// error: Property 'y' is missing in type '{ x: number; }'
+//        but required in type 'Point'.
+```
+
+Structural typing is generous about extras and strict about requirements.
+
+## Why TypeScript works this way
+
+JavaScript code is written structurally already. Objects come from
+literals, JSON, spreads, and libraries, rarely from a declared class. A
+function that reads `p.x` and `p.y` genuinely works with anything that has
+them — "duck typing". Structural types describe that existing behaviour
+instead of forcing a class hierarchy onto it.
+
+It also makes testing easy: a test can pass a small object literal with
+just the methods a function calls, without building the real dependency.
+
+## When you want names to matter: brands
+
+Sometimes two types have the same shape but must not be mixed up:
+
+```typescript
+type UserId = string;
+type OrderId = string;
+
+function cancelOrder(id: OrderId) { … }
+const userId: UserId = 'u_42';
+cancelOrder(userId);   // ✓ compiles — both are just strings
+```
+
+The usual workaround is a **brand**: an intersection with a property that
+never exists at runtime, so the two types differ structurally.
+
+```typescript
+type UserId = string & { readonly __brand: 'UserId' };
+type OrderId = string & { readonly __brand: 'OrderId' };
+
+const toOrderId = (s: string) => s as OrderId;
+
+cancelOrder(userId);           // ✗ error now
+cancelOrder(toOrderId('o_7')); // ✓
+```
+
+It's a compile-time-only label: at runtime both are plain strings.
+
+## The takeaway
+
+In TypeScript, a type is a description of shape. If a value has the
+properties a type requires, it *is* that type — wherever it came from.
+Remember the two special cases: fresh object literals get checked for
+extras, and brands let you make names matter when shapes alone aren't
+enough.

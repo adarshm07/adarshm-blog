@@ -1,0 +1,122 @@
+---
+title: "HTTP Requests and Responses: The Language of the Web"
+publishedAt: "2026-10-02"
+summary: "Every page load, image, form and API call is the same exchange: a request with a method, path and headers, and a response with a status code, headers and a body. A plain-language tour of what's inside each one."
+tags: "Web"
+---
+
+Whenever a browser loads a page, an app fetches data, or a form is
+submitted, the same thing happens underneath: a **request** goes to a
+server and a **response** comes back. That exchange is HTTP, and it's
+simpler than its reputation.
+
+<HttpExchangeVisualizer />
+
+## Anatomy of a request
+
+```http
+POST /cart HTTP/1.1
+Host: shop.example
+Content-Type: application/json
+Cookie: sid=s_8f2
+
+{"productId": 17, "qty": 1}
+```
+
+- **Method** — what you want to do: `POST`.
+- **Path** — what you want to do it to: `/cart`. Anything after a `?` is the
+  query string, e.g. `/products?page=2`.
+- **Headers** — extra information, one `Name: value` per line. `Host` says
+  which site, `Content-Type` describes the body, `Cookie` carries stored
+  cookies.
+- **Body** — optional data, after a blank line.
+
+## The methods
+
+<Table data={{
+  headers: ["Method", "Meaning", "Has a body?", "Safe to repeat?"],
+  rows: [
+    ["GET", "Read something", "No", "Yes"],
+    ["POST", "Create something / submit data", "Yes", "No"],
+    ["PUT", "Replace something", "Yes", "Yes"],
+    ["PATCH", "Change part of something", "Yes", "Not necessarily"],
+    ["DELETE", "Remove something", "Usually not", "Yes"]
+  ]
+}} />
+
+"Safe to repeat" — **idempotent** — matters because networks fail and
+requests get retried. Reloading a page that did a `GET` is harmless;
+re-sending a `POST` might order the item twice. That's why browsers warn
+you before resubmitting a form, and why APIs use
+[idempotency keys](/blog/idempotency-keys) for payments.
+
+## Anatomy of a response
+
+```http
+HTTP/1.1 201 Created
+Content-Type: application/json
+Location: /cart/items/88
+
+{"id": 88, "productId": 17, "qty": 1}
+```
+
+- **Status code** — did it work, and if not, whose fault was it.
+- **Headers** — what the body is, how long it can be cached, cookies to
+  store, where the new thing lives.
+- **Body** — the HTML, JSON, image, or whatever was asked for.
+
+## Status codes: read the first digit
+
+<Table data={{
+  headers: ["Range", "Meaning", "Common ones"],
+  rows: [
+    ["2xx", "Success", "200 OK, 201 Created, 204 No Content"],
+    ["3xx", "Go somewhere else", "301 Moved Permanently, 302 Found, 304 Not Modified"],
+    ["4xx", "Your request has a problem", "400 Bad Request, 401 Unauthorized, 403 Forbidden, 404 Not Found, 429 Too Many Requests"],
+    ["5xx", "The server failed", "500 Internal Server Error, 502 Bad Gateway, 503 Service Unavailable"]
+  ]
+}} />
+
+The 4xx/5xx split is the useful bit when debugging. A 4xx means change the
+request; a 5xx means the server is broken and retrying later might work.
+And 401 vs 403: 401 means "I don't know who you are" (log in), 403 means "I
+know who you are, and you're not allowed".
+
+## Headers worth knowing
+
+- `Content-Type` — the format of the body (`text/html`, `application/json`).
+- `Accept` — the formats the client would like back.
+- `Authorization` — credentials, often `Bearer <token>`.
+- `Cookie` / `Set-Cookie` — how state survives between requests
+  ([cookies and sessions](/blog/cookies-and-sessions)).
+- `Cache-Control`, `ETag` — whether and how long the response can be
+  reused ([HTTP caching](/blog/http-caching-headers)).
+- `Location` — where to go next, used with 3xx and 201.
+
+## Stateless by design
+
+Each request stands on its own: the server doesn't remember the previous
+one. That's what makes HTTP easy to scale — any server can answer any
+request — and it's why everything that needs continuity (login, a shopping
+cart) is carried explicitly, in cookies or tokens, on every request.
+
+## HTTP/1.1, 2 and 3
+
+The *meaning* of requests and responses hasn't changed in decades. What
+changed is how they travel:
+
+- **HTTP/1.1** sends text, one request at a time per connection.
+- **HTTP/2** sends binary frames and multiplexes many requests over one
+  connection at once.
+- **HTTP/3** does the same over QUIC (on UDP), so one lost packet no longer
+  stalls every other request.
+
+Your code rarely notices the difference — methods, paths, headers and
+status codes all work the same way.
+
+## Try it
+
+Open DevTools, go to the **Network** tab, and reload any page. Click a
+request and you'll see exactly this: the method and URL, request headers,
+the status code, response headers, and the body. It's the single most
+useful tool for understanding — and debugging — anything on the web.

@@ -1,0 +1,122 @@
+---
+title: "TypeScript Utility Types: Partial, Pick, Omit, Record — and How They Work"
+publishedAt: "2026-10-05"
+summary: "Define a type once, then derive the variations — update payloads, public views, dictionaries — so they can never drift apart. The built-in utility types, and the mapped-type machinery (keyof, in, T[K]) they're built from."
+tags: "TypeScript"
+---
+
+A real app needs several versions of the same shape: the full `User`, a
+patch where every field is optional, a public view without the email, a
+preview with just the id and name. Writing each one by hand works until
+someone adds a field to `User` and forgets the other four.
+
+Utility types derive the variations from the original, so they stay in
+sync automatically.
+
+<MappedTypeVisualizer />
+
+## The everyday utility types
+
+```typescript
+type User = { id: number; name: string; email: string };
+```
+
+<Table data={{
+  headers: ["Utility", "Result", "Use it for"],
+  rows: [
+    ["Partial<User>", "every property optional", "update/patch payloads"],
+    ["Required<User>", "every property required", "after defaults are filled in"],
+    ["Readonly<User>", "every property readonly", "values that must not be mutated"],
+    ["Pick<User, 'id' | 'name'>", "only id and name", "previews, list items"],
+    ["Omit<User, 'email'>", "everything except email", "public responses"],
+    ["Record<string, User>", "an object with string keys and User values", "lookup tables"]
+  ]
+}} />
+
+```typescript
+function updateUser(id: number, patch: Partial<User>) { … }
+updateUser(1, { name: 'Grace' });          // ✓ any subset of fields
+
+function toPublic(user: User): Omit<User, 'email'> {
+  return { id: user.id, name: user.name };
+}
+```
+
+And a few that work on functions and unions:
+
+```typescript
+type Params = Parameters<typeof updateUser>;    // [id: number, patch: Partial<User>]
+type Out = ReturnType<typeof toPublic>;         // Omit<User, 'email'>
+type Data = Awaited<Promise<User>>;             // User
+type Status = 'idle' | 'loading' | 'error';
+type Busy = Exclude<Status, 'idle'>;            // 'loading' | 'error'
+type NotNull = NonNullable<string | null>;      // string
+```
+
+## How they're built: mapped types
+
+None of these are magic. Most are a few characters of ordinary TypeScript
+built from three pieces:
+
+**`keyof T`** — the union of T's property names:
+
+```typescript
+type Keys = keyof User;   // 'id' | 'name' | 'email'
+```
+
+**`T[K]`** — the type of property K in T (an *indexed access* type):
+
+```typescript
+type Name = User['name'];   // string
+```
+
+**`[K in Keys]`** — a mapped type: loop over a union of keys and produce
+one property for each.
+
+Put together:
+
+```typescript
+type Partial<T>  = { [K in keyof T]?: T[K] };
+type Readonly<T> = { readonly [K in keyof T]: T[K] };
+type Pick<T, K extends keyof T> = { [P in K]: T[P] };
+type Record<K extends keyof any, V> = { [P in K]: V };
+```
+
+Read `Partial` aloud: "for each key K of T, make an optional property K
+whose type is whatever T[K] is." `Omit` is `Pick` with the excluded keys
+removed: `Pick<T, Exclude<keyof T, K>>`.
+
+## Writing your own
+
+Once you see the pattern, you can make your own:
+
+```typescript
+// Every property becomes nullable
+type Nullable<T> = { [K in keyof T]: T[K] | null };
+
+// A form's error messages: same keys, string values
+type FormErrors<T> = { [K in keyof T]?: string };
+
+const errors: FormErrors<User> = { email: 'Invalid email' };   // ✓
+const bad: FormErrors<User> = { emial: 'typo' };               // ✗ caught
+```
+
+`FormErrors<User>` will pick up new fields the moment `User` gets them —
+and reject typos in field names.
+
+## Tips
+
+- Derive, don't duplicate. If two types share fields, one should probably
+  be built from the other.
+- `Omit` doesn't check that the key exists: `Omit<User, 'emial'>` compiles
+  silently. When it matters, `Pick` the fields you want instead.
+- These are compile-time only. `Readonly<User>` doesn't freeze anything at
+  runtime; `Object.freeze` does.
+- Hover over a derived type in your editor to see what it resolved to.
+  It's the fastest way to understand a type someone else wrote.
+
+## The takeaway
+
+Utility types let one definition be the source of truth for a whole family
+of shapes. And underneath, they're just `keyof`, `T[K]` and `[K in …]` — a
+small loop that runs over types instead of values.
