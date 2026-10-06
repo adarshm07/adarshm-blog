@@ -47,9 +47,19 @@ export const curriculum: CurriculumPhase[] = [
       'The structures behind almost every practical program — and most interview questions.',
     entries: [
       {
+        slug: 'arrays-vs-linked-lists',
+        difficulty: 'Beginner',
+        note: 'How a sequence sits in memory — the trade-off between instant access and cheap inserts that every later structure inherits.',
+      },
+      {
         slug: 'linked-lists-and-cycle-detection',
         difficulty: 'Beginner',
         note: 'Pointer manipulation basics plus the classic fast/slow-pointer cycle trick.',
+      },
+      {
+        slug: 'hash-functions-explained',
+        difficulty: 'Beginner',
+        note: 'Turning any key into a number — the idea a hash map is built on, and why collisions can never be fully avoided.',
       },
       {
         slug: 'hash-maps-under-the-hood',

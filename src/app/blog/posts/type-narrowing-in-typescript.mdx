@@ -1,0 +1,156 @@
+---
+title: "Type Narrowing: How TypeScript Follows Your if Statements"
+publishedAt: "2026-10-04"
+summary: "A union type means “one of these — find out which before you use it”. How typeof, equality, in, instanceof and early returns narrow a type line by line, and how to write your own type guards."
+tags: "TypeScript"
+---
+
+A value typed `string | number | null` could be any of three things. You
+can't call `.toUpperCase()` on it — that would crash for numbers and
+`null`. But you also shouldn't need a cast. You just need to *check*, the
+same way you would in plain JavaScript, and TypeScript follows along.
+
+That's **narrowing**: the checker tracks your control flow and refines a
+variable's type on each line based on the checks you've made.
+
+<NarrowingVisualizer />
+
+## The checks that narrow
+
+**`typeof`** — for primitives:
+
+```typescript
+function pad(value: string | number) {
+  if (typeof value === 'number') {
+    return ' '.repeat(value);    // value: number
+  }
+  return value;                  // value: string
+}
+```
+
+**Equality** — including against `null` and `undefined`:
+
+```typescript
+function greet(name: string | null) {
+  if (name === null) return 'Hello, stranger';
+  return `Hello, ${name}`;       // name: string
+}
+```
+
+**Truthiness** — handy, but careful: it also excludes `0` and `''`.
+
+```typescript
+function show(count?: number) {
+  if (count) return `${count} items`;   // count: number, but 0 lands below!
+  return 'No items';
+}
+```
+
+**`in`** — for objects that differ by which properties they have:
+
+```typescript
+type Fish = { swim(): void };
+type Bird = { fly(): void };
+
+function move(animal: Fish | Bird) {
+  if ('swim' in animal) animal.swim();   // animal: Fish
+  else animal.fly();                     // animal: Bird
+}
+```
+
+**`instanceof`** — for class instances:
+
+```typescript
+function message(err: unknown) {
+  if (err instanceof Error) return err.message;   // err: Error
+  return String(err);
+}
+```
+
+## Early returns narrow everything after them
+
+Once a branch returns or throws, the possibilities it handled are gone for
+the rest of the function:
+
+```typescript
+function format(value: string | number | null) {
+  if (value === null) return '—';
+  // value: string | number from here on
+  if (typeof value === 'number') return value.toFixed(2);
+  // value: string from here on
+  return value.toUpperCase();
+}
+```
+
+This "guard clause" style keeps the happy path unindented and gives the
+checker exactly what it needs.
+
+## Writing your own type guard
+
+Sometimes the check is more complex than one operator. A function that
+returns `value is Type` teaches the checker a new kind of narrowing:
+
+```typescript
+type User = { id: number; name: string };
+
+function isUser(value: unknown): value is User {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as User).id === 'number' &&
+    typeof (value as User).name === 'string'
+  );
+}
+
+const data: unknown = await res.json();
+if (isUser(data)) {
+  data.name;   // data: User
+}
+```
+
+This is the honest way to handle outside data: start from `unknown`, prove
+its shape, and get a real type as a result. (Schema libraries like Zod
+generate guards like this for you.)
+
+## Filtering arrays
+
+Type guards also fix a classic annoyance:
+
+```typescript
+const values = ['a', null, 'b'];              // (string | null)[]
+const strings = values.filter((v): v is string => v !== null);   // string[]
+```
+
+Newer TypeScript versions (5.5+) can infer simple guards like this one on
+their own, so `values.filter((v) => v !== null)` gives `string[]` too.
+
+## When narrowing doesn't stick
+
+Narrowing applies to the variable at that point in the code. It's lost in
+places the checker can't be sure nothing changed — most often inside a
+callback that runs later:
+
+```typescript
+function later(user: { name: string | null }) {
+  if (user.name !== null) {
+    setTimeout(() => {
+      user.name.length;   // error: 'user.name' is possibly 'null'.
+    });
+  }
+}
+```
+
+By the time the callback runs, `user.name` could have been reassigned. Copy
+it into a `const` first, and the narrowed type sticks:
+
+```typescript
+const name = user.name;
+if (name !== null) setTimeout(() => name.length);
+```
+
+## The takeaway
+
+Narrowing is why TypeScript feels like JavaScript: you write the checks
+you'd write anyway, and the type system gets more precise with each one.
+When you find yourself reaching for `as`, ask what check would prove it
+instead — that check is usually the missing bug fix.

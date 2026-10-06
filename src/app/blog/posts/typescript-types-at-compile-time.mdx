@@ -1,0 +1,135 @@
+---
+title: "TypeScript for JavaScript Developers: Types Exist Only Before Runtime"
+publishedAt: "2026-10-03"
+summary: "TypeScript is JavaScript with type annotations that a checker reads and then deletes. What it catches, what it can't, why types vanish at runtime, and what that means for data from the outside world."
+tags: "TypeScript"
+---
+
+TypeScript doesn't replace JavaScript. It's JavaScript plus a way to say
+what kind of value each variable, parameter and return value should hold —
+and a program, the **type checker**, that reads those annotations and warns
+you when the code breaks them.
+
+The single most important thing to understand about it: **the types exist
+only before your code runs.**
+
+## Annotations, checked, then erased
+
+<TypeErasureVisualizer />
+
+```typescript
+function total(prices: number[]): number {
+  return prices.reduce((sum, p) => sum + p, 0);
+}
+
+total([4, 6]);      // fine
+total(['4', 6]);    // error: Type 'string' is not assignable to type 'number'.
+```
+
+Plain JavaScript would happily run that second call and return `"046"` —
+string concatenation — and you'd find out from a bug report. TypeScript
+flags it in your editor as you type.
+
+Then, to run the code, the compiler **strips every annotation** and emits
+ordinary JavaScript:
+
+```javascript
+function total(prices) {
+  return prices.reduce((sum, p) => sum + p, 0);
+}
+```
+
+That's what the browser or Node actually executes. There is no `number[]`
+at runtime and no type check when the function is called.
+
+## Inference: you write fewer types than you think
+
+TypeScript works out most types on its own:
+
+```typescript
+const count = 3;                 // number (actually the literal type 3)
+const names = ['Ada', 'Grace'];  // string[]
+const user = { id: 1, name: 'Ada' };  // { id: number; name: string }
+
+names.push(42);  // error: Argument of type 'number' is not assignable to parameter of type 'string'.
+```
+
+The common style is: annotate function parameters and public APIs, and let
+inference handle local variables.
+
+## The basic types
+
+```typescript
+let title: string = 'Hello';
+let total: number = 9.99;
+let done: boolean = false;
+let tags: string[] = ['a', 'b'];
+let pair: [string, number] = ['age', 36];   // a tuple
+let id: string | number = 42;               // a union: either one
+let maybe: string | undefined;              // might not be set
+
+type User = {                               // a named object shape
+  id: number;
+  name: string;
+  email?: string;                           // optional
+};
+```
+
+`type` and `interface` both describe object shapes; for everyday use they're
+interchangeable.
+
+## What TypeScript catches
+
+- Typos in property names: `user.nmae`.
+- Calling something that might be `undefined` or `null`.
+- Passing the wrong kind of argument.
+- Forgetting to handle a case (with
+  [discriminated unions](/blog/discriminated-unions-in-typescript)).
+- Breaking callers when you change a function's signature — the checker
+  lists every place that needs updating.
+
+That last one is the real payoff on a large codebase: refactoring stops
+being scary.
+
+## What it can't catch: the outside world
+
+Because types are erased, TypeScript can't check data that arrives at
+runtime — an API response, a form, `localStorage`, a file.
+
+```typescript
+type User = { id: number; name: string };
+
+const res = await fetch('/api/user');
+const user = (await res.json()) as User;   // "trust me"
+user.name.toUpperCase();                   // crashes if the API sent { username: … }
+```
+
+`as User` doesn't convert or check anything; it tells the compiler to
+believe you. If the data doesn't match, you get the same runtime crash
+plain JavaScript would give you.
+
+The fix is to **validate at the boundary**: check the data's shape when it
+enters your program, with a few `typeof` checks or a schema library like
+Zod, and let the types do their job from there inward.
+
+## Escape hatches to avoid
+
+- `any` turns off checking for a value — and everything it touches.
+  Prefer `unknown`, which forces you to check before using it.
+- `as` casts silence errors rather than fixing them.
+- `// @ts-ignore` hides an error on the next line.
+
+Each has legitimate uses, but each one is a place where the types are
+lying, and the safety net has a hole.
+
+## Getting started
+
+- Rename a `.js` file to `.ts` and fix what the checker reports — you can
+  adopt TypeScript one file at a time.
+- Turn on `"strict": true` in `tsconfig.json` from the start. It enables
+  the null checks that catch the most bugs.
+- Let your editor show you inferred types by hovering — it's the fastest
+  way to learn what TypeScript knows.
+
+TypeScript is a very fast, very thorough code reviewer that reads every
+line before you run it — and then gets out of the way completely.

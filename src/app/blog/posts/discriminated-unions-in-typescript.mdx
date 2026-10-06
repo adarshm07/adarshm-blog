@@ -1,0 +1,134 @@
+---
+title: "Discriminated Unions: Making Impossible States Impossible"
+publishedAt: "2026-10-04"
+summary: "Give every member of a union a shared literal field, and TypeScript can tell them apart — narrowing in each branch and refusing to compile when a case is forgotten. The pattern behind loading states, reducers and API results."
+tags: "TypeScript"
+---
+
+Here's a type for some data you're loading, written the way many people
+first write it:
+
+```typescript
+type State = {
+  loading: boolean;
+  data?: User;
+  error?: string;
+};
+```
+
+It allows `{ loading: true, data: user, error: 'oops' }` — loading, loaded
+*and* failed at once. Every component that reads it has to guess which
+fields to trust. The type permits states your app should never be in.
+
+## One union, one tag
+
+A **discriminated union** describes each possible state separately, with a
+shared field — the *discriminant* or *tag* — that says which one it is:
+
+```typescript
+type State =
+  | { status: 'loading' }
+  | { status: 'success'; data: User }
+  | { status: 'error'; error: string };
+```
+
+Now there's no way to have `data` while loading, or to succeed without
+data. The impossible states can't even be written down.
+
+## Switching on the tag narrows the type
+
+<DiscriminatedUnionVisualizer />
+
+```typescript
+function render(state: State) {
+  switch (state.status) {
+    case 'loading':
+      return 'Loading…';
+    case 'success':
+      return `Hello, ${state.data.name}`;   // state.data exists here
+    case 'error':
+      return `Failed: ${state.error}`;      // state.error exists here
+  }
+}
+```
+
+Checking `state.status` [narrows](/blog/type-narrowing-in-typescript) the
+type in each branch, so you can only access fields that exist in that
+state — and TypeScript autocompletes them.
+
+## Exhaustiveness: the compiler remembers every case
+
+The killer feature arrives when the union grows. Add a helper that only
+accepts `never` — the type with no possible values:
+
+```typescript
+function assertNever(x: never): never {
+  throw new Error(`Unhandled case: ${JSON.stringify(x)}`);
+}
+
+function area(s: Shape): number {
+  switch (s.kind) {
+    case 'circle': return Math.PI * s.radius ** 2;
+    case 'square': return s.side ** 2;
+    default:       return assertNever(s);   // s: never if all cases handled
+  }
+}
+```
+
+If every case is handled, `s` is `never` in the default branch and this
+compiles. Add `{ kind: 'triangle'; base: number; height: number }` to
+`Shape`, and every `switch` that forgot it becomes a compile error:
+
+```
+Argument of type '{ kind: "triangle"; base: number; height: number; }'
+is not assignable to parameter of type 'never'.
+```
+
+The compiler hands you a to-do list of every place the new case must be
+handled. In plain JavaScript, those would be silent bugs.
+
+## Where the pattern shows up
+
+**Reducers and actions:**
+
+```typescript
+type Action =
+  | { type: 'add'; item: Item }
+  | { type: 'remove'; id: string }
+  | { type: 'clear' };
+```
+
+Each action carries exactly the data it needs; a `remove` without an `id`
+won't compile.
+
+**Results instead of exceptions:**
+
+```typescript
+type Result<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: string };
+```
+
+Callers can't use `value` without first checking `ok`, so the error case
+can't be ignored by accident.
+
+**Events, messages, and API payloads** — anything that comes in several
+kinds, such as `postMessage` data between a page and a
+[Web Worker](/blog/web-workers-off-the-main-thread).
+
+## Tips
+
+- Use a **literal** type for the tag (`'success'`, not `string`), or
+  TypeScript can't use it to tell the members apart.
+- Use the same tag property name in every member — `kind`, `type` and
+  `status` are the common choices.
+- Prefer `switch` with `assertNever` for logic that must handle every case;
+  a chain of `if`s works too, but won't remind you about new ones unless
+  you end it the same way.
+
+## The takeaway
+
+Model each state as its own shape, label it with a literal tag, and let the
+compiler do two jobs for you: narrowing inside each branch, and refusing to
+build when you forget one. "Make impossible states impossible" is the
+cheapest bug prevention TypeScript offers.

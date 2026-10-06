@@ -1,0 +1,129 @@
+---
+title: "HTTP Caching: Cache-Control, ETags, and the Fastest Request"
+publishedAt: "2026-10-03"
+summary: "The fastest request is the one the browser never sends. How Cache-Control, max-age, ETags and 304 responses decide when a cached copy can be reused, and the content-hash pattern that lets you cache forever without ever serving stale files."
+tags: "Web"
+---
+
+Downloading the same logo, stylesheet and JavaScript bundle on every page
+view would be slow and wasteful. HTTP has caching built in: the server
+labels each response with how it may be reused, and browsers and CDNs
+follow those labels.
+
+## Fresh and stale
+
+Every cached response is either:
+
+- **Fresh** — it can be used straight away, with no network request at all.
+- **Stale** — it might still be correct, but the browser has to check with
+  the server before using it.
+
+The `Cache-Control` header decides how long a response stays fresh, and
+validators like `ETag` make checking a stale copy cheap.
+
+<HttpCacheVisualizer />
+
+## Cache-Control
+
+```http
+Cache-Control: max-age=60
+```
+
+`max-age` is the number of seconds the response stays fresh. Other common
+directives:
+
+<Table data={{
+  headers: ["Directive", "Meaning"],
+  rows: [
+    ["max-age=N", "Fresh for N seconds"],
+    ["no-cache", "May be stored, but must be revalidated before every use"],
+    ["no-store", "Never store it anywhere (private or sensitive data)"],
+    ["private", "Only the user's browser may cache it, not shared caches like CDNs"],
+    ["public", "Shared caches may store it too"],
+    ["immutable", "Will never change during its lifetime — don't even revalidate on reload"],
+    ["s-maxage=N", "Like max-age, but only for shared caches (CDNs)"]
+  ]
+}} />
+
+The naming trap: **`no-cache` doesn't mean "don't cache"**. It means
+"always check first". If you mean don't store it at all, use `no-store`.
+
+## Revalidation: ETag and 304
+
+When a copy goes stale, the browser doesn't have to download it again. If
+the response had a validator, it asks a conditional question:
+
+```http
+GET /app.css HTTP/1.1
+If-None-Match: "v1"
+```
+
+If the file hasn't changed, the server sends back:
+
+```http
+HTTP/1.1 304 Not Modified
+```
+
+— with no body. One round trip, a few hundred bytes, and the cached copy is
+fresh again. If it *has* changed, the server sends a normal `200` with the
+new content and a new ETag.
+
+An `ETag` is just a version label for the content — often a hash of it.
+`Last-Modified` with `If-Modified-Since` does the same thing using a
+timestamp.
+
+## The best pattern: hashed filenames
+
+Short `max-age` values are a compromise: too short and you revalidate
+constantly; too long and users keep seeing an old version after you
+deploy. Build tools solve this by putting a hash of the file's content in
+its name:
+
+```
+/assets/app.3f9a1c.css
+```
+
+Now you can cache it forever:
+
+```http
+Cache-Control: public, max-age=31536000, immutable
+```
+
+When the CSS changes, its hash changes, the file gets a **new URL**, and
+the new HTML points to it. The old cached file is simply never requested
+again. You get perfect caching and instant updates.
+
+The HTML itself can't be renamed that way — its URL is the page's address
+— so give it a short lifetime or `no-cache`, letting it always point at the
+latest hashed assets.
+
+## A sensible default setup
+
+<Table data={{
+  headers: ["What", "Cache-Control"],
+  rows: [
+    ["Hashed JS/CSS/fonts/images", "public, max-age=31536000, immutable"],
+    ["HTML pages", "no-cache (or a short max-age)"],
+    ["Public API responses", "a short max-age, or s-maxage for the CDN"],
+    ["Personal or sensitive responses", "private, no-store"]
+  ]
+}} />
+
+## Layers of cache
+
+The browser cache is only one layer. A request might also hit a **CDN**
+near the user, a reverse proxy in front of your server, and finally your
+application's own [caches](/blog/caching-strategies-explained). The same
+headers coordinate all of them: `private` keeps a response out of the
+shared ones, and `s-maxage` lets the CDN keep something longer than
+browsers do.
+
+## Debugging
+
+In the DevTools Network tab, a request served from cache shows "(memory
+cache)" or "(disk cache)" in the size column; a revalidated one shows a
+`304`. If users report seeing an old version after a deploy, the first
+thing to check is the `Cache-Control` on your HTML.
+
+The rule of thumb: name files by their content and cache them forever;
+keep the HTML that points at them fresh.
