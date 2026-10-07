@@ -1,13 +1,18 @@
+import { isValidElement, type ReactNode } from 'react'
 import { getBlogPosts } from '@/app/blog/utils'
 import { getPatternQuestions } from '@/app/dsa/patterns/utils'
+import type { Guide } from '@/app/learn/guide'
+import { aiGuide } from '@/app/learn/guides/ai'
+import { javascriptGuide } from '@/app/learn/guides/javascript'
+import { webGuide } from '@/app/learn/guides/web'
 
 export type SearchDoc = {
   id: string
-  kind: 'post' | 'question' | 'page'
+  kind: 'post' | 'question' | 'page' | 'guide'
   title: string
   href: string
   summary: string
-  /** Tags for posts, pattern name + difficulty for questions. */
+  /** Tags for posts, pattern name + difficulty for questions, guide + part for chapters. */
   meta: string[]
   /** Section headings, so a search can land on a topic inside a long post. */
   headings: string[]
@@ -41,6 +46,47 @@ function extractHeadings(content: string) {
         .trim()
     )
     .filter(Boolean)
+}
+
+/**
+ * Guide chapter bodies are JSX (text plus inline <C> code), so walk the element
+ * tree and keep only the text — no rendering needed, just props.children.
+ */
+function nodeText(node: ReactNode): string {
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(nodeText).join('')
+  if (isValidElement(node)) {
+    return nodeText((node.props as { children?: ReactNode }).children)
+  }
+  return ''
+}
+
+function guideDocs(guide: Guide): SearchDoc[] {
+  const overview: SearchDoc = {
+    id: `guide:${guide.slug}`,
+    kind: 'guide',
+    title: guide.title,
+    href: `/learn/${guide.slug}`,
+    summary: guide.description,
+    meta: ['guide'],
+    headings: guide.parts.map((part) => part.title),
+    body: '',
+  }
+  const chapters = guide.parts.flatMap((part) =>
+    part.chapters.map(
+      (chapter): SearchDoc => ({
+        id: `guide:${guide.slug}/${chapter.id}`,
+        kind: 'guide',
+        title: chapter.title,
+        href: `/learn/${guide.slug}#${chapter.id}`,
+        summary: chapter.keyIdea,
+        meta: [guide.title, part.title],
+        headings: [],
+        body: nodeText(chapter.body).replace(/\s+/g, ' ').trim(),
+      })
+    )
+  )
+  return [overview, ...chapters]
 }
 
 const STATIC_PAGES: SearchDoc[] = [
@@ -95,5 +141,7 @@ export function getSearchIndex(): SearchDoc[] {
 
   posts.sort((a, b) => (a.date! < b.date! ? 1 : -1))
 
-  return [...posts, ...questions, ...STATIC_PAGES]
+  const guides = [webGuide, javascriptGuide, aiGuide].flatMap(guideDocs)
+
+  return [...posts, ...guides, ...questions, ...STATIC_PAGES]
 }

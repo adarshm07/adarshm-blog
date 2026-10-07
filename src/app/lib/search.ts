@@ -96,6 +96,9 @@ const KIND_BONUS: Record<SearchDoc['kind'], number> = {
   post: 1,
   question: 0.5,
   page: 0.75,
+  // Just below posts: a post is the fuller answer, but a guide chapter is the
+  // gentler one, so both should surface together.
+  guide: 0.9,
 }
 
 export function searchDocs(docs: SearchDoc[], query: string, limit = 8): SearchHit[] {
