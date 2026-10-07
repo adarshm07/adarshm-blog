@@ -10,11 +10,17 @@ yarn build    # Production build
 yarn start    # Run production build locally
 yarn lint     # ESLint (flat config, eslint-config-next)
 npx tsc --noEmit   # Typecheck
+yarn smoke    # Browser smoke test — needs `yarn build && yarn start` running first
 ```
 
-No test suite is configured. CI (`.github/workflows/ci.yml`) runs lint,
-typecheck, and build on every push and pull request — the build is the real
-gate, because MDX rendering errors only surface during static generation.
+There are no unit tests. CI (`.github/workflows/ci.yml`) runs lint,
+typecheck, build, then `yarn smoke` on every push and pull request. The build
+catches MDX rendering errors (they only surface during static generation);
+`scripts/smoke.mjs` catches what the build can't: it loads every sitemap URL in
+Chromium at phone width, presses Next once on every step player, and fails on
+any console error, page error, or horizontal overflow. `BASE_URL` and
+`CONCURRENCY` env vars override its defaults. Playwright is pinned to match the
+locally installed browser — bump it deliberately.
 
 `react-hooks/set-state-in-effect` is downgraded to a warning in
 `eslint.config.mjs`; the reasoning is in a comment there.
@@ -92,7 +98,7 @@ utilities. Keep that suffix on any new `.prose` rule.
 |-------|------|---------|
 | `/about` | `src/app/about/page.tsx` | Bio, personal stack, and how the site is built |
 | `/learn` | `src/app/learn/page.tsx` | Hub listing the guides |
-| `/learn/web`, `/learn/javascript` | `src/app/learn/{web,javascript}/page.tsx` | One-page animated guides. Content lives in `learn/guides/*.tsx` as `Guide` data; `learn/guide.tsx` renders it and checks every chapter's `post` slug at build time |
+| `/learn/web`, `/learn/javascript`, `/learn/ai` | `src/app/learn/{web,javascript,ai}/page.tsx` | One-page animated guides. Content lives in `learn/guides/*.tsx` as `Guide` data; `learn/guide.tsx` renders it and checks every chapter's `post` slug at build time |
 | `/tools` | `src/app/tools/` | System design practice (BYOK Claude), capacity calculator, regex backtracking checker |
 | `/dsa` | `src/app/dsa/page.tsx` | Ordered learning path from `curriculum.ts` |
 | `/dsa/patterns` | `src/app/dsa/patterns/` | Practice questions grouped by pattern, authored as MDX |
@@ -107,7 +113,11 @@ utilities. Keep that suffix on any new `.prose` rule.
 
 `src/app/lib/search-index.ts` builds the index at build time — title,
 summary, tags, headings, and prose with code fences and JSX stripped — and
-serves it from the static `/search-index` route. `src/app/lib/search.ts`
+serves it from the static `/search-index` route. Guides are indexed too: one
+doc per guide and one per chapter (kind `guide`, linking to
+`/learn/<guide>#<chapter>`), with chapter text pulled from the JSX by walking
+`props.children`. A new guide must be added to the list in `getSearchIndex()`
+as well as to the `/learn` hub. `src/app/lib/search.ts`
 holds the ranking (title prefix > word boundary > substring > tag > heading >
 summary > body, with a span-capped subsequence fallback) and is pure, so it
 runs client-side. `SearchPalette` fetches the index on first open and caches
