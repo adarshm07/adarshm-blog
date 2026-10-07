@@ -1,0 +1,141 @@
+---
+title: "as const vs enum: Modelling Fixed Sets of Values in TypeScript"
+publishedAt: "2026-10-07"
+summary: "TypeScript widens literals by default and enums generate runtime code. How as const preserves exact values, how to derive a union type from one list, and why many teams now prefer const objects over enums."
+tags: "TypeScript"
+---
+
+Almost every app has small fixed sets of values: order statuses, user
+roles, directions, themes. TypeScript gives you two main ways to model
+them — `enum`, and literal types with `as const` — and they behave more
+differently than they look.
+
+<AsConstVisualizer />
+
+## Widening: why you need as const at all
+
+```typescript
+const dirs = ['up', 'down'];   // string[]
+const mode = { theme: 'dark' }; // { theme: string }
+```
+
+TypeScript **widens** literals in mutable places: an array could have more
+strings pushed onto it, and an object property could be reassigned, so
+their types are the general `string`.
+
+`as const` tells TypeScript the value will never change:
+
+```typescript
+const dirs = ['up', 'down'] as const;     // readonly ["up", "down"]
+const mode = { theme: 'dark' } as const;  // { readonly theme: "dark" }
+
+mode.theme = 'light';
+// error: Cannot assign to 'theme' because it is a read-only property.
+```
+
+Everything becomes `readonly`, and every literal keeps its exact type.
+
+## One list, both a value and a type
+
+The best trick with `as const`: declare the values once and derive the
+type from them.
+
+```typescript
+const ROLES = ['admin', 'editor', 'viewer'] as const;
+type Role = (typeof ROLES)[number];   // 'admin' | 'editor' | 'viewer'
+
+function isRole(value: string): value is Role {
+  return (ROLES as readonly string[]).includes(value);
+}
+
+// ROLES is a real array at runtime — map it into a <select>, validate input, etc.
+```
+
+Add a role to the array, and the type updates automatically. There's no
+second list to forget.
+
+## Enums
+
+```typescript
+enum Status {
+  Active,
+  Inactive,
+}
+
+const s: Status = Status.Active;   // 0 at runtime
+```
+
+Unlike almost everything else in TypeScript, an `enum` **generates
+JavaScript**:
+
+```javascript
+var Status;
+(function (Status) {
+  Status[(Status['Active'] = 0)] = 'Active';
+  Status[(Status['Inactive'] = 1)] = 'Inactive';
+})(Status || (Status = {}));
+// { 0: 'Active', 1: 'Inactive', Active: 0, Inactive: 1 }
+```
+
+Numeric enums get a reverse mapping (`Status[0] === 'Active'`) and store
+plain numbers — so logs, database rows and API payloads say `0` and `1`.
+String enums avoid that:
+
+```typescript
+enum Status {
+  Active = 'active',
+  Inactive = 'inactive',
+}
+```
+
+…but they're **nominal**: a plain `'active'` string isn't assignable to
+`Status`, so values from JSON or a form need converting before you can use
+them.
+
+## The const-object pattern
+
+Many codebases now use a plain object with `as const` instead:
+
+```typescript
+const Status = {
+  Active: 'active',
+  Inactive: 'inactive',
+} as const;
+
+type Status = (typeof Status)[keyof typeof Status];   // 'active' | 'inactive'
+
+function setStatus(s: Status) { … }
+
+setStatus(Status.Active);   // ✓ reads like an enum
+setStatus('inactive');      // ✓ plain strings work too
+```
+
+You keep `Status.Active`-style access and autocompletion, the values are
+readable strings, there's no special emit, and data from an API matches the
+type directly.
+
+## Comparison
+
+<Table data={{
+  headers: ["", "Numeric enum", "String enum", "as const object / union"],
+  rows: [
+    ["Runtime code", "Yes (with reverse mapping)", "Yes", "Just the object you wrote"],
+    ["Values at runtime", "0, 1, 2…", "'active'…", "'active'…"],
+    ["Plain string accepted", "N/A", "No — must use Status.X", "Yes"],
+    ["Works with erasable-syntax-only tooling", "No", "No", "Yes"]
+  ]
+}} />
+
+That last row matters more each year: tools that run TypeScript by simply
+stripping the types (Node's built-in type stripping, some bundlers) can't
+handle enums, because enums aren't just types. TypeScript 5.8's
+`erasableSyntaxOnly` option flags them for this reason.
+
+## Which to use
+
+- **Default:** a union type, from an `as const` array or object when you
+  also need the values at runtime.
+- **Enums** are fine in a codebase that already uses them consistently —
+  prefer string enums over numeric ones.
+- Whichever you choose, define the set **once** and derive everything else
+  from it.

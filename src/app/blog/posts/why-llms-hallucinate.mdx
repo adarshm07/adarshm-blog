@@ -1,0 +1,102 @@
+---
+title: "Why LLMs Hallucinate — and How to Reduce It"
+publishedAt: "2026-10-07"
+summary: "A model trained to predict plausible text will produce plausible text, whether or not it's true. Where hallucinations come from, why they sound so confident, and the practical defences: grounding, letting the model abstain, citations, and verification."
+tags: "AI Engineering"
+---
+
+Ask a model about a research paper that doesn't exist and it may describe
+it in detail: authors, year, findings. Ask for a quote and it may invent
+one with perfect punctuation. These are **hallucinations** — fluent,
+confident output that isn't supported by any source.
+
+They're not a strange glitch. They follow directly from what a language
+model is trained to do.
+
+## Plausible, not true
+
+A language model is trained to predict the next token: given some text,
+what most plausibly comes next? Truth and plausibility usually line up — a
+true statement about a well-known topic is also the most plausible
+continuation. But when the model doesn't have strong knowledge, the most
+plausible continuation is still *something*, and it's produced in exactly
+the same fluent style.
+
+<HallucinationVisualizer />
+
+## Why it happens
+
+**Thin knowledge.** For facts that appeared many times in training data,
+probability concentrates on the right answer. For rare facts — a minor
+person, a niche API, a recent event — it spreads across many plausible
+options, and [sampling](/blog/temperature-and-sampling) picks one.
+
+**No built-in "I don't know".** Next-token prediction always produces a
+next token. Unless the model has learned that admitting uncertainty is the
+right continuation in this situation, it will produce an answer-shaped
+answer.
+
+**Pressure from the prompt.** "List five studies that show…" asks for five,
+even if only two exist. Required fields in a schema do the same.
+
+**Training cut-off.** The model's knowledge stops at a date. Asked about
+anything later, it can only extrapolate.
+
+**Long, compounding generations.** One invented detail early on becomes
+context for everything after it, and the rest of the answer builds on it
+consistently.
+
+## Where they show up most
+
+- Citations, references and URLs
+- Exact numbers, dates, quotes and names
+- Details of obscure or recent topics
+- APIs and library functions that "should" exist
+- Summaries that add a plausible detail the source never said
+
+## Defences that work
+
+**Ground the answer in sources.** Put the relevant documents in the prompt
+— via [retrieval](/blog/rag-retrieval-explained), a search tool, or a
+database lookup through [tool calling](/blog/tool-calling-explained) — and
+instruct the model to answer only from them. Copying from context is far
+more reliable than recalling from training.
+
+**Make "I don't know" an acceptable answer.** Say so explicitly: *"If the
+documents don't contain the answer, say you couldn't find it."* In
+[structured outputs](/blog/structured-outputs-from-llms), make uncertain
+fields nullable instead of required.
+
+**Ask for citations, then check them.** Have the model quote or point to
+the passage supporting each claim, and verify in code that the quoted text
+actually appears in the source. Unsupported claims become detectable
+instead of invisible.
+
+**Let tools do exact work.** Arithmetic, dates, lookups and code execution
+belong in tools, not in the model's memory.
+
+**Verify where it matters.** Check generated code with tests and a
+compiler, validate extracted values against business rules, and route
+low-confidence answers to a human.
+
+**Measure.** Build [evals](/blog/evals-for-llm-apps) with questions whose
+answers aren't in the sources, and track how often the model correctly
+declines instead of inventing.
+
+## What doesn't work on its own
+
+- **"Don't hallucinate"** in the prompt. The model doesn't know which of its
+  outputs are invented.
+- **Lowering temperature.** It makes outputs more consistent, not more
+  true — the model can be consistently wrong.
+- **Fine-tuning on your documents** to teach facts. It tends to make
+  answers *sound* more like your documents, which can make errors
+  [harder to spot](/blog/fine-tuning-vs-rag-vs-prompting).
+
+## The takeaway
+
+Hallucination is what happens when a system built to produce plausible text
+is asked for facts it doesn't reliably have. You can't remove it entirely,
+but you can make it rare and detectable: give the model the facts, let it
+say "I don't know", make it show its sources, and verify anything that
+matters before it reaches a user.

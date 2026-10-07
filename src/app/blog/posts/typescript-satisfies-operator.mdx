@@ -1,0 +1,127 @@
+---
+title: "The satisfies Operator: Check a Type Without Losing It"
+publishedAt: "2026-10-07"
+summary: "A type annotation validates a value and then forgets everything specific about it. satisfies validates the value and keeps the precise type TypeScript inferred. When to use it, and how it compares with annotations and as."
+tags: "TypeScript"
+---
+
+There are two things you usually want from a type on a config object:
+
+1. **Check it** — no missing keys, no typos, every value the right kind.
+2. **Keep the details** — know that *this* key holds a string and *that*
+   one holds an array.
+
+A type annotation does the first and sacrifices the second. `satisfies`
+does both.
+
+<SatisfiesVisualizer />
+
+## The problem with annotations
+
+```typescript
+type Color = 'red' | 'green' | 'blue';
+
+const palette: Record<Color, string | number[]> = {
+  red: '#f00',
+  green: [0, 255, 0],
+  blue: '#00f',
+};
+
+palette.red.toUpperCase();
+// error: Property 'toUpperCase' does not exist on type 'string | number[]'.
+```
+
+The annotation checked the object nicely. But from then on, `palette` *is*
+a `Record<Color, string | number[]>`, and every value is "string or array".
+You know `red` is a string; the type system forgot.
+
+## satisfies keeps the inferred type
+
+```typescript
+const palette = {
+  red: '#f00',
+  green: [0, 255, 0],
+  blue: '#00f',
+} satisfies Record<Color, string | number[]>;
+
+palette.red.toUpperCase();   // ✓ red: string
+palette.green.map((n) => n / 255);   // ✓ green: number[]
+```
+
+`satisfies` checks that the value is compatible with the type — then lets
+the variable keep the more precise type inferred from the value itself.
+
+It still catches mistakes:
+
+```typescript
+const palette = {
+  red: '#f00',
+  grene: [0, 255, 0],   // error: … 'grene' does not exist … Did you mean to write 'green'?
+  blue: '#00f',
+} satisfies Record<Color, string | number[]>;
+```
+
+And a missing key is an error too, because `Record<Color, …>` requires all
+three.
+
+## Three ways to attach a type
+
+<Table data={{
+  headers: ["", "Annotation (: T)", "satisfies T", "Assertion (as T)"],
+  rows: [
+    ["Checks the value fits T", "Yes", "Yes", "Barely — only rejects totally unrelated types"],
+    ["Variable's type afterwards", "T", "The inferred, more precise type", "T"],
+    ["Catches typos and missing keys", "Yes", "Yes", "No"],
+    ["Use it for", "Variables that will be reassigned, public APIs", "Config and lookup objects", "Rare escape hatches"]
+  ]
+}} />
+
+The assertion is the odd one out: `as` tells the compiler to believe you,
+so it can hide real mistakes. `satisfies` is what people often meant when
+they reached for `as`.
+
+## Where it shines
+
+**Route and config tables:**
+
+```typescript
+const routes = {
+  home: '/',
+  post: '/blog/:slug',
+  about: '/about',
+} satisfies Record<string, `/${string}`>;
+
+type RouteName = keyof typeof routes;   // 'home' | 'post' | 'about'
+```
+
+With an annotation, `keyof` would just be `string`. With `satisfies`, the
+real key names survive, and every path is still checked to start with a
+slash.
+
+**Combined with `as const`** — check the shape *and* keep exact literal
+values:
+
+```typescript
+const theme = {
+  mode: 'dark',
+  radius: 8,
+} as const satisfies { mode: 'light' | 'dark'; radius: number };
+
+// theme.mode: 'dark' (not just 'light' | 'dark'), and readonly
+```
+
+## When an annotation is still right
+
+- A variable you'll **reassign** later: `let current: Color = 'red'` should
+  stay `Color`, not narrow to `'red'`.
+- **Function parameters and return types**, where the declared type is the
+  contract callers depend on.
+- Exported values where you deliberately want to hide implementation
+  details behind a wider type.
+
+## The takeaway
+
+Use an annotation when the declared type *is* the point. Use `satisfies`
+when you want the declared type as a check, and the precise inferred type
+for everything after. And treat `as` as a last resort — `satisfies`
+usually does what you actually wanted, without the risk.

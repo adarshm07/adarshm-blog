@@ -1,0 +1,113 @@
+---
+title: "Prompting, RAG, or Fine-Tuning? Choosing How to Customise an LLM"
+publishedAt: "2026-10-07"
+summary: "Three ways to make a general model work for your problem: change what you ask, change what it can see, or change the model itself. What each one is actually good at, why fine-tuning is the wrong tool for teaching facts, and the order to try them in."
+tags: "AI Engineering"
+---
+
+A general-purpose model doesn't know your company's documents, your
+product's house style, or the exact format your downstream code expects.
+There are three ways to close that gap, and teams often reach for the most
+expensive one first.
+
+- **Prompting** — change what you *ask*: instructions, examples, context.
+- **RAG** (retrieval-augmented generation) — change what the model can
+  *see*: fetch relevant documents and include them in the prompt.
+- **Fine-tuning** — change the *model*: train it further on your own
+  examples so its weights shift.
+
+<ApproachVisualizer />
+
+## Prompting: always start here
+
+Prompting is underrated because it's cheap. Clear instructions, a few good
+examples of input and expected output, and the relevant context in the
+prompt solve a surprising share of problems — and you can iterate in
+minutes.
+
+Modern models have [large context windows](/blog/context-windows-and-caching),
+so "the relevant context" can be a lot: a whole policy document, a long
+style guide, dozens of examples. With prompt caching, a long, stable prefix
+costs a fraction of normal price on repeat requests.
+
+**Reach for something else when:** the knowledge is far too large for the
+prompt, changes constantly, or you've measured that prompting has hit a
+ceiling.
+
+## RAG: when the knowledge is big or changing
+
+[RAG](/blog/rag-retrieval-explained) splits your documents into chunks,
+turns them into [embeddings](/blog/what-embeddings-actually-are), and at
+question time retrieves the few chunks most relevant to the question and
+puts them in the prompt.
+
+It's the right tool for knowledge:
+
+- **Large** — thousands of documents, far beyond any context window.
+- **Changing** — update the index, and the next answer uses the new data.
+- **Needing citations** — every retrieved chunk has a source to point to.
+- **Permissioned** — retrieve only what this user is allowed to see.
+
+Its weak spot is retrieval itself: if the right chunk isn't found, the
+model can't use it. Most RAG quality work is chunking, search quality and
+re-ranking — not the model.
+
+## Fine-tuning: when you need a different behaviour
+
+Fine-tuning trains the model further on many examples of inputs and ideal
+outputs. It changes **how** the model responds — style, format, a narrow
+skill — more than **what** it knows.
+
+Good uses:
+
+- **Making a small model good at one narrow task** — classification,
+  extraction, routing — so it can replace a larger, slower, more expensive
+  model for that job.
+- **A very specific style or format** that must be consistent across huge
+  volumes and that prompting can't pin down.
+- **Shortening prompts** that would otherwise need many examples on every
+  request.
+
+The costs are real: you need hundreds to thousands of high-quality
+examples, a training run, an evaluation set to prove it helped, and you
+repeat all of it when you want to change the behaviour or move to a newer
+base model.
+
+## Why fine-tuning is the wrong way to teach facts
+
+It's the most common misconception. Fine-tuning on your documents does not
+reliably make a model *know* them:
+
+- Facts seen a handful of times in training get blurred, not memorised —
+  the model learns to sound like your documents, which can make
+  [hallucinations](/blog/why-llms-hallucinate) more convincing.
+- Knowledge is frozen at training time; any update means retraining.
+- There's no source to cite and no way to restrict who sees what.
+
+For facts, retrieve them. For behaviour, consider tuning.
+
+## Side by side
+
+<Table data={{
+  headers: ["", "Prompting", "RAG", "Fine-tuning"],
+  rows: [
+    ["Changes", "What you ask", "What the model sees", "The model's weights"],
+    ["Time to first result", "Minutes", "Days", "Weeks"],
+    ["Up-to-date knowledge", "If you paste it in", "Yes — update the index", "No — frozen at training"],
+    ["Citations", "Possible", "Natural", "Not possible"],
+    ["Best for", "Most tasks, and every first attempt", "Large or changing knowledge", "Narrow behaviour, cheaper small models"]
+  ]
+}} />
+
+## The order to try them
+
+1. **Prompt.** Write clear instructions and examples; build a small
+   [eval set](/blog/evals-for-llm-apps) so you can measure.
+2. **Add retrieval** if the model lacks knowledge it needs.
+3. **Fine-tune** only if evals show a behaviour gap that prompting and
+   retrieval can't close — or to move a proven task onto a smaller, cheaper
+   model.
+
+They also combine: a fine-tuned model can still use RAG. But most teams
+that skip straight to fine-tuning would have shipped sooner — and better —
+with a good prompt and a retrieval step.

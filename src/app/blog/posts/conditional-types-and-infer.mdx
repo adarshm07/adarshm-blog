@@ -1,0 +1,128 @@
+---
+title: "Conditional Types and infer: If/Else for TypeScript Types"
+publishedAt: "2026-10-07"
+summary: "T extends U ? X : Y lets a type make decisions, and infer lets it pull pieces out of other types. How conditional types work, why they distribute over unions, and how ReturnType, Awaited and Exclude are built from them."
+tags: "TypeScript"
+---
+
+Most types are fixed descriptions. Conditional types let a type **compute**
+its answer from another type — an `if`/`else` that runs inside the type
+checker. They're how the standard library defines helpers like
+`ReturnType`, `Awaited` and `Exclude`, and once you can read them, those
+helpers stop being magic.
+
+<ConditionalTypeVisualizer />
+
+## The syntax
+
+```typescript
+type IsString<T> = T extends string ? 'yes' : 'no';
+
+type A = IsString<'hi'>;    // 'yes'
+type B = IsString<number>;  // 'no'
+```
+
+Read `T extends string ? X : Y` as "if T is assignable to string, then X,
+otherwise Y." Here, `extends` means "fits inside", not class inheritance.
+
+A practical example — make a function's return type follow its input:
+
+```typescript
+type Parsed<T> = T extends `${number}` ? number : string;
+
+declare function parse<T extends string>(input: T): Parsed<T>;
+
+const n = parse('42');     // number
+const s = parse('hello');  // string
+```
+
+## Distribution over unions
+
+When the checked type is a bare type parameter and you pass a union,
+the conditional runs **once per member** and unions the results:
+
+```typescript
+type C = IsString<string | number>;   // 'yes' | 'no'
+```
+
+That's how the built-in `Exclude` works:
+
+```typescript
+type Exclude<T, U> = T extends U ? never : T;
+
+type Status = 'idle' | 'loading' | 'error';
+type Busy = Exclude<Status, 'idle'>;
+// 'idle' → never, 'loading' → 'loading', 'error' → 'error'
+// result: 'loading' | 'error'
+```
+
+`never` disappears from a union, so returning it for a member is how you
+filter that member out. To turn distribution off, wrap both sides in
+brackets: `[T] extends [U] ? X : Y`.
+
+## infer: capturing part of a type
+
+Inside the `extends` clause, `infer` declares a placeholder that captures
+whatever matches at that position:
+
+```typescript
+type ElementType<T> = T extends (infer U)[] ? U : T;
+
+type E1 = ElementType<string[]>;   // string
+type E2 = ElementType<number>;     // number (not an array, so T itself)
+```
+
+Read it as a pattern match: "if T looks like an array of *something*, call
+that something U, and give me U."
+
+The same idea reaches into functions and promises:
+
+```typescript
+type MyReturnType<T> = T extends (...args: any[]) => infer R ? R : never;
+type MyParameters<T> = T extends (...args: infer P) => any ? P : never;
+type Unwrap<T> = T extends Promise<infer U> ? U : T;
+
+type R = MyReturnType<() => Promise<number>>;  // Promise<number>
+type P = Unwrap<Promise<string>>;               // string
+```
+
+These are almost exactly how TypeScript defines `ReturnType`, `Parameters`
+and `Awaited` (the real `Awaited` also unwraps nested promises
+recursively).
+
+## infer inside strings
+
+`infer` works in [template literal types](/blog/template-literal-types)
+too, which lets types parse strings:
+
+```typescript
+type ParamNames<S extends string> =
+  S extends `${string}:${infer P}/${infer Rest}`
+    ? P | ParamNames<`/${Rest}`>
+    : S extends `${string}:${infer P}`
+      ? P
+      : never;
+
+type Params = ParamNames<'/users/:id/posts/:postId'>;   // 'id' | 'postId'
+```
+
+That's how typed routers know your route handler receives `params.id` and
+`params.postId`.
+
+## When to reach for them
+
+- **In library code**, when a function's output type depends on its input
+  type in a way overloads can't express neatly.
+- **To derive types** from existing ones instead of duplicating them —
+  `ReturnType<typeof createStore>` stays correct when the function changes.
+- **Rarely in application code.** Nested conditional types are hard to
+  read and produce dense error messages. If a simple union or a generic
+  works, prefer it.
+
+## The takeaway
+
+`T extends U ? X : Y` is an `if` for types; given a union it runs per
+member; and `infer` captures the piece you're matching against. Those three
+ideas are enough to read most of the "advanced" types you'll meet in
+library typings — and to write the occasional one that saves you from
+keeping two types in sync by hand.

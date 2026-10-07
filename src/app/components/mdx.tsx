@@ -93,7 +93,19 @@ import {
   NarrowingVisualizer,
   StructuralTypingVisualizer,
   TypeErasureVisualizer,
+  TopTypesVisualizer,
+  SatisfiesVisualizer,
+  AsConstVisualizer,
+  ConditionalTypeVisualizer,
+  TemplateLiteralVisualizer,
 } from '@/app/components/typescript-visualizers'
+import {
+  ApproachVisualizer,
+  HallucinationVisualizer,
+  SamplingVisualizer,
+  StreamingVisualizer,
+  StructuredOutputVisualizer,
+} from '@/app/components/ai-visualizers'
 import {
   ArrayMethodsVisualizer,
   CallbackVisualizer,
@@ -322,6 +334,16 @@ const components = {
   DomTreeVisualizer,
   ArrayVsListVisualizer,
   HashFunctionVisualizer,
+  TopTypesVisualizer,
+  SatisfiesVisualizer,
+  AsConstVisualizer,
+  ConditionalTypeVisualizer,
+  TemplateLiteralVisualizer,
+  SamplingVisualizer,
+  StreamingVisualizer,
+  StructuredOutputVisualizer,
+  ApproachVisualizer,
+  HallucinationVisualizer,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {
