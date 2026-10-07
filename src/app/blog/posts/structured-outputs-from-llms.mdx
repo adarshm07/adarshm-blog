@@ -1,0 +1,107 @@
+---
+title: "Structured Outputs: Getting Reliable JSON From an LLM"
+publishedAt: "2026-10-07"
+summary: "“Respond in JSON” works most of the time, which isn't good enough for software. How schema-constrained generation guarantees the shape of a model's output, how to use it with a Zod schema, and what it still can't guarantee."
+tags: "AI Engineering"
+---
+
+Most useful LLM features end with code consuming the answer: an extracted
+invoice saved to a database, a classification that routes a ticket, a
+plan that drives the UI. That code needs **data** — fields with known names
+and types — not a paragraph.
+
+## The fragile way: ask nicely
+
+```
+Extract the vendor, total and due date. Respond only with JSON.
+```
+
+This works most of the time. Then, in production, it doesn't:
+
+- The JSON comes wrapped in prose: *"Sure! Here's the data: …"*
+- It's inside a Markdown code fence.
+- `total` is the string `"1,240.00"` instead of a number.
+- A field is missing, or a brace is unbalanced because the output was cut
+  off.
+
+Each failure needs its own parsing workaround, and at thousands of requests
+a day, "most of the time" becomes a steady stream of errors.
+
+## The reliable way: constrain generation to a schema
+
+<StructuredOutputVisualizer />
+
+With **structured outputs**, you give the API a JSON schema, and generation
+itself is constrained: at each step, tokens that would break the schema
+aren't allowed. The result is always valid JSON in exactly that shape.
+
+With the Anthropic TypeScript SDK and a Zod schema:
+
+```typescript
+import Anthropic from '@anthropic-ai/sdk';
+import { z } from 'zod';
+import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
+
+const Invoice = z.object({
+  vendor: z.string(),
+  total: z.number(),
+  dueDate: z.string(),
+  lineItems: z.array(z.object({ description: z.string(), amount: z.number() })),
+});
+
+const client = new Anthropic();
+
+const response = await client.messages.parse({
+  model: 'claude-opus-5-5',
+  max_tokens: 4096,
+  messages: [{ role: 'user', content: `Extract the invoice details:\n\n${emailText}` }],
+  output_config: { format: zodOutputFormat(Invoice) },
+});
+
+const invoice = response.parsed_output;   // typed as z.infer<typeof Invoice>
+if (!invoice) throw new Error('Could not parse invoice');
+```
+
+One Zod definition gives you three things: the schema sent to the API, a
+runtime validator, and the TypeScript type of the result.
+
+## Structured tool inputs
+
+The same guarantee is available for [tool calls](/blog/tool-calling-explained).
+Mark a tool `strict: true`, and its arguments always match the tool's
+input schema — no more defensive checks for a missing required field before
+you call your own function.
+
+## Designing good schemas
+
+- **Use enums for categories.** `z.enum(['billing', 'bug', 'other'])` beats
+  a free-text string you have to normalise later.
+- **Allow "not found".** If a field might be absent from the source, make
+  it nullable. A required field forces the model to put *something* there —
+  which invites made-up values.
+- **Describe fields.** Field names and descriptions are part of the prompt;
+  `dueDate` with "ISO 8601 date, e.g. 2026-11-01" gets consistent formats.
+- **Keep it as flat as the task allows.** Deeply nested, highly optional
+  schemas are harder for the model and for whoever reads the code.
+- **Let it reason first, if the task is hard.** A `reasoning` string field
+  before the answer fields gives the model room to think within the schema.
+
+## What structure doesn't guarantee
+
+Constrained generation guarantees the output is the right **shape**. It
+says nothing about whether it's **right**.
+
+- `total` will be a number — but it might be the subtotal, or a
+  [hallucinated](/blog/why-llms-hallucinate) one.
+- A category will be one of your enum values — but maybe the wrong one.
+
+So validate the meaning, too: check line items add up to the total, dates
+are plausible, IDs exist in your database. Route low-confidence or
+inconsistent results to a human, and measure accuracy with
+[evals](/blog/evals-for-llm-apps).
+
+## The takeaway
+
+Don't parse prose. Give the model a schema and let the API constrain
+generation to it, so every response is valid, typed data. Then spend your
+validation effort where it still matters: on whether the values are true.

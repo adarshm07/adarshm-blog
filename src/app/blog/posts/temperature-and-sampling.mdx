@@ -1,0 +1,124 @@
+---
+title: "Temperature and Sampling: Why the Same Prompt Gives Different Answers"
+publishedAt: "2026-10-07"
+summary: "A language model doesn't choose words — it produces probabilities, and then something draws from them. How temperature, top-p and top-k reshape that draw, why randomness is useful, and why you can't always count on turning it off."
+tags: "AI Engineering"
+---
+
+Ask a model the same question twice and you'll often get two different
+answers. That isn't a bug, and it isn't the model "changing its mind". It's
+a deliberate step at the very end of generation: **sampling**.
+
+## The model outputs probabilities, not words
+
+At each step, a language model looks at everything so far and produces a
+score — a **logit** — for every token in its vocabulary. Those scores are
+converted into probabilities that add up to 1 (with a function called
+softmax). Then one token is picked, appended, and the process repeats.
+
+<SamplingVisualizer />
+
+How that one token is picked is the whole topic of this post.
+
+## Greedy: always take the top token
+
+The simplest strategy is to always take the most likely token. It's
+deterministic in principle, but in practice greedy decoding tends to be
+dull and can fall into loops — repeating the same phrase, because each
+repetition makes the next one more likely.
+
+## Sampling: draw at random, weighted by probability
+
+Instead, most systems **sample**: draw a token at random, where a token
+with 52% probability is picked about half the time and one with 2% is
+picked occasionally. This is why outputs vary — and why they're more
+natural, since human writing isn't always the single most predictable next
+word either.
+
+## Temperature: sharpen or flatten
+
+Temperature divides the logits before softmax:
+
+```
+probability(token) ∝ exp(logit / temperature)
+```
+
+- **Low temperature (toward 0)** exaggerates the differences. The top token
+  dominates and outputs become consistent and conservative.
+- **Temperature 1** uses the model's probabilities as they are.
+- **High temperature (above 1)** shrinks the differences, so unlikely
+  tokens get a real chance. More variety, more surprises, more mistakes.
+
+Using the scores from the animation:
+
+<Table data={{
+  headers: ["Token", "T = 0.2", "T = 1", "T = 1.5"],
+  rows: [
+    ["mat", "98%", "52%", "42%"],
+    ["floor", "1.8%", "23%", "24%"],
+    ["sofa", "0.2%", "16%", "19%"],
+    ["roof", "~0%", "7%", "11%"],
+    ["moon", "~0%", "1.6%", "4%"]
+  ]
+}} />
+
+## Top-p and top-k: cut the long tail
+
+Even at a sensible temperature, there are thousands of tokens with tiny
+probabilities. Drawn rarely, but over a long answer, one bad draw is enough
+to derail a sentence. Two common filters remove them first:
+
+- **Top-k** keeps only the k most likely tokens (say 40).
+- **Top-p** (nucleus sampling) keeps the smallest set of tokens whose
+  probabilities add up to p (say 0.9). When the model is confident, that
+  might be one or two tokens; when it's unsure, many more.
+
+Top-p adapts to the model's confidence, which is why it's usually the
+better of the two.
+
+## Choosing settings
+
+When an API exposes them, the conventional guidance is:
+
+<Table data={{
+  headers: ["Task", "Typical setting"],
+  rows: [
+    ["Extraction, classification, code", "Low temperature — you want the most likely answer"],
+    ["General chat and writing", "Around the default (often 1)"],
+    ["Brainstorming, varied candidates", "Higher temperature, or several samples to choose from"]
+  ]
+}} />
+
+Change one knob at a time — temperature or top-p, not both — and measure
+the effect with [evals](/blog/evals-for-llm-apps) rather than by feel.
+
+## Newer models may not let you touch them
+
+Sampling parameters are becoming less of a user-facing control. Some recent
+models — including Anthropic's newest Claude models — reject `temperature`,
+`top_p` and `top_k` entirely and return an error if you send them. On those
+models you steer behaviour through the prompt, structured output formats,
+and settings like reasoning effort instead.
+
+## Temperature 0 isn't a guarantee
+
+Even where you can set temperature to 0, identical outputs aren't
+guaranteed. Batching and floating-point details on the serving hardware
+can nudge near-tied probabilities either way, and one different token early
+on changes everything after it.
+
+So design as if outputs will vary:
+
+- Validate the **structure** of outputs with
+  [structured outputs](/blog/structured-outputs-from-llms) instead of
+  hoping the wording repeats.
+- Test with **several runs** per case, and judge pass rates rather than a
+  single sample.
+- Cache responses if you genuinely need the same answer for the same input.
+
+## The takeaway
+
+A model produces a probability for every possible next token; sampling
+draws one; temperature and top-p decide how adventurous that draw is.
+Variation is a feature of the process, not a malfunction — build your app
+to expect it.

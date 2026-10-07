@@ -25,6 +25,7 @@ export default async function sitemap() {
     '/learn',
     '/learn/web',
     '/learn/javascript',
+    '/learn/ai',
     '/tools',
     '/tools/system-design',
     '/tools/capacity',

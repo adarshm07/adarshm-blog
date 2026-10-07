@@ -389,3 +389,270 @@ const structSteps: TraceStep[] = [
 export function StructuralTypingVisualizer() {
   return <CodeTrace code={STRUCT_CODE} steps={structSteps} interval={2800} />
 }
+
+const TOP_CODE = [
+  "let a: any = JSON.parse(input)",
+  'a.foo.bar()',
+  '',
+  "let u: unknown = JSON.parse(input)",
+  'u.foo',
+  "if (typeof u === 'object' && u !== null && 'n' in u) {",
+  '  u.n',
+  '}',
+  '',
+  'function fail(msg: string): never { throw new Error(msg) }',
+]
+
+const topSteps: TraceStep[] = [
+  {
+    lines: [0, 1],
+    panels: [
+      { title: 'type checker', rows: [{ k: 'a', v: 'any' }, { k: 'a.foo.bar()', v: 'no error', tone: 'warn' }] },
+      { title: 'at runtime', rows: [{ k: '!', v: "TypeError: Cannot read properties of undefined (reading 'bar')", tone: 'bad' }] },
+    ],
+    note: 'any switches the checker off. Every property exists, every call is allowed, and whatever you assign it to becomes unchecked too. The mistake survives until it crashes at runtime.',
+  },
+  {
+    lines: [3, 4],
+    error: true,
+    panels: [
+      { title: 'type checker', rows: [{ k: 'u', v: 'unknown' }, { k: 'u.foo', v: "'u' is of type 'unknown'.", tone: 'bad' }] },
+    ],
+    note: 'unknown also accepts any value — but you can\'t do anything with it until you prove what it is. Same flexibility on the way in, full safety on the way out.',
+  },
+  {
+    lines: [5, 6],
+    panels: [{ title: 'type of u here', rows: [{ k: 'u', v: 'object & Record<"n", unknown>', tone: 'ok' }] }],
+    note: 'Each check narrows it: an object, not null, with an n property. Now u.n is allowed (and is itself unknown, until you check it too). This is how outside data should enter a program.',
+  },
+  {
+    lines: [9],
+    panels: [
+      { title: 'type checker', rows: [{ k: 'returns', v: 'never' }, { k: 'fail() fits', v: 'any type at all', tone: 'ok' }] },
+    ],
+    note: 'never is the opposite: the type with no values. A function that always throws returns never, and since it can never produce a value, its result is assignable to anything.',
+  },
+  {
+    lines: [],
+    panels: [
+      {
+        title: 'the three, side by side',
+        rows: [
+          { k: 'any', v: 'anything in, anything goes — unchecked' },
+          { k: 'unknown', v: 'anything in, check before use' },
+          { k: 'never', v: 'nothing in — unreachable' },
+        ],
+      },
+    ],
+    note: 'Use unknown where you would reach for any. Meet never in exhaustive switches and functions that never return. Keep any for rare escape hatches, and comment why.',
+  },
+]
+
+export function TopTypesVisualizer() {
+  return <CodeTrace code={TOP_CODE} steps={topSteps} interval={2800} />
+}
+
+const SATISFIES_CODE = [
+  "type Color = 'red' | 'green' | 'blue'",
+  '',
+  'const a: Record<Color, string | number[]> = {',
+  "  red: '#f00', green: [0, 255, 0], blue: '#00f',",
+  '}',
+  'a.red.toUpperCase()',
+  '',
+  'const b = {',
+  "  red: '#f00', green: [0, 255, 0], blue: '#00f',",
+  '} satisfies Record<Color, string | number[]>',
+  'b.red.toUpperCase()',
+]
+
+const satisfiesSteps: TraceStep[] = [
+  {
+    lines: [2, 3, 4],
+    panels: [{ title: 'type of a.red', rows: [{ k: 'a.red', v: 'string | number[]' }] }],
+    note: 'An annotation checks the object — every colour present, no typos — but then the variable takes the annotated type. The fact that red is specifically a string is thrown away.',
+  },
+  {
+    lines: [5],
+    error: true,
+    panels: [
+      {
+        title: 'error',
+        rows: [{ k: 'TS2339', v: "Property 'toUpperCase' does not exist on type 'string | number[]'.", tone: 'bad' }],
+      },
+    ],
+    note: 'So using red as a string fails, even though you can see it is one. You would need a cast or a check.',
+  },
+  {
+    lines: [7, 8, 9],
+    panels: [
+      {
+        title: 'inferred types',
+        rows: [
+          { k: 'b.red', v: 'string', tone: 'ok' },
+          { k: 'b.green', v: 'number[]', tone: 'ok' },
+        ],
+      },
+    ],
+    note: 'satisfies runs the same check — but keeps the type TypeScript inferred from the value. The object is validated against Record<Color, …> and still knows red is a string and green is an array.',
+  },
+  {
+    lines: [10],
+    panels: [{ title: 'type checker', rows: [{ k: 'b.red.toUpperCase()', v: '✓ ok', tone: 'ok' }] }],
+    note: 'Validation without losing precision. Typos are still caught: writing grene instead of green is an error — "Did you mean to write \'green\'?"',
+  },
+]
+
+export function SatisfiesVisualizer() {
+  return <CodeTrace code={SATISFIES_CODE} steps={satisfiesSteps} interval={2800} />
+}
+
+const CONST_CODE = [
+  "const dirs = ['up', 'down']",
+  "const dirs2 = ['up', 'down'] as const",
+  "type Dir = (typeof dirs2)[number]",
+  '',
+  'enum Status { Active, Inactive }',
+  '',
+  'const Status2 = {',
+  "  Active: 'active',",
+  "  Inactive: 'inactive',",
+  '} as const',
+  'type Status2 = (typeof Status2)[keyof typeof Status2]',
+]
+
+const constSteps: TraceStep[] = [
+  {
+    lines: [0],
+    panels: [{ title: 'inferred', rows: [{ k: 'dirs', v: 'string[]' }] }],
+    note: 'TypeScript widens literals by default: an array of "up" and "down" is just string[], because you might push "sideways" later.',
+  },
+  {
+    lines: [1, 2],
+    panels: [
+      {
+        title: 'inferred',
+        rows: [
+          { k: 'dirs2', v: 'readonly ["up", "down"]', tone: 'ok' },
+          { k: 'Dir', v: '"up" | "down"', tone: 'ok' },
+        ],
+      },
+    ],
+    note: 'as const says "this exact value, never changing": a readonly tuple of literal types. Indexing it with [number] turns the array into a union — one list that is both a runtime value and a type.',
+  },
+  {
+    lines: [4],
+    panels: [
+      {
+        title: 'emitted JavaScript',
+        rows: [{ k: 'Status', v: '{ 0: "Active", 1: "Inactive", Active: 0, Inactive: 1 }' }],
+      },
+    ],
+    note: 'An enum is one of the few TypeScript features that generates code: a real object, with reverse mappings for numeric enums. Values are 0 and 1 — meaningless in logs and API payloads.',
+  },
+  {
+    lines: [6, 7, 8, 9, 10],
+    panels: [
+      {
+        title: 'inferred',
+        rows: [{ k: 'Status2', v: '"active" | "inactive"', tone: 'ok' }],
+      },
+    ],
+    note: 'The common alternative: a plain object with as const, plus a type derived from its values. Readable string values, no special emit, and it behaves exactly like the JavaScript around it.',
+  },
+]
+
+export function AsConstVisualizer() {
+  return <CodeTrace code={CONST_CODE} steps={constSteps} interval={2800} />
+}
+
+const COND_CODE = [
+  "type IsString<T> = T extends string ? 'yes' : 'no'",
+  '',
+  "type A = IsString<'hi'>",
+  'type B = IsString<number>',
+  'type C = IsString<string | number>',
+  '',
+  'type ElementType<T> = T extends (infer U)[] ? U : T',
+  'type E = ElementType<string[]>',
+  '',
+  'type Unwrap<T> = T extends Promise<infer U> ? U : T',
+  'type P = Unwrap<Promise<number>>',
+]
+
+const condSteps: TraceStep[] = [
+  {
+    lines: [0],
+    panels: [{ title: 'reads as', rows: [{ k: '', v: 'if T is assignable to string, then "yes", else "no"' }] }],
+    note: 'A conditional type is an if/else for types: T extends X ? Yes : No. "extends" here means "is assignable to".',
+  },
+  {
+    lines: [2, 3],
+    panels: [{ title: 'result', rows: [{ k: 'A', v: '"yes"', tone: 'ok' }, { k: 'B', v: '"no"', tone: 'ok' }] }],
+    note: '"hi" is a string, so A is "yes". number is not, so B is "no". The check happens entirely at compile time.',
+  },
+  {
+    lines: [4],
+    panels: [
+      { title: 'distributes over the union', rows: [{ k: 'string', v: '"yes"' }, { k: 'number', v: '"no"' }, { k: 'C', v: '"yes" | "no"', tone: 'ok' }] },
+    ],
+    note: 'Given a union, a conditional type runs once per member and unions the results. That "distributive" behaviour is what makes Exclude and Extract work.',
+  },
+  {
+    lines: [6, 7],
+    panels: [{ title: 'infer', rows: [{ k: 'pattern', v: '(infer U)[]' }, { k: 'U', v: 'string' }, { k: 'E', v: 'string', tone: 'ok' }] }],
+    note: 'infer captures a piece of the type being matched. "If T is an array of something, call that something U, and give me U." string[] matches, so E is string.',
+  },
+  {
+    lines: [9, 10],
+    panels: [{ title: 'infer', rows: [{ k: 'pattern', v: 'Promise<infer U>' }, { k: 'P', v: 'number', tone: 'ok' }] }],
+    note: 'The same trick unwraps a promise. This is how the built-in ReturnType, Parameters and Awaited are written — a pattern match with a capture, for types.',
+  },
+]
+
+export function ConditionalTypeVisualizer() {
+  return <CodeTrace code={COND_CODE} steps={condSteps} interval={2800} />
+}
+
+const TEMPLATE_CODE = [
+  "type Ev = 'click' | 'focus'",
+  'type Handler = `on${Capitalize<Ev>}`',
+  '',
+  "type Size = 'sm' | 'lg'",
+  "type Tone = 'red' | 'blue'",
+  'type Cls = `${Tone}-${Size}`',
+  '',
+  'type Route = `/users/${number}`',
+  "const ok: Route = '/users/42'",
+  "const bad: Route = '/users/abc'",
+]
+
+const templateSteps: TraceStep[] = [
+  {
+    lines: [0, 1],
+    panels: [{ title: 'Handler', rows: [{ k: '', v: '"onClick" | "onFocus"', tone: 'ok' }] }],
+    note: 'Template literal types use the same backtick syntax as template strings, but build types. Capitalize is a built-in helper that upper-cases the first letter.',
+  },
+  {
+    lines: [3, 4, 5],
+    panels: [{ title: 'Cls', rows: [{ k: '', v: '"red-sm" | "red-lg" | "blue-sm" | "blue-lg"', tone: 'ok' }] }],
+    note: 'With unions in the slots, TypeScript produces every combination — a type for every valid class name, generated from two short lists.',
+  },
+  {
+    lines: [7, 8],
+    panels: [{ title: 'type checker', rows: [{ k: "'/users/42'", v: '✓ matches', tone: 'ok' }] }],
+    note: 'A slot can also be a whole type like number. Route accepts any string of the shape /users/ followed by something numeric.',
+  },
+  {
+    lines: [9],
+    error: true,
+    panels: [
+      { title: 'error', rows: [{ k: 'TS2322', v: 'Type \'"/users/abc"\' is not assignable to type \'`/users/${number}`\'.', tone: 'bad' }] },
+    ],
+    note: 'A typo in a route or event name becomes a compile error. Combined with infer, template types can even pull pieces back out — like the :id parameters from a route pattern.',
+  },
+]
+
+export function TemplateLiteralVisualizer() {
+  return <CodeTrace code={TEMPLATE_CODE} steps={templateSteps} interval={2800} />
+}

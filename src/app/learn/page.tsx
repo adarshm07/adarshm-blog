@@ -4,10 +4,11 @@ import { GuideProgressCount } from '@/app/components/learn-progress'
 import { guideProgressIds, type Guide } from './guide'
 import { javascriptGuide } from './guides/javascript'
 import { webGuide } from './guides/web'
+import { aiGuide } from './guides/ai'
 
 const TITLE = 'Learn'
 const DESCRIPTION =
-  'Guided, animated walkthroughs of how things really work — the web and JavaScript — each one page long, beginner-friendly, with progress you can track.'
+  'Guided, animated walkthroughs of how things really work — the web, JavaScript, and large language models — each one page long, beginner-friendly, with progress you can track.'
 
 export const metadata = {
   title: TITLE,
@@ -21,8 +22,9 @@ export const metadata = {
   },
 }
 
-// Ordered as a suggested path: how a page reaches you, then the language that runs in it.
-const GUIDES: Guide[] = [webGuide, javascriptGuide]
+// Ordered as a suggested path: how a page reaches you, the language that runs in it,
+// then building AI features on top.
+const GUIDES: Guide[] = [webGuide, javascriptGuide, aiGuide]
 
 const MORE = [
   { href: '/dsa', title: 'Learn DSA', text: 'An ordered path through data structures and algorithms.' },

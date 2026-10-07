@@ -1,0 +1,125 @@
+---
+title: "unknown vs any vs never: TypeScript's Special Types"
+publishedAt: "2026-10-07"
+summary: "any switches type checking off, unknown accepts anything but makes you check before using it, and never is the type with no values at all. What each one is for, and why unknown should replace almost every any you write."
+tags: "TypeScript"
+---
+
+Most TypeScript types describe a set of values: `string` is every string,
+`boolean` is `true` and `false`. Three special types sit at the extremes,
+and knowing which one to reach for is one of the clearest signs of
+TypeScript that's actually doing its job.
+
+<TopTypesVisualizer />
+
+## any: type checking switched off
+
+```typescript
+let data: any = JSON.parse(input);
+data.user.name.toUpperCase();   // compiles — even if there is no user
+```
+
+`any` tells the checker to stop checking. Every property access, call and
+assignment is allowed. Worse, it spreads: anything you assign an `any` to
+becomes unchecked too.
+
+```typescript
+const name: string = data.whatever;   // fine to the compiler; maybe undefined at runtime
+```
+
+It exists for good reasons — migrating JavaScript gradually, describing
+truly dynamic code — but every `any` is a hole in the safety net.
+
+## unknown: the safe version of any
+
+```typescript
+let data: unknown = JSON.parse(input);
+data.user;   // error: 'data' is of type 'unknown'.
+```
+
+`unknown` accepts any value, just like `any`. The difference is on the way
+**out**: you can't use it until you've proved what it is.
+
+```typescript
+if (typeof data === 'object' && data !== null && 'user' in data) {
+  data.user;   // allowed — and itself unknown until you check it too
+}
+```
+
+Each check [narrows](/blog/type-narrowing-in-typescript) the type, so the
+checks you'd write anyway to handle bad input are exactly what unlock the
+value. That makes `unknown` the right type for anything that comes from
+outside your program:
+
+- `JSON.parse` results and API responses
+- `catch (err)` — what was thrown could be anything
+- `localStorage`, `postMessage` data, user input
+- Function parameters that genuinely accept anything
+
+```typescript
+try {
+  risky();
+} catch (err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+}
+```
+
+With `"strict": true`, `catch` variables are `unknown` by default
+(`useUnknownInCatchVariables`).
+
+## never: the type with no values
+
+`never` is the empty set — no value has type `never`. It shows up in two
+places.
+
+**Functions that never return** — because they always throw, or loop
+forever:
+
+```typescript
+function fail(message: string): never {
+  throw new Error(message);
+}
+
+const port: number = process.env.PORT ? Number(process.env.PORT) : fail('PORT is required');
+```
+
+Since `fail` never produces a value, its result is assignable to anything,
+so the expression above types cleanly as `number`.
+
+**Code that can't be reached.** When narrowing has ruled out every
+possibility, what's left is `never`. That's the basis of the exhaustive
+check in [discriminated unions](/blog/discriminated-unions-in-typescript):
+
+```typescript
+function assertNever(x: never): never {
+  throw new Error(`Unhandled: ${JSON.stringify(x)}`);
+}
+```
+
+Pass it a value in a `switch`'s `default` branch, and adding a new case to
+the union turns every forgotten `switch` into a compile error.
+
+## Quick reference
+
+<Table data={{
+  headers: ["", "any", "unknown", "never"],
+  rows: [
+    ["Accepts", "Every value", "Every value", "No value"],
+    ["Can use it without checks", "Yes — unsafe", "No", "N/A (it can't exist)"],
+    ["Assignable to other types", "Yes", "Only to unknown and any", "Yes, to everything"],
+    ["Typical use", "Escape hatch, gradual migration", "Outside data, catch errors", "Throwing functions, exhaustiveness"]
+  ]
+}} />
+
+## Habits worth adopting
+
+- When you're about to type `any`, try `unknown` first. If the code then
+  needs checks to compile, those checks were missing bugs.
+- Turn on the `noImplicitAny` rule (part of `strict`) so `any` never
+  appears without you writing it.
+- When you must use `any`, keep it local and leave a comment saying why.
+- Let `never` show up in error messages as a signal: "type X is not
+  assignable to never" usually means a case you forgot to handle.
+
+The short version: `any` trusts everything, `unknown` trusts nothing until
+it's proven, and `never` is what's left when there's nothing left.

@@ -1,0 +1,133 @@
+---
+title: "Template Literal Types: String Patterns the Compiler Understands"
+publishedAt: "2026-10-07"
+summary: "The same backtick syntax as template strings, but for types. How to generate every valid combination of a class name or event handler, type routes and IDs by their shape, rename keys in mapped types, and parse strings with infer."
+tags: "TypeScript"
+---
+
+JavaScript code is full of strings with structure: `onClick`,
+`btn-primary-lg`, `/users/42`, `user:42:profile`. A plain `string` type
+accepts all of them — and every typo. Template literal types let you
+describe the *shape* of a string, so the compiler can check it.
+
+<TemplateLiteralVisualizer />
+
+## The basics
+
+The syntax is a template string, at the type level:
+
+```typescript
+type Greeting = `hello ${string}`;
+
+const a: Greeting = 'hello world';   // ✓
+const b: Greeting = 'hi world';      // ✗
+```
+
+The slots can be `string`, `number`, `boolean`, `bigint` — or unions of
+literals, which is where it gets powerful.
+
+## Unions multiply
+
+Put unions in the slots, and TypeScript generates every combination:
+
+```typescript
+type Tone = 'red' | 'blue';
+type Size = 'sm' | 'lg';
+
+type ButtonClass = `btn-${Tone}-${Size}`;
+// 'btn-red-sm' | 'btn-red-lg' | 'btn-blue-sm' | 'btn-blue-lg'
+```
+
+Two short lists become a complete list of valid class names, kept in sync
+automatically.
+
+## Built-in string helpers
+
+`Uppercase`, `Lowercase`, `Capitalize` and `Uncapitalize` transform string
+literal types:
+
+```typescript
+type DomEvent = 'click' | 'focus' | 'blur';
+type HandlerName = `on${Capitalize<DomEvent>}`;
+// 'onClick' | 'onFocus' | 'onBlur'
+```
+
+## Typing strings by shape
+
+A `number` slot matches anything numeric:
+
+```typescript
+type UserRoute = `/users/${number}`;
+
+const ok: UserRoute = '/users/42';
+const bad: UserRoute = '/users/abc';
+// error: Type '"/users/abc"' is not assignable to type '`/users/${number}`'.
+```
+
+Useful for IDs with prefixes (`` `usr_${string}` ``), CSS values
+(`` `${number}px` ``), and cache keys.
+
+## Renaming keys in mapped types
+
+Combine template literal types with the `as` clause in a
+[mapped type](/blog/typescript-utility-and-mapped-types) to transform
+property names:
+
+```typescript
+type Getters<T> = {
+  [K in keyof T as `get${Capitalize<string & K>}`]: () => T[K];
+};
+
+type UserGetters = Getters<{ name: string; age: number }>;
+// { getName: () => string; getAge: () => number }
+```
+
+(`string & K` is there because keys can also be numbers or symbols, and
+`Capitalize` only accepts strings.)
+
+The same technique types event emitters: from `{ save: Doc; close: void }`
+you can derive `onSave` and `onClose` handler names with the right payload
+types.
+
+## Parsing strings with infer
+
+Inside a [conditional type](/blog/conditional-types-and-infer), `infer`
+can capture parts of a string:
+
+```typescript
+type ParamNames<S extends string> =
+  S extends `${string}:${infer P}/${infer Rest}`
+    ? P | ParamNames<`/${Rest}`>
+    : S extends `${string}:${infer P}`
+      ? P
+      : never;
+
+type P = ParamNames<'/users/:id/posts/:postId'>;   // 'id' | 'postId'
+
+function route<Path extends string>(
+  path: Path,
+  handler: (params: Record<ParamNames<Path>, string>) => void,
+) { … }
+
+route('/users/:id', (params) => params.id);      // ✓
+route('/users/:id', (params) => params.userId);  // ✗ — no such param
+```
+
+This is the trick behind typed routers in modern web frameworks: the route
+string itself is the source of truth for the handler's parameters.
+
+## Limits worth knowing
+
+- Huge unions get slow: three slots of 20 options each is 8,000 members.
+  TypeScript caps a union at about 100,000 and errors beyond that.
+- Recursive string parsing has a depth limit, so it suits short patterns
+  like routes, not arbitrary text.
+- Error messages for complex template types can be hard to read — keep
+  them in library code and give them good names.
+
+## The takeaway
+
+Template literal types turn "a string" into "a string of this shape". Use
+them to generate valid combinations from small unions, to rename keys in
+mapped types, and — with `infer` — to read structure back out of strings,
+so that typos in event names, class names and routes become compile errors.

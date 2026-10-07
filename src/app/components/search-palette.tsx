@@ -9,6 +9,7 @@ const KIND_LABEL: Record<SearchDoc['kind'], string> = {
   post: 'Post',
   question: 'Practice',
   page: 'Page',
+  guide: 'Guide',
 }
 
 function Highlighted({ text, query }: { text: string; query: string }) {
