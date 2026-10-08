@@ -1,0 +1,103 @@
+---
+title: "CDNs Explained: Moving Your Site Closer to Your Users"
+publishedAt: "2026-10-08"
+summary: "Light in fibre is fast, but not fast enough to cross the world many times per page load. How a content delivery network caches your files at edges near users, what it can and can't cache, and how to control it with headers and purges."
+tags: "System Design"
+---
+
+Your server is in one place. Your users are everywhere. A round trip from
+Mumbai to a server in Virginia takes about 200 milliseconds — and loading a
+page involves several round trips: DNS, the TCP and TLS handshakes, the
+HTML, then the CSS, JavaScript and images it points to. Distance adds up.
+
+You can't make light faster. You can make the trip shorter.
+
+## What a CDN does
+
+A **content delivery network** runs servers — **edges** — in hundreds of
+cities. When a user requests a file, they're routed to the nearest edge.
+If the edge has a cached copy, it answers immediately. If not, it fetches
+the file from your server (the **origin**) once, keeps it, and serves
+everyone else nearby from its copy.
+
+<CdnVisualizer />
+
+The effect is twofold:
+
+- **Faster for users** — most requests are answered by a server a few
+  milliseconds away.
+- **Lighter for your origin** — with a good hit ratio, the origin serves a
+  small fraction of total traffic, and survives traffic spikes it never
+  could alone.
+
+## How users reach the nearest edge
+
+Two common techniques:
+
+- **DNS-based routing** — the CDN's [DNS](/blog/dns-explained) servers
+  answer with the IP of an edge close to the resolver asking.
+- **Anycast** — the same IP address is announced from every edge
+  location, and internet routing naturally delivers each user to a nearby
+  one.
+
+## What to cache — and for how long
+
+The CDN follows the same [HTTP caching](/blog/http-caching-headers) headers
+browsers do, plus a few of its own:
+
+<Table data={{
+  headers: ["Content", "Cache at the edge?", "Typical header"],
+  rows: [
+    ["Hashed JS, CSS, fonts, images (app.3f9a.js)", "Yes, for a long time", "public, max-age=31536000, immutable"],
+    ["HTML pages", "Briefly, or revalidate", "public, s-maxage=60, stale-while-revalidate=300"],
+    ["Public API responses", "Sometimes, briefly", "s-maxage=30"],
+    ["Anything personal (cart, account, cookies)", "Never", "private, no-store"]
+  ]
+}} />
+
+`s-maxage` applies only to shared caches like CDNs, so you can let the edge
+keep HTML for a minute while browsers always revalidate.
+`stale-while-revalidate` lets the edge serve a slightly old copy instantly
+while fetching a fresh one in the background — users never wait on the
+refresh.
+
+## The cache key
+
+The edge decides whether two requests are "the same" by a **cache key** —
+by default, the URL. Two pitfalls:
+
+- **Too specific:** tracking parameters like `?utm_source=…` make every
+  link a different key and destroy your hit ratio. Strip or ignore them.
+- **Too general:** if responses vary by cookie, language or device but the
+  key doesn't include it, one user's version gets served to others. Use
+  `Vary` carefully, or don't cache those responses at the edge.
+
+The second one is how personal pages leak to strangers. When in doubt,
+mark it `private`.
+
+## Purging
+
+When you deploy, cached copies may be out of date:
+
+- **Hashed asset filenames** sidestep the problem: a new build means new
+  URLs, so nothing needs purging.
+- For HTML and other stable URLs, use **short TTLs** or the CDN's **purge**
+  API as part of the deploy. Many CDNs support purge by tag, so you can
+  invalidate "every page that shows product 42" in one call.
+
+## More than caching
+
+Modern CDNs also:
+
+- **Terminate TLS near the user**, saving round trips even for responses
+  that can't be cached.
+- Keep **warm, reused connections** to your origin.
+- Absorb **DDoS attacks** and run a web application firewall.
+- Run **edge functions** — small bits of your code close to users, for
+  redirects, auth checks or personalisation.
+
+## In one sentence
+
+A CDN keeps copies of your content in cities around the world, so most
+requests travel a few kilometres instead of across an ocean — and the
+headers you send decide what it's allowed to keep.

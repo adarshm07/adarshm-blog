@@ -1,0 +1,125 @@
+---
+title: "Counting Sort and Radix Sort: Sorting Without Comparisons"
+publishedAt: "2026-10-08"
+summary: "No comparison sort can beat O(n log n) — but if you never compare, the rule doesn't apply. How counting sort sorts small-range integers in O(n + k), why stability matters, and how radix sort extends the trick to large numbers digit by digit."
+tags: "DSA"
+---
+
+Merge sort, quicksort and heap sort all work by comparing pairs of
+elements. There's a proof that any comparison-based sort needs about
+n log n comparisons in the worst case — no clever algorithm can beat it.
+
+But that proof only covers sorts that **compare**. If you know something
+about the values — say, they're integers between 0 and 100 — you can
+sort without comparing them at all.
+
+## Counting sort
+
+The idea: count how many times each value appears, then write them out in
+order.
+
+<CountingSortVisualizer />
+
+```javascript
+function countingSort(nums, maxValue) {
+  const counts = new Array(maxValue + 1).fill(0);
+  for (const n of nums) counts[n]++;           // 1. count
+
+  const out = [];
+  for (let v = 0; v <= maxValue; v++) {         // 2. write out in order
+    for (let c = 0; c < counts[v]; c++) out.push(v);
+  }
+  return out;
+}
+
+countingSort([3, 1, 4, 1, 5, 2, 3, 0], 5);   // [0, 1, 1, 2, 3, 3, 4, 5]
+```
+
+Time is O(n + k), where n is the number of items and k is the size of the
+value range. When k is small compared with n — ages, scores out of 100,
+bytes — that's linear time.
+
+## Sorting records, not just numbers
+
+Usually you're sorting objects *by* a key: orders by status, people by age.
+Writing out bare values doesn't work then. Instead, turn the counts into
+**running totals**, which tell you where each key's block starts in the
+output, and place each record into its block:
+
+```javascript
+function countingSortBy(items, key, maxKey) {
+  const counts = new Array(maxKey + 1).fill(0);
+  for (const item of items) counts[key(item)]++;
+
+  // starts[k] = index where the block for key k begins
+  const starts = new Array(maxKey + 1).fill(0);
+  for (let k = 1; k <= maxKey; k++) starts[k] = starts[k - 1] + counts[k - 1];
+
+  const out = new Array(items.length);
+  for (const item of items) out[starts[key(item)]++] = item;
+  return out;
+}
+```
+
+Records are placed in input order within each block, so items with equal
+keys keep their original relative order. That property is called
+**stability**, and the next algorithm depends on it.
+
+## Radix sort: one digit at a time
+
+Counting sort needs a small range. To sort large numbers — say, 32-bit
+integers or 10-digit phone numbers — **radix sort** applies counting sort
+once per digit, starting from the **least significant** one:
+
+```
+input:       170  45  75  90  802  24  2  66
+by ones:     170  90  802   2  24  45  75  66
+by tens:     802   2  24  45  66 170  75  90
+by hundreds:   2  24  45  66  75  90 170 802
+```
+
+Each pass sorts by one digit, and because each pass is **stable**, the
+order from earlier (less significant) digits is preserved among numbers
+that tie on the current digit. After the last digit, everything is sorted.
+
+```javascript
+function radixSort(nums) {
+  const max = Math.max(...nums);
+  let out = nums;
+  for (let place = 1; Math.floor(max / place) > 0; place *= 10) {
+    out = countingSortBy(out, (n) => Math.floor(n / place) % 10, 9);
+  }
+  return out;
+}
+
+radixSort([170, 45, 75, 90, 802, 24, 2, 66]);   // [2, 24, 45, 66, 75, 90, 170, 802]
+```
+
+With d digits, that's O(d × (n + 10)). For fixed-width keys — 32-bit
+integers sorted a byte at a time are just four passes — it's linear in n.
+
+## When to use them
+
+<Table data={{
+  headers: ["", "Comparison sorts", "Counting sort", "Radix sort"],
+  rows: [
+    ["Time", "O(n log n)", "O(n + k)", "O(d × (n + base))"],
+    ["Works on", "Anything comparable", "Small integer ranges", "Integers, fixed-length strings"],
+    ["Extra memory", "O(1) to O(n)", "O(n + k)", "O(n + base)"],
+    ["Good for", "General use", "Ages, grades, bytes, enum keys", "Huge arrays of integers or IDs"]
+  ]
+}} />
+
+In everyday JavaScript, `array.sort((a, b) => a - b)` is fast and simple,
+and you should reach for it first. Counting and radix sort earn their
+place when you're sorting millions of small integers, building a
+histogram anyway, or need a stable sort by a small key — and they're a
+reminder that "the lower bound is n log n" comes with conditions.
+
+## Pitfalls
+
+- **A huge range kills counting sort.** Sorting a few numbers between 0 and
+  10⁹ allocates a billion-entry array. Check k before choosing it.
+- **Negative numbers** need an offset: subtract the minimum first.
+- **Radix sort must use a stable inner sort**, and must go from the least
+  significant digit up, or the passes undo each other.

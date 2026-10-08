@@ -1,0 +1,131 @@
+---
+title: "Database Transactions and Isolation Levels: The Lost Update Problem"
+publishedAt: "2026-10-08"
+summary: "ACID promises a lot, but the I — isolation — comes in levels, and the default one still lets concurrent transactions overwrite each other. What dirty reads, non-repeatable reads, phantoms and lost updates are, and the fixes that actually work."
+tags: "System Design"
+---
+
+A transaction groups several database operations so they happen
+completely or not at all. That's the part everyone remembers. The part
+that causes production bugs is what happens when **two transactions run at
+the same time** — and the answer depends on a setting most people never
+change.
+
+## ACID in one line each
+
+- **Atomicity** — all of a transaction's changes happen, or none do.
+- **Consistency** — constraints (foreign keys, uniqueness, checks) hold
+  before and after.
+- **Isolation** — concurrent transactions don't see each other's half-done
+  work… *to a degree you choose*.
+- **Durability** — once committed, it survives a crash.
+
+Isolation is the one with a dial.
+
+## The lost update
+
+<IsolationVisualizer />
+
+The classic bug, in application code:
+
+```javascript
+await db.query('BEGIN');
+const { balance } = await db.one('SELECT balance FROM accounts WHERE id = $1', [id]);
+await db.query('UPDATE accounts SET balance = $1 WHERE id = $2', [balance + 50, id]);
+await db.query('COMMIT');
+```
+
+Run two of these concurrently — a deposit and a withdrawal — and both can
+read the same starting balance, compute independently, and the second
+write silently overwrites the first. No error is raised. At PostgreSQL's
+default isolation level, this is allowed.
+
+## The anomalies, from mild to subtle
+
+**Dirty read** — reading another transaction's *uncommitted* change, which
+might then be rolled back.
+
+**Non-repeatable read** — reading the same row twice in one transaction and
+getting different values, because someone committed in between.
+
+**Phantom read** — running the same query twice and getting a different
+*set* of rows, because someone inserted or deleted matching rows.
+
+**Lost update** — two read-modify-write cycles interleave and one change
+disappears.
+
+**Write skew** — two transactions each read overlapping data, check a rule
+("at least one doctor stays on call"), and update *different* rows; each is
+valid alone, together they break the rule.
+
+## The isolation levels
+
+<Table data={{
+  headers: ["Level", "Prevents", "Still allows", "Default in"],
+  rows: [
+    ["Read uncommitted", "—", "Everything", "Rarely used"],
+    ["Read committed", "Dirty reads", "Non-repeatable reads, phantoms, lost updates, write skew", "PostgreSQL, SQL Server, Oracle"],
+    ["Repeatable read", "+ non-repeatable reads (and lost updates in PostgreSQL)", "Write skew; phantoms vary by database", "MySQL InnoDB"],
+    ["Serializable", "All of the above", "Nothing — as if transactions ran one at a time", "Opt-in"]
+  ]
+}} />
+
+Implementations differ in the details. PostgreSQL's repeatable read is
+snapshot isolation: each transaction sees a frozen snapshot, and if two
+try to update the same row, the second fails with
+`could not serialize access due to concurrent update`. MySQL's repeatable
+read behaves differently for writes. Read your database's documentation
+for the level you use.
+
+## Fixes that work
+
+**1. Let the database do the arithmetic.** The simplest and best fix for
+counters and balances:
+
+```sql
+UPDATE accounts SET balance = balance + 50 WHERE id = $1;
+```
+
+One statement reads and writes the current value while holding the row
+lock. No gap for another transaction to slip into.
+
+**2. Lock the row before reading it** when the new value needs logic in
+application code:
+
+```sql
+BEGIN;
+SELECT balance FROM accounts WHERE id = $1 FOR UPDATE;   -- others wait here
+-- compute in code
+UPDATE accounts SET balance = $2 WHERE id = $1;
+COMMIT;
+```
+
+**3. Optimistic concurrency** — add a `version` column, and make the update
+conditional:
+
+```sql
+UPDATE accounts SET balance = $2, version = version + 1
+WHERE id = $1 AND version = $3;
+```
+
+If it updated zero rows, someone else got there first: reload and retry.
+No locks held while a user thinks; great for web forms.
+
+**4. Raise the isolation level** to serializable for transactions with
+complex invariants (like write skew), and **retry on serialization
+failures** — they're expected, not exceptional.
+
+## Practical rules
+
+- Keep transactions short. Never hold one open across a network call or
+  while waiting for a user.
+- Prefer single-statement updates and database constraints (`UNIQUE`,
+  `CHECK`) over check-then-write logic in code.
+- If you use repeatable read or serializable, wrap transactions in a retry
+  loop — with [backoff](/blog/retries-backoff-and-jitter).
+- Test concurrency explicitly: two connections, interleaved steps. These
+  bugs never show up when you click through the app alone.
+
+The default isolation level protects you from reading garbage. It doesn't
+protect you from overwriting someone else's work — that part is your job,
+and usually a one-line change to the `UPDATE`.

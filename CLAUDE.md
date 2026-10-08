@@ -80,9 +80,12 @@ array of steps and renders one frame per index. Data is deterministic — no
 
 Two data-driven renderers cover common shapes, so a visualizer can be just a
 steps array: `SequenceDiagram` (messages between actors — HTTP, DNS, TLS) and
-`CodeTrace` (highlighted code plus name → value panels). Grouped wrappers live
-in `web-visualizers.tsx`, `typescript-visualizers.tsx` and
-`beginner-js-visualizers.tsx`.
+`CodeTrace` (highlighted code plus name → value panels). Grouped visualizers
+live in `web-visualizers.tsx`, `typescript-visualizers.tsx`,
+`beginner-js-visualizers.tsx`, `ai-visualizers.tsx`, `systems-visualizers.tsx`
+and `linear-algo-visualizers.tsx`; a file that defines its own `StepPlayer`
+render function must be `'use client'`, since functions can't cross from a
+server component to a client one.
 
 `global.css` scopes every `.prose` rule with `:not(.not-prose *)`, so
 visualizers (whose root is `not-prose`) are styled only by their own

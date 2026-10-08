@@ -1,0 +1,112 @@
+---
+title: "Core Web Vitals: LCP, INP and CLS in Plain Language"
+publishedAt: "2026-10-08"
+summary: "Three numbers that describe how a page feels to a real user: how fast the main content appears, how quickly it responds, and how much it jumps around. What each one measures, the thresholds that count as good, and the fixes that move them."
+tags: "Web"
+---
+
+"Is the site fast?" is too vague to act on. A page can download quickly
+and still feel slow because the main image appears late, because buttons
+don't respond, or because the text jumps just as you go to tap it.
+
+**Core Web Vitals** are Google's three metrics for exactly those
+experiences. They're measured from real users' browsers, they affect search
+ranking, and — more importantly — each one maps to something users actually
+notice.
+
+<WebVitalsVisualizer />
+
+## The three metrics
+
+<Table data={{
+  headers: ["Metric", "Measures", "Good", "Poor"],
+  rows: [
+    ["LCP — Largest Contentful Paint", "When the main content appears", "≤ 2.5 s", "> 4 s"],
+    ["INP — Interaction to Next Paint", "How fast the page responds to input", "≤ 200 ms", "> 500 ms"],
+    ["CLS — Cumulative Layout Shift", "How much visible content moves unexpectedly", "≤ 0.1", "> 0.25"]
+  ]
+}} />
+
+A page passes when the 75th percentile of real visits is "good" for all
+three — so most of your users, not just the ones on fast laptops.
+
+## LCP: when does the main thing show up?
+
+LCP is the time until the largest image or text block in the viewport has
+rendered — usually a hero image or the headline. It's the moment users feel
+"the page has loaded".
+
+Common causes of a slow LCP, and fixes:
+
+- **Slow server response.** Cache HTML at a [CDN](/blog/cdn-explained);
+  speed up the backend.
+- **Render-blocking CSS and JS.** Inline critical CSS; `defer` scripts.
+- **The image is discovered late** (set in CSS, or loaded by JavaScript).
+  Use a normal `<img>`, and add `fetchpriority="high"` or a preload for the
+  hero image.
+- **The image is too big.** Serve modern formats (AVIF, WebP) at the size
+  actually displayed.
+- **Lazy-loading the LCP image.** `loading="lazy"` is for images below the
+  fold, never the hero.
+
+## INP: does the page respond?
+
+INP measures the delay between a user's tap, click or keypress and the
+next frame the browser paints — across the whole visit, reporting one of
+the worst. It replaced FID (First Input Delay) as a Core Web Vital in 2024,
+because FID only measured the first interaction, and only part of it.
+
+The usual cause is **long JavaScript tasks**. The browser has
+[one main thread](/blog/javascript-event-loop) for running your code *and*
+painting; while a 400 ms task runs, nothing responds.
+
+- Break long work into smaller chunks, yielding to the browser in between.
+- Move heavy computation to a [Web Worker](/blog/web-workers-off-the-main-thread).
+- Ship less JavaScript ([tree shaking](/blog/tree-shaking-and-bundlers)
+  helps), and hydrate less of the page.
+- Show feedback immediately on click, then do the expensive work.
+- [Debounce](/blog/debounce-vs-throttle) handlers that fire on every
+  keystroke or scroll.
+
+## CLS: does it stay still?
+
+CLS adds up how much visible content shifts position unexpectedly — the
+ad that loads above the article, the font swap that reflows a paragraph.
+It's the metric behind "I tapped the wrong button".
+
+- **Always set `width` and `height`** (or `aspect-ratio`) on images and
+  videos, so the browser reserves space before they load.
+- **Reserve space** for ads, embeds and banners, or insert them below the
+  content the user is looking at.
+- **Avoid inserting content above existing content**, unless it's in
+  response to the user's own action.
+- **Animate with `transform`**, not by changing `top` or `height`
+  ([the rendering pipeline](/blog/rendering-pipeline-reflow-repaint)).
+- Use `font-display` and matched fallback fonts to limit reflow when web
+  fonts arrive.
+
+## Measuring
+
+- **Lab tools** — Lighthouse and the DevTools Performance panel — give
+  repeatable numbers on your machine. Good for debugging.
+- **Field data** — real users, via the Chrome UX Report or the
+  `web-vitals` JavaScript library sending metrics to your analytics — is
+  what actually counts.
+
+```javascript
+import { onCLS, onINP, onLCP } from 'web-vitals';
+
+onLCP(send);
+onINP(send);
+onCLS(send);
+```
+
+INP in particular can't be measured properly in the lab: it depends on
+what real users actually click.
+
+## The takeaway
+
+LCP: show the main content fast. INP: keep the main thread free so the
+page responds. CLS: reserve space so nothing jumps. Measure them from real
+users, fix the worst page templates first, and the page doesn't just score
+better — it feels better.

@@ -114,6 +114,17 @@ import {
 import { DomTreeVisualizer } from '@/app/components/dom-tree-visualizer'
 import { ArrayVsListVisualizer } from '@/app/components/array-vs-list-visualizer'
 import { HashFunctionVisualizer } from '@/app/components/hash-function-visualizer'
+import {
+  CdnVisualizer,
+  HeadOfLineVisualizer,
+  IsolationVisualizer,
+  ScalingVisualizer,
+  TreeShakingVisualizer,
+  WebhookVisualizer,
+  WebVitalsVisualizer,
+  XssVisualizer,
+} from '@/app/components/systems-visualizers'
+import { CountingSortVisualizer, KadaneVisualizer } from '@/app/components/linear-algo-visualizers'
 import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
@@ -344,6 +355,16 @@ const components = {
   StructuredOutputVisualizer,
   ApproachVisualizer,
   HallucinationVisualizer,
+  IsolationVisualizer,
+  CdnVisualizer,
+  WebhookVisualizer,
+  ScalingVisualizer,
+  XssVisualizer,
+  WebVitalsVisualizer,
+  HeadOfLineVisualizer,
+  KadaneVisualizer,
+  CountingSortVisualizer,
+  TreeShakingVisualizer,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {

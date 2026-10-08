@@ -1,0 +1,105 @@
+---
+title: "Vertical vs Horizontal Scaling: Bigger Machine or More Machines?"
+publishedAt: "2026-10-08"
+summary: "When one server can't keep up, you can buy a bigger one or add more. Why scaling up is the right first move, why it eventually stops working, and what scaling out really costs: stateless servers, load balancers, and shared state."
+tags: "System Design"
+---
+
+Every growing system hits the same moment: one server can't handle the
+traffic any more. There are two ways forward.
+
+- **Vertical scaling (scale up):** move to a bigger machine — more CPU
+  cores, more memory, faster disks.
+- **Horizontal scaling (scale out):** run more machines and spread the work
+  across them.
+
+<ScalingVisualizer />
+
+## Scale up first
+
+Vertical scaling's big advantage: **nothing in your code changes**. Same
+app, same database, bigger box. In the cloud, it's often a restart with a
+larger instance type.
+
+Modern machines are enormous — hundreds of cores and terabytes of memory
+are available — and a single well-tuned server handles far more traffic
+than most products ever see. Scaling up is cheap in engineering time,
+which is usually the most expensive resource you have.
+
+## Where it stops working
+
+- **There's a ceiling.** Eventually there is no bigger machine.
+- **Cost rises steeply at the top.** The largest instances cost
+  disproportionately more per unit of capacity.
+- **It's still one machine.** Hardware fails, and deploys need restarts.
+  However big it is, a single server is a single point of failure.
+
+That last point often forces horizontal scaling long before traffic does:
+availability needs at least two of everything.
+
+## Scaling out
+
+Run several identical servers behind a
+[load balancer](/blog/load-balancing-strategies), which spreads incoming
+requests across them and stops sending traffic to any that fail health
+checks.
+
+What you gain:
+
+- **No hard ceiling** — add servers as traffic grows.
+- **Resilience** — a failed server means less capacity, not an outage.
+- **Zero-downtime deploys** — replace servers a few at a time.
+- **Elasticity** — add servers at peak hours, remove them at night.
+
+## The real cost: state
+
+With several servers, any request can land on any of them. So no server
+can keep anything important to itself:
+
+- **Sessions** stored in local memory vanish when the next request hits a
+  different server. Move them to a shared store like Redis, or use signed
+  cookies.
+- **Uploaded files** saved to local disk exist on one machine only. Use
+  object storage (S3 and similar).
+- **In-memory caches** become inconsistent between servers. Share one, or
+  accept that each server has its own.
+- **Scheduled jobs** run once per server unless you coordinate them — with
+  a queue or a [distributed lock](/blog/distributed-locks-and-fencing).
+
+Making servers **stateless** is the actual work of scaling out. The load
+balancer is the easy part.
+
+"Sticky sessions" — pinning each user to one server — are a tempting
+shortcut, but they bring back the single-server problems: uneven load, and
+lost sessions when that server dies.
+
+## The database is the hard part
+
+Stateless web servers scale out easily. Databases don't, because their
+whole job is state. The usual progression:
+
+1. **Scale the database up** — it's the place a big machine pays off most.
+2. **Add read replicas** for read-heavy traffic.
+3. **Cache** hot reads in front of it.
+4. **Shard** — split the data across machines — only when writes outgrow
+   one primary ([sharding and replication](/blog/database-sharding-and-replication)).
+
+## Side by side
+
+<Table data={{
+  headers: ["", "Vertical", "Horizontal"],
+  rows: [
+    ["Code changes needed", "None", "Servers must be stateless"],
+    ["Upper limit", "The biggest machine available", "Practically none"],
+    ["Failure of one machine", "Outage", "Reduced capacity"],
+    ["Adding capacity", "Usually a restart", "Add a server, no downtime"],
+    ["Best for", "Databases, early-stage apps, simplicity", "Web/API tiers, high availability, spiky traffic"]
+  ]
+}} />
+
+## The takeaway
+
+Scale up until it's no longer simple or no longer safe; scale out the
+stateless parts as soon as you need availability; and push state into
+services built to hold it. Most systems end up doing both: a fleet of
+small, interchangeable app servers in front of a few very large databases.
