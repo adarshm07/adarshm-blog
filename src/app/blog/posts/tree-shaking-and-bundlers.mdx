@@ -1,0 +1,125 @@
+---
+title: "Tree Shaking: How Bundlers Remove the Code You Don't Use"
+publishedAt: "2026-10-08"
+summary: "Import one function from a library and you might ship all of it. How bundlers use the static structure of ES modules to drop unused exports, the things that silently defeat it — CommonJS, side effects, barrel files — and how to check what you're actually shipping."
+tags: "JavaScript"
+---
+
+Every kilobyte of JavaScript you ship has to be downloaded, parsed, compiled
+and run — on the user's device, which might be a five-year-old phone. Much
+of what ends up in a typical bundle is code the app never calls: unused
+functions from utility files, entire libraries pulled in for one helper.
+
+**Tree shaking** is the bundler optimisation that removes it. The name comes
+from the picture of your dependencies as a tree: shake it, and the dead
+branches fall off.
+
+<TreeShakingVisualizer />
+
+## Why ES modules make it possible
+
+Tree shaking depends on [ES modules](/blog/esm-vs-commonjs). Their
+`import` and `export` statements are **static**: they must appear at the
+top level, with fixed names, so a tool can read exactly what each file
+exports and uses without running anything.
+
+```javascript
+// utils.js
+export function add(a, b) { return a + b; }
+export function multiply(a, b) { return a * b; }
+
+// app.js
+import { add } from './utils.js';
+```
+
+The bundler builds a graph starting from your entry point, marks every
+export that's actually imported and used, and leaves the rest — here,
+`multiply` — out of the output. Minifiers then remove any remaining dead
+code.
+
+CommonJS doesn't allow this analysis:
+
+```javascript
+const utils = require('./utils');          // runs at runtime, any expression allowed
+const fn = utils[condition ? 'add' : 'multiply'];
+```
+
+A `require` can appear anywhere, take a computed path, and the result can
+be accessed with computed property names. The bundler can't know what's
+used, so it keeps everything.
+
+## Things that defeat tree shaking
+
+**CommonJS packages.** A library published only as CommonJS is included
+whole. When choosing a dependency, check that it ships an ES module build.
+
+**Side effects.** A module that does something just by being loaded — adds
+a polyfill, registers a global, imports CSS — can't be safely dropped even
+if none of its exports are used. Bundlers assume any module *might* have
+side effects unless told otherwise. Libraries declare that they're safe in
+`package.json`:
+
+```json
+{
+  "sideEffects": false
+}
+```
+
+or list only the files that do have side effects:
+
+```json
+{
+  "sideEffects": ["*.css", "./src/polyfills.js"]
+}
+```
+
+**Namespace imports used dynamically.**
+
+```javascript
+import * as icons from './icons';
+const Icon = icons[name];   // which icons? the bundler can't tell → all of them
+```
+
+**Barrel files.** An `index.js` that re-exports everything from a folder
+(`export * from './Button'` …) is convenient, but if any re-exported module
+has side effects, or the setup isn't marked side-effect free, importing one
+item can pull in the whole folder. It also slows down builds and dev
+servers.
+
+**Classes.** Methods on a class are kept if the class is used at all —
+bundlers don't remove unused methods from an instance. Large utility
+classes ship whole; standalone functions shake better.
+
+## Making it work for you
+
+- Import named functions, not whole libraries:
+  `import { debounce } from 'lodash-es'`, not `import _ from 'lodash'`.
+- Prefer dependencies with ES module builds and a `sideEffects` field.
+- Avoid dynamic access on namespace imports.
+- Mark your own packages `"sideEffects": false` when true.
+- For code only some users need — an editor, a chart library — use
+  **dynamic `import()`** to split it into a separate chunk that loads on
+  demand. Tree shaking removes code nobody uses; code splitting delays code
+  only some people use.
+
+## Check what you ship
+
+Don't assume — measure:
+
+- Bundle analysers (`webpack-bundle-analyzer`, `rollup-plugin-visualizer`,
+  Next.js's `@next/bundle-analyzer`) show every module in each chunk and
+  its size.
+- Look for libraries you don't recognise, duplicates of the same package,
+  and anything large that's only used on one page.
+
+The payoff shows up in load time and responsiveness — less JavaScript is
+one of the most reliable ways to improve
+[Core Web Vitals](/blog/core-web-vitals), especially INP.
+
+## The takeaway
+
+Tree shaking removes unused exports by reading the static structure of ES
+modules. It works automatically when your code and dependencies use ES
+modules, avoid dynamic access, and declare their side effects — and it
+fails silently when they don't. Keep an eye on the bundle analyser; it's
+the only way to know.

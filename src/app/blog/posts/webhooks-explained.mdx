@@ -1,0 +1,127 @@
+---
+title: "Webhooks: Receiving Events Reliably"
+publishedAt: "2026-10-08"
+summary: "A webhook is an API calling you instead of you calling it. How to verify that a request really came from the provider, why you should acknowledge fast and process later, and how to handle the retries, duplicates and out-of-order events that always come."
+tags: "System Design"
+---
+
+Your app wants to know when a payment succeeds, a repository gets a push,
+or a document is signed. You could ask the provider's API every few
+seconds — **polling** — but almost every answer would be "nothing new".
+
+A **webhook** flips the direction: you give the provider a URL, and it
+sends an HTTP `POST` to it when something happens. It's a reverse API
+call, and it's how most services report events to other systems.
+
+<WebhookVisualizer />
+
+## 1. Verify that it's really them
+
+Your webhook URL is public. Anyone who finds it can post a fake
+"payment succeeded" event. Providers prevent this by **signing** each
+request: they compute an HMAC of the request body using a secret shared
+only with you, and send it in a header.
+
+```javascript
+import crypto from 'node:crypto';
+
+function verifyWebhook(rawBody, signatureHeader, timestampHeader, secret) {
+  // Reject old requests so a captured one can't be replayed later.
+  const age = Math.abs(Date.now() / 1000 - Number(timestampHeader));
+  if (!Number.isFinite(age) || age > 300) return false;
+
+  const expected = crypto
+    .createHmac('sha256', secret)
+    .update(`${timestampHeader}.${rawBody}`)
+    .digest('hex');
+
+  const a = Buffer.from(expected);
+  const b = Buffer.from(signatureHeader);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+```
+
+Three details matter:
+
+- Sign and verify the **raw body bytes**. If your framework parses the
+  JSON first and you re-serialise it, the bytes differ and the signature
+  won't match.
+- Compare with a **constant-time** function (`timingSafeEqual`), not `===`.
+- Check the **timestamp**, and include it in the signed data.
+
+Each provider documents its exact header names and signing format — use
+their official library where one exists.
+
+## 2. Acknowledge fast, process later
+
+Providers wait only a few seconds for your response. If your handler sends
+an email, calls three APIs and updates the database before answering, a
+slow moment turns into a timeout, and the provider marks the delivery as
+failed.
+
+So do the minimum in the request:
+
+```javascript
+app.post('/webhooks/payments', express.raw({ type: 'application/json' }), async (req, res) => {
+  if (!verifyWebhook(req.body.toString(), req.get('X-Signature'), req.get('X-Timestamp'), SECRET)) {
+    return res.status(400).end();
+  }
+  const event = JSON.parse(req.body);
+  await queue.add('payment-event', event);   // durable queue
+  res.status(200).end();                      // answer in milliseconds
+});
+```
+
+A worker processes the queue at its own pace, with its own
+[retries](/blog/retries-backoff-and-jitter).
+
+## 3. Expect duplicates
+
+If the provider doesn't get a 2xx response — because of a timeout, a deploy,
+a network blip — it retries, often with backoff for hours or days. It can't
+know whether you processed the first attempt. Delivery is
+**at-least-once**, so the same event will sometimes arrive twice.
+
+Every event has a unique id. Record it when you process the event, in the
+same database transaction as the side effect, and skip ids you've seen:
+
+```sql
+INSERT INTO processed_events (event_id) VALUES ($1)
+ON CONFLICT (event_id) DO NOTHING
+RETURNING event_id;   -- no row returned → already handled
+```
+
+This is the same idea as an [idempotency key](/blog/idempotency-keys),
+from the receiving side.
+
+## 4. Don't trust the order
+
+Events can arrive out of order: `subscription.updated` before
+`subscription.created`, or an old update after a newer one. Two defences:
+
+- Compare an event's timestamp or version with what you've stored, and
+  ignore older ones.
+- Treat the event as a **nudge**: when it arrives, fetch the current state
+  of the object from the provider's API and store that. The latest state
+  is always right, whatever order the notifications came in.
+
+## 5. Plan for the gaps
+
+Retries eventually stop. If your endpoint was down longer than the
+provider's retry window, events are lost. Good practice:
+
+- Watch the provider's delivery dashboard or failure alerts.
+- Run a periodic **reconciliation** job that lists recent objects through
+  the API and fixes anything your webhooks missed.
+
+## Checklist
+
+- Verify the signature over the raw body, with a timestamp check.
+- Return 2xx quickly; process asynchronously.
+- Deduplicate by event id.
+- Handle out-of-order events, or re-fetch current state.
+- Reconcile periodically for anything that slipped through.
+
+Webhooks look like "just an endpoint", but they're a distributed system
+talking to yours over an unreliable network — and designing for that from
+the start is far easier than debugging a missing payment later.

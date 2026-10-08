@@ -1,0 +1,126 @@
+---
+title: "XSS and Content Security Policy: Stopping Injected JavaScript"
+publishedAt: "2026-10-08"
+summary: "Cross-site scripting gets your own site to run an attacker's JavaScript in your users' browsers. How it happens, why escaping output is the real fix, the places frameworks can't protect you, and how a Content Security Policy limits the damage when something slips through."
+tags: "Web"
+---
+
+**Cross-site scripting (XSS)** is one of the oldest and most common web
+vulnerabilities. The attacker doesn't break into your server. They get
+your site to deliver *their* JavaScript to *your* users — where it runs
+with the full trust of your page.
+
+<XssVisualizer />
+
+## What injected script can do
+
+Once it runs on your origin, the attacker's code can do anything your own
+code can:
+
+- Read what's on the page — messages, account details, tokens in the DOM.
+- Make requests as the logged-in user, using their cookies.
+- Change the page: fake login forms, altered payment details.
+- Read cookies, unless they're `HttpOnly` (see
+  [cookies and sessions](/blog/cookies-and-sessions)).
+
+## The three kinds
+
+- **Stored XSS** — the payload is saved (a comment, a profile name) and
+  served to everyone who views it. The most damaging.
+- **Reflected XSS** — the payload is in a link (`?q=<script>…`) and the
+  page echoes it back. Victims must click the link.
+- **DOM-based XSS** — client-side JavaScript takes untrusted input (the URL,
+  `postMessage`, local storage) and writes it into the page unsafely.
+
+## The real fix: escape output for its context
+
+The bug isn't that you stored `<script>`; it's that you put user text into
+HTML *as HTML*. Escape it, and the browser displays it as text:
+
+```
+<   →  &lt;
+>   →  &gt;
+&   →  &amp;
+"   →  &quot;
+'   →  &#39;
+```
+
+The right escaping depends on **where** the value lands — HTML text, an
+attribute, a URL, a `<script>` block, CSS. Each context has different
+dangerous characters, which is why hand-written escaping goes wrong.
+
+## Frameworks help — until you opt out
+
+React, Vue, Svelte and Angular escape values in templates by default:
+
+```jsx
+<p>{comment.text}</p>   // safe: rendered as text
+```
+
+The dangerous cases are the escape hatches and a few sneaky contexts:
+
+```jsx
+<div dangerouslySetInnerHTML={{ __html: comment.html }} />   // raw HTML
+<a href={user.website}>site</a>                               // "javascript:alert(1)" is a valid href
+element.innerHTML = location.hash.slice(1);                    // DOM XSS
+```
+
+- If you must render user HTML (rich text, Markdown output), **sanitise**
+  it with a maintained library such as DOMPurify, which strips scripts and
+  event handlers while keeping safe formatting.
+- **Validate URLs** before putting them in `href` or `src` — allow only
+  `http:` and `https:`.
+- Prefer `textContent` over `innerHTML` in plain DOM code
+  ([the DOM explained](/blog/the-dom-explained)).
+
+## Defence in depth: Content Security Policy
+
+Escaping is the fix, but a large codebase only needs one mistake. A
+**Content Security Policy (CSP)** is a response header that tells the
+browser which scripts are allowed to run at all:
+
+```http
+Content-Security-Policy: script-src 'self'; object-src 'none'; base-uri 'none'
+```
+
+With `script-src 'self'`, the browser only runs scripts loaded from your
+own origin. Inline `<script>` blocks, `onerror=` attributes and
+`javascript:` URLs are refused — exactly the forms injected code takes.
+
+Real sites often need a little inline script. Rather than re-enabling
+everything with `'unsafe-inline'`, use a **nonce**: a random value
+generated per response, added to the header and to each script you trust:
+
+```http
+Content-Security-Policy: script-src 'nonce-r4nd0m' 'strict-dynamic'
+```
+
+```html
+<script nonce="r4nd0m">/* your inline script runs */</script>
+```
+
+An attacker can't guess the nonce, so their injected script doesn't run.
+
+## Rolling CSP out safely
+
+A strict policy will break things the first time. Use report-only mode:
+
+```http
+Content-Security-Policy-Report-Only: script-src 'self'; report-to csp
+```
+
+The browser reports what it *would* have blocked without blocking it. Fix
+the violations, then switch to the enforcing header.
+
+## Checklist
+
+- Let your framework escape output; treat every escape hatch as a
+  security review.
+- Sanitise user-supplied HTML with a maintained library.
+- Allow only safe URL schemes in links and sources.
+- Set session cookies `HttpOnly`.
+- Add a CSP — nonce-based if you need inline scripts — and start in
+  report-only mode.
+
+Escaping prevents XSS; CSP limits the damage when prevention fails. You
+want both.

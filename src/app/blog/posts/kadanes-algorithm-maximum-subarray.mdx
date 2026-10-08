@@ -1,0 +1,123 @@
+---
+title: "Kadane's Algorithm: The Maximum Subarray in One Pass"
+publishedAt: "2026-10-08"
+summary: "Find the contiguous slice of an array with the largest sum — in O(n) time and O(1) memory. Why a negative running sum should always be dropped, how to recover the slice itself, and how the same idea solves stock prices, circular arrays and products."
+tags: "DSA"
+---
+
+Given an array of numbers, positive and negative, find the contiguous
+slice with the largest sum.
+
+```
+[-2, 1, -3, 4, -1, 2, 1, -5, 4]
+              └──────────┘
+              4 + -1 + 2 + 1 = 6
+```
+
+Checking every possible slice works, but there are about n²/2 of them —
+O(n²) even if you keep a running sum. Kadane's algorithm does it in one
+pass.
+
+## The key question at each index
+
+Walk through the array once, and at each position ask one question:
+
+> What is the best sum of a slice that **ends exactly here**?
+
+There are only two options: extend the best slice that ended at the
+previous index, or start a new slice right here. So:
+
+```
+bestEndingHere = max(x, bestEndingHerePrevious + x)
+```
+
+Starting fresh wins exactly when the previous running sum is negative —
+carrying a negative sum forward can only make things worse. Keep a second
+number for the best value seen anywhere, and you're done.
+
+<KadaneVisualizer />
+
+## The code
+
+```javascript
+function maxSubarray(nums) {
+  let cur = nums[0];
+  let best = nums[0];
+
+  for (let i = 1; i < nums.length; i++) {
+    cur = Math.max(nums[i], cur + nums[i]);
+    best = Math.max(best, cur);
+  }
+  return best;
+}
+
+maxSubarray([-2, 1, -3, 4, -1, 2, 1, -5, 4]);   // 6
+```
+
+One pass, O(n) time, O(1) memory. Starting from `nums[0]` rather than 0
+matters: if every number is negative, the answer is the largest single
+element, not 0.
+
+## Getting the slice, not just the sum
+
+Track where the current slice started, and record its range whenever it
+becomes the best:
+
+```javascript
+function maxSubarrayRange(nums) {
+  let cur = nums[0], best = nums[0];
+  let start = 0, bestStart = 0, bestEnd = 0;
+
+  for (let i = 1; i < nums.length; i++) {
+    if (cur + nums[i] < nums[i]) {
+      cur = nums[i];
+      start = i;            // restart here
+    } else {
+      cur += nums[i];
+    }
+    if (cur > best) {
+      best = cur;
+      bestStart = start;
+      bestEnd = i;
+    }
+  }
+  return { sum: best, slice: nums.slice(bestStart, bestEnd + 1) };
+}
+// { sum: 6, slice: [4, -1, 2, 1] }
+```
+
+## Why it's dynamic programming
+
+`cur` at index i is the answer to a subproblem — "best sum ending at i" —
+built from the answer at i − 1. That's
+[dynamic programming](/blog/dynamic-programming-intro) with the table
+collapsed to a single variable, because each step only needs the previous
+one.
+
+## Variations
+
+**Best time to buy and sell a stock once.** Turn prices into daily changes
+— `prices[i] − prices[i−1]` — and the maximum subarray of the changes is
+the best profit. Or, equivalently, track the minimum price so far.
+
+**Circular array** (the end wraps to the start). The best slice either
+doesn't wrap — plain Kadane — or it does, in which case it's the total minus
+the *minimum* subarray. Take the larger, with care for the all-negative
+case.
+
+**Maximum product subarray.** A negative times a negative is positive, so
+track both the largest and the smallest product ending at each index, and
+swap them when you multiply by a negative.
+
+**2D: maximum-sum rectangle.** Fix a pair of rows, collapse the columns
+between them into one array of sums, and run Kadane on it — O(rows² ×
+cols).
+
+## The takeaway
+
+When a problem asks for the best contiguous slice, ask "what's the best
+answer ending here?" Most of the time it depends only on the previous
+answer, and the whole problem collapses into one pass with a couple of
+variables. Pair it with [prefix sums](/blog/prefix-sums-and-difference-arrays)
+and [sliding windows](/blog/two-pointers-and-sliding-window), and you have
+the three core tools for subarray problems.
