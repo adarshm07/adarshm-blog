@@ -125,6 +125,17 @@ import {
   XssVisualizer,
 } from '@/app/components/systems-visualizers'
 import { CountingSortVisualizer, KadaneVisualizer } from '@/app/components/linear-algo-visualizers'
+import { EditDistanceVisualizer, FloydWarshallVisualizer } from '@/app/components/graph-dp-visualizers'
+import {
+  BrowserStorageVisualizer,
+  DeclarationFileVisualizer,
+  ErrorHandlingVisualizer,
+  EventSourcingVisualizer,
+  HealthCheckVisualizer,
+  IntlVisualizer,
+  RaftVisualizer,
+  ServiceWorkerVisualizer,
+} from '@/app/components/platform-visualizers'
 import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
@@ -365,6 +376,16 @@ const components = {
   KadaneVisualizer,
   CountingSortVisualizer,
   TreeShakingVisualizer,
+  FloydWarshallVisualizer,
+  EditDistanceVisualizer,
+  RaftVisualizer,
+  EventSourcingVisualizer,
+  HealthCheckVisualizer,
+  ServiceWorkerVisualizer,
+  BrowserStorageVisualizer,
+  ErrorHandlingVisualizer,
+  IntlVisualizer,
+  DeclarationFileVisualizer,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {

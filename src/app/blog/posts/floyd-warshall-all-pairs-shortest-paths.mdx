@@ -1,0 +1,130 @@
+---
+title: "Floyd–Warshall: Shortest Paths Between Every Pair of Nodes"
+publishedAt: "2026-10-09"
+summary: "Dijkstra answers 'how far from here to everywhere'. Floyd–Warshall answers 'how far from everywhere to everywhere' — with three nested loops and one table. How the via-vertex idea works, how to rebuild the paths, and when it beats running Dijkstra many times."
+tags: "DSA"
+---
+
+[Dijkstra](/blog/dijkstra-shortest-paths) and
+[Bellman-Ford](/blog/bellman-ford-negative-edges) find shortest paths from
+**one** starting node. Sometimes you need them between **every** pair: a
+distance table between cities, the latency between every pair of data
+centres, "how many hops apart" for every two people in a small network.
+
+Floyd–Warshall computes all of them at once, and its core is three lines.
+
+## The idea: allow one more "via" node at a time
+
+Number the vertices 1 to V. Define the question in stages:
+
+> What's the shortest path from i to j, if the path may only pass through
+> vertices 1..k on the way?
+
+With k = 0, only direct edges are allowed — that's the starting table. Now
+add vertex k to the allowed set. For each pair (i, j), the best path either
+doesn't use k (the answer stays the same), or it goes i → k → j, where both
+halves only use vertices before k — which the table already knows:
+
+```
+dist[i][j] = min(dist[i][j], dist[i][k] + dist[k][j])
+```
+
+After allowing all V vertices, every entry is the true shortest distance.
+
+<FloydWarshallVisualizer />
+
+## The code
+
+```javascript
+function floydWarshall(n, edges) {
+  const dist = Array.from({ length: n }, (_, i) =>
+    Array.from({ length: n }, (_, j) => (i === j ? 0 : Infinity))
+  );
+  for (const [from, to, w] of edges) dist[from][to] = Math.min(dist[from][to], w);
+
+  for (let k = 0; k < n; k++) {
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        if (dist[i][k] + dist[k][j] < dist[i][j]) {
+          dist[i][j] = dist[i][k] + dist[k][j];
+        }
+      }
+    }
+  }
+  return dist;
+}
+```
+
+The loop order matters: **k must be the outermost loop**. Each pass of k
+uses the complete table from the previous pass. Swap the loops and the
+algorithm silently returns wrong answers.
+
+## Cost
+
+- **Time: O(V³)** — three nested loops over the vertices.
+- **Memory: O(V²)** — one table, updated in place.
+
+That's fine for a few hundred vertices (500³ is 125 million cheap steps)
+and impractical for a road network with millions.
+
+## Recovering the actual path
+
+The table gives distances. To get routes, keep a second table, `next[i][j]`
+= the first hop on the best path from i to j:
+
+```javascript
+// initialise: next[i][j] = j wherever there's an edge i → j
+// in the update:
+if (dist[i][k] + dist[k][j] < dist[i][j]) {
+  dist[i][j] = dist[i][k] + dist[k][j];
+  next[i][j] = next[i][k];
+}
+
+function path(next, i, j) {
+  if (next[i][j] === undefined) return [];
+  const route = [i];
+  while (i !== j) {
+    i = next[i][j];
+    route.push(i);
+  }
+  return route;
+}
+```
+
+## Negative edges and cycles
+
+Floyd–Warshall handles negative edge weights. And it detects negative
+cycles for free: after the algorithm finishes, if any `dist[i][i]` is less
+than 0, vertex i lies on a cycle whose total weight is negative — and
+"shortest path" stops being meaningful for anything that can reach it.
+
+## Floyd–Warshall or Dijkstra from every node?
+
+<Table data={{
+  headers: ["", "Floyd–Warshall", "Dijkstra × V"],
+  rows: [
+    ["Time", "O(V³)", "O(V · (V + E) log V)"],
+    ["Negative edges", "Yes", "No"],
+    ["Code", "Three loops", "A heap and a loop, V times"],
+    ["Best when", "Dense graphs, small V", "Sparse graphs, large V"]
+  ]
+}} />
+
+On a dense graph, where E is close to V², both are about V³ and
+Floyd–Warshall's simplicity wins. On a sparse graph, running Dijkstra from
+each vertex is much faster.
+
+## Where it shows up
+
+- Distance tables for small sets of locations (stops, warehouses, rooms in
+  a game).
+- **Transitive closure** — "can i reach j at all?" — using booleans with OR
+  and AND instead of min and +.
+- Network analysis: the "diameter" and "centrality" of small graphs.
+
+## The takeaway
+
+Floyd–Warshall builds shortest paths by allowing one more intermediate
+vertex per pass and asking, for every pair, "does going through this one
+help?" It's [dynamic programming](/blog/dynamic-programming-intro) over a
+V×V table — slow for huge graphs, unbeatable for simplicity on small ones.

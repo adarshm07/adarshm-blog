@@ -1,0 +1,130 @@
+---
+title: "Edit Distance: How Spell-Checkers Measure 'Close Enough'"
+publishedAt: "2026-10-09"
+summary: "The fewest inserts, deletes and substitutions to turn one word into another. How the Levenshtein distance is computed with a small DP table, how to recover the actual edits, and where it's used — from 'did you mean' to fuzzy search and DNA alignment."
+tags: "DSA"
+---
+
+Type "recieve" and a spell-checker suggests "receive". Search for
+"javscript" and you still find JavaScript. Both need a way to measure how
+*close* two strings are — and the classic measure is **edit distance**,
+also called Levenshtein distance:
+
+> The minimum number of single-character insertions, deletions and
+> substitutions needed to turn one string into the other.
+
+`kitten` → `sitting` is 3:
+
+```
+kitten → sitten   (substitute k → s)
+sitten → sittin   (substitute e → i)
+sittin → sitting  (insert g)
+```
+
+## Building it from smaller answers
+
+Let `T[i][j]` be the edit distance between the first `i` letters of `a` and
+the first `j` letters of `b`. Look at the last letters:
+
+- If `a[i-1] === b[j-1]`, they cost nothing: `T[i][j] = T[i-1][j-1]`.
+- Otherwise, take the cheapest of three moves, each costing 1:
+  - **substitute** the last letter: `T[i-1][j-1] + 1`
+  - **delete** from `a`: `T[i-1][j] + 1`
+  - **insert** into `a`: `T[i][j-1] + 1`
+
+The first row and column are easy: turning a string into the empty string
+takes one deletion per letter.
+
+<EditDistanceVisualizer />
+
+## The code
+
+```javascript
+function editDistance(a, b) {
+  const T = Array.from({ length: a.length + 1 }, (_, i) =>
+    Array.from({ length: b.length + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
+  );
+
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      if (a[i - 1] === b[j - 1]) {
+        T[i][j] = T[i - 1][j - 1];
+      } else {
+        T[i][j] = 1 + Math.min(
+          T[i - 1][j - 1],   // substitute
+          T[i - 1][j],       // delete
+          T[i][j - 1],       // insert
+        );
+      }
+    }
+  }
+  return T[a.length][b.length];
+}
+
+editDistance('kitten', 'sitting');   // 3
+```
+
+O(m × n) time and memory, for strings of length m and n. This is textbook
+[dynamic programming](/blog/dynamic-programming-intro): overlapping
+subproblems, each solved once, stored in a table.
+
+## Using less memory
+
+Each row only depends on the row above it, so you can keep just two rows —
+O(min(m, n)) memory — when you need the distance but not the edits:
+
+```javascript
+function editDistanceLowMemory(a, b) {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = a[i - 1] === b[j - 1]
+        ? prev[j - 1]
+        : 1 + Math.min(prev[j - 1], prev[j], cur[j - 1]);
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+```
+
+## Recovering the edits
+
+To show the user *what* changed, keep the full table and walk back from the
+bottom-right corner: at each cell, move to whichever neighbour produced its
+value — diagonally for a match or substitution, up for a delete, left for
+an insert. The moves, reversed, are the edit script. Diff tools build on the
+same table idea (usually optimised for long inputs).
+
+## Variations
+
+- **Damerau–Levenshtein** also counts swapping two adjacent letters
+  ("teh" → "the") as one edit — closer to how people actually mistype.
+- **Weighted costs**: make substitutions between keys that are adjacent on
+  the keyboard cheaper.
+- **Longest common subsequence** is the same table with different rules,
+  and the basis of line-by-line diffs.
+- **Sequence alignment** in bioinformatics (Needleman–Wunsch) is edit
+  distance with scores for matches and gaps.
+
+## Where it's used
+
+- Spell-checkers and "did you mean…?" suggestions.
+- Fuzzy search and autocomplete that tolerate typos.
+- Matching messy records — "Jon Smith" vs "John Smith" — during data
+  cleaning.
+- Command-line tools suggesting the command you meant (`git psuh` → "did
+  you mean push?").
+
+For searching a large dictionary, computing the distance against every
+word is slow; real systems first narrow candidates with an index — a
+[trie](/blog/tries-prefix-trees) or n-gram index — and compute edit
+distance only for those.
+
+## The takeaway
+
+Edit distance turns "how similar are these strings?" into a number, using a
+table where each cell is the cheapest of three moves. Learn this one table
+and you've learned the pattern behind diffs, alignments and most "fuzzy"
+string matching.

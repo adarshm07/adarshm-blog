@@ -1,0 +1,113 @@
+---
+title: "Event Sourcing and CQRS: Storing What Happened, Not Just What Is"
+publishedAt: "2026-10-09"
+summary: "Instead of overwriting the current state, store every change as an immutable event and derive state by replaying them. What event sourcing gives you — full history, audit, time travel, new views of old data — what it costs, and how CQRS fits alongside it."
+tags: "System Design"
+---
+
+Most applications store **current state**. A bank balance is a number in a
+row; a deposit updates it. Once updated, the old value — and *why* it
+changed — is gone, unless you built a separate history table.
+
+**Event sourcing** turns that around: store every change as an event, in
+order, forever. The current state isn't stored at all — it's computed by
+replaying the events.
+
+<EventSourcingVisualizer />
+
+## Events are facts
+
+```javascript
+const events = [
+  { type: 'AccountOpened', accountId: 'acc-1', owner: 'Ada',  at: '2026-10-01T09:00Z' },
+  { type: 'Deposited',     accountId: 'acc-1', amount: 100,   at: '2026-10-01T09:05Z' },
+  { type: 'Withdrew',      accountId: 'acc-1', amount: 30,    at: '2026-10-03T14:10Z' },
+  { type: 'Deposited',     accountId: 'acc-1', amount: 50,    at: '2026-10-07T11:00Z' },
+];
+```
+
+Events are named in the **past tense** — they describe things that
+happened. They're **immutable**: a mistake is fixed by appending a
+correcting event, never by editing history (exactly how accountants work).
+
+## State is a fold over events
+
+```javascript
+function apply(state, event) {
+  switch (event.type) {
+    case 'AccountOpened': return { owner: event.owner, balance: 0 };
+    case 'Deposited':     return { ...state, balance: state.balance + event.amount };
+    case 'Withdrew':      return { ...state, balance: state.balance - event.amount };
+    default:              return state;
+  }
+}
+
+const account = events.reduce(apply, {});   // { owner: 'Ada', balance: 120 }
+```
+
+A pure function from (state, event) to new state — a `reduce`, the same
+shape as a Redux reducer.
+
+## What you get
+
+- **Complete history and audit**, for free. Every change, who made it, and
+  when.
+- **Time travel.** Replay up to any moment to see the state as it was —
+  invaluable for debugging and for questions like "what did this order
+  look like when the customer complained?"
+- **New views of old data.** Need a report you didn't plan for? Write a new
+  projection and replay the whole history into it.
+- **Natural integration.** The event log *is* a stream other services can
+  subscribe to, without [dual-write problems](/blog/dual-writes-and-the-outbox-pattern).
+
+## CQRS: separate the writes from the reads
+
+Replaying every event on every read would be slow, and the shape that's
+good for recording changes is rarely the shape that's good for queries.
+**CQRS** (Command Query Responsibility Segregation) splits the two:
+
+- The **write side** handles commands ("withdraw 30"), checks them against
+  the current state, and appends events.
+- **Read models** subscribe to the event stream and maintain query-shaped
+  tables: current balances, a monthly statement, a search index — each
+  optimised for its job.
+
+```
+command → validate → append event ─┬─→ balances table
+                                   ├─→ statements table
+                                   └─→ search index
+```
+
+CQRS doesn't require event sourcing, and event sourcing doesn't strictly
+require CQRS — but they fit together naturally.
+
+## What it costs
+
+- **Eventual consistency.** Read models update a moment after the event is
+  written. A user may not see their own change immediately unless you
+  design for it.
+- **Event schemas live forever.** Old events must still be readable years
+  later. Changing an event's shape means versioning and upcasting old ones.
+- **Replays get slow.** Long-lived entities accumulate thousands of events;
+  store periodic **snapshots** and replay only the events after them.
+- **Deleting data is hard.** "Immutable forever" collides with privacy laws
+  that require erasure. Common answer: keep personal data outside the
+  events, or encrypt it per user and delete the key.
+- **More moving parts** than a table you update.
+
+## When it's worth it
+
+**Good fit:** domains where history *is* the business — ledgers, payments,
+inventory, bookings, workflows with audit requirements, and systems where
+many services react to the same changes.
+
+**Poor fit:** simple CRUD apps, or anything where nobody will ever ask
+"how did it get like this?". Plain tables plus an audit log are far
+simpler.
+
+## The takeaway
+
+Event sourcing stores what happened and derives what is. You gain history,
+auditability and the freedom to build new views from old data; you pay with
+eventual consistency, schema discipline and extra infrastructure. Use it
+where the story of the data matters as much as its current value.
