@@ -4,7 +4,7 @@ import { baseUrl } from '@/app/sitemap'
 export const metadata = {
   title: 'Tools',
   description:
-    'Small tools for practising system design, sizing a system, and checking a regex for catastrophic backtracking. They run in your browser.',
+    'Small tools for practising system design and low-level design, sizing a system, and checking a regex for catastrophic backtracking. They run in your browser.',
   alternates: { canonical: '/tools' },
   openGraph: {
     title: 'Tools',
@@ -22,6 +22,13 @@ const TOOLS = [
     description:
       'Answer a real design prompt, then have Claude grade it against a six-part rubric — scores, gaps, and the questions an interviewer would ask next.',
     note: 'Needs your own API key',
+  },
+  {
+    href: '/tools/lld',
+    name: 'LLD practice',
+    description:
+      'Practise low-level design: write notes, draw a class diagram, sketch the code, then send it to Claude for a rubric-based review — paste into claude.ai for free, or review right here with your own key.',
+    note: 'Claude optional',
   },
   {
     href: '/tools/capacity',

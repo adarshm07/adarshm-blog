@@ -40,10 +40,22 @@ export function clearKey() {
 }
 
 export const MODELS = [
-  { id: 'claude-opus-5', label: 'Opus 5 — most capable' },
-  { id: 'claude-sonnet-5', label: 'Sonnet 5 — faster, cheaper' },
+  { id: 'claude-opus-5-5', label: 'Opus 5.5 — most capable' },
+  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5 — faster, cheaper' },
   { id: 'claude-haiku-4-5', label: 'Haiku 4.5 — cheapest' },
 ] as const
+
+export const DEFAULT_MODEL: string = MODELS[0].id
+
+/**
+ * Models that accept server-side refusal fallbacks (`fallbacks: "default"`
+ * under the server-side-fallback-2026-07-01 beta): if a safety classifier
+ * declines, the API retries on a suitable model inside the same call instead
+ * of returning a refusal. Haiku 4.5 doesn't take the parameter.
+ */
+export function supportsServerFallbacks(model: string) {
+  return model === 'claude-opus-5-5' || model === 'claude-sonnet-5-5'
+}
 
 /**
  * The SDK is loaded on demand so it never lands in the initial bundle, and

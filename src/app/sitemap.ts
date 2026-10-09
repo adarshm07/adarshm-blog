@@ -28,6 +28,7 @@ export default async function sitemap() {
     '/learn/ai',
     '/tools',
     '/tools/system-design',
+    '/tools/lld',
     '/tools/capacity',
     '/tools/regex',
     '/dsa',

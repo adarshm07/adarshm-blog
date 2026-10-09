@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { ApiKeyField } from '@/app/components/tools/api-key-field'
-import { createClient, describeError } from '@/app/lib/byok'
+import { createClient, DEFAULT_MODEL, describeError } from '@/app/lib/byok'
 import { DIMENSIONS, PROBLEMS, type Problem } from '@/app/lib/system-design-problems'
 
 type Score = { key: string; score: number; comment: string }
@@ -82,7 +82,7 @@ export function SystemDesignPractice() {
   const [problem, setProblem] = useState<Problem>(PROBLEMS[0])
   const [answer, setAnswer] = useState('')
   const [apiKey, setApiKey] = useState('')
-  const [model, setModel] = useState('claude-opus-5')
+  const [model, setModel] = useState(DEFAULT_MODEL)
   const [review, setReview] = useState<Review | null>(null)
   const [raw, setRaw] = useState('')
   const [error, setError] = useState('')
