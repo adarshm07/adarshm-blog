@@ -103,7 +103,7 @@ utilities. Keep that suffix on any new `.prose` rule.
 | `/about` | `src/app/about/page.tsx` | Bio, personal stack, and how the site is built |
 | `/learn` | `src/app/learn/page.tsx` | Hub listing the guides |
 | `/learn/web`, `/learn/javascript`, `/learn/ai` | `src/app/learn/{web,javascript,ai}/page.tsx` | One-page animated guides. Content lives in `learn/guides/*.tsx` as `Guide` data; `learn/guide.tsx` renders it and checks every chapter's `post` slug at build time |
-| `/tools` | `src/app/tools/` | System design practice (BYOK Claude), capacity calculator, regex backtracking checker |
+| `/tools` | `src/app/tools/` | System design practice (BYOK Claude), LLD practice (class-diagram editor; copy-to-claude.ai or BYOK review), capacity calculator, regex backtracking checker |
 | `/dsa` | `src/app/dsa/page.tsx` | Ordered learning path from `curriculum.ts` |
 | `/dsa/patterns` | `src/app/dsa/patterns/` | Practice questions grouped by pattern, authored as MDX |
 | `/dsa/progress` | `src/app/dsa/progress/page.tsx` | Dashboard over both progress tracks |
@@ -143,6 +143,15 @@ visitor's own key** — `src/app/lib/byok.ts` handles key storage (session by
 default, device opt-in) and dynamically imports `@anthropic-ai/sdk` with
 `dangerouslyAllowBrowser: true`, so its ~190KB only loads on first use. No
 key ever reaches a server here; there is no backend.
+
+`/tools/lld` is the same idea for low-level design. Its class-diagram model
+and pure helpers (geometry, `diagramToText` for the prompt, `diagramToSvg`
+for PNG export) live in `src/app/lib/class-diagram.ts`; the prompt is built
+once in `lib/lld-prompt.ts` and shared by the "Copy & open Claude" path and
+the in-page streaming review. The tool is loaded with `ssr: false`
+(`lld-practice-loader.tsx`) so it can read drafts from localStorage while
+initialising state. `MODELS` in `byok.ts` drives both tools' model picker;
+`supportsServerFallbacks()` gates the `fallbacks: "default"` beta param.
 
 ### Pagination
 
