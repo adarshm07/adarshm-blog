@@ -1,0 +1,145 @@
+---
+title: "The Intl API: Formatting Numbers, Dates and Lists for Every Locale"
+publishedAt: "2026-10-09"
+summary: "1,234,567.89 or 12,34,567.89 or 1.234.567,89? JavaScript's built-in Intl API formats numbers, currencies, dates, relative times, lists and plurals correctly for any language — no libraries, no hand-written rules."
+tags: "JavaScript"
+---
+
+Formatting looks trivial until your users live in different countries. The
+same number is `1,234,567.89` in the US, `12,34,567.89` in India and
+`1.234.567,89` in Germany. Dates swap day and month. "3 items" needs
+different plural forms in different languages.
+
+Every modern browser and Node.js ships the **`Intl`** API, which handles all
+of this using the same locale data your operating system uses.
+
+<IntlVisualizer />
+
+## Numbers
+
+```javascript
+const n = 1234567.891;
+
+new Intl.NumberFormat('en-US').format(n);   // "1,234,567.891"
+new Intl.NumberFormat('en-IN').format(n);   // "12,34,567.891"  (lakh grouping)
+new Intl.NumberFormat('de-DE').format(n);   // "1.234.567,891"
+```
+
+Pass `undefined` as the locale to use the user's own language settings.
+
+Options cover most formatting needs:
+
+```javascript
+new Intl.NumberFormat('en', { maximumFractionDigits: 1 }).format(3.14159);  // "3.1"
+new Intl.NumberFormat('en', { notation: 'compact' }).format(n);              // "1.2M"
+new Intl.NumberFormat('en', { style: 'percent' }).format(0.256);             // "26%"
+new Intl.NumberFormat('en', { style: 'unit', unit: 'kilobyte' }).format(512); // "512 kB"
+```
+
+## Currency
+
+```javascript
+const money = (locale, currency) =>
+  new Intl.NumberFormat(locale, { style: 'currency', currency });
+
+money('en-IN', 'INR').format(n);   // "₹12,34,567.89"
+money('en-US', 'USD').format(n);   // "$1,234,567.89"
+money('ja-JP', 'JPY').format(n);   // "￥1,234,568"  (yen has no minor unit)
+```
+
+The **locale** decides the formatting style; the **currency** decides the
+symbol and decimal places. They're independent — a German user viewing
+prices in US dollars gets `1.234.567,89 $`.
+
+## Dates and times
+
+```javascript
+const d = new Date(Date.UTC(2026, 9, 9, 14, 30));
+
+new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }).format(d);
+// "Oct 9, 2026, 2:30 PM"
+
+new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }).format(d);
+// "9 Oct 2026, 14:30"
+
+new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' }).format(d);
+// "9 Oct 2026, 8:00 pm"
+```
+
+The `timeZone` option converts for display without any date maths. Store
+times in UTC and convert only when showing them — see
+[dates, timezones and Temporal](/blog/dates-timezones-and-temporal).
+
+## Relative times
+
+```javascript
+const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+
+rtf.format(-1, 'day');    // "yesterday"
+rtf.format(3, 'hour');    // "in 3 hours"
+rtf.format(-2, 'week');   // "2 weeks ago"
+```
+
+You compute the difference and choose the unit; `Intl` handles the words,
+in any language.
+
+## Plurals
+
+English has "1 item" and "2 items". Other languages have more forms —
+Arabic has six. `PluralRules` tells you which form a number needs:
+
+```javascript
+const pr = new Intl.PluralRules('en-US');
+const label = (count) => `${count} ${pr.select(count) === 'one' ? 'item' : 'items'}`;
+
+label(1);   // "1 item"
+label(2);   // "2 items"
+
+// Ordinals: 1st, 2nd, 3rd, 4th
+const ord = new Intl.PluralRules('en-US', { type: 'ordinal' });
+const suffix = { one: 'st', two: 'nd', few: 'rd', other: 'th' };
+const nth = (n) => `${n}${suffix[ord.select(n)]}`;
+nth(21);   // "21st"
+nth(11);   // "11th"
+```
+
+## Lists and sorting
+
+```javascript
+new Intl.ListFormat('en', { type: 'conjunction' }).format(['Ada', 'Grace', 'Linus']);
+// "Ada, Grace, and Linus"
+new Intl.ListFormat('de', { type: 'conjunction' }).format(['Ada', 'Grace', 'Linus']);
+// "Ada, Grace und Linus"
+
+['ä', 'a', 'z'].sort();                                  // ["a", "z", "ä"]  — by code unit
+['ä', 'a', 'z'].sort(new Intl.Collator('de').compare);  // ["a", "ä", "z"]  — as a German reader expects
+
+['item10', 'item2', 'item1'].sort(new Intl.Collator(undefined, { numeric: true }).compare);
+// ["item1", "item2", "item10"]
+```
+
+The default `sort()` compares UTF-16 code units, which is wrong for accented
+letters and for numbers inside strings. `Collator` sorts the way humans
+expect.
+
+## Tips
+
+- **Create formatters once and reuse them** — constructing one is much
+  slower than calling `.format()`.
+- **Don't compare formatted strings in tests.** Outputs can change between
+  browser and ICU versions, and some contain invisible non-breaking spaces —
+  the space in German `1.234.567,89 $` is U+00A0, not a normal space, and
+  some versions put U+202F before AM/PM. Test the inputs you pass, or
+  normalise whitespace first.
+- **Format at the edge** — keep raw numbers and dates in your data, and
+  format only when rendering.
+- In server-rendered apps, format with an **explicit locale and time
+  zone**, or the server's settings and the visitor's browser may disagree
+  and produce mismatched markup.
+
+## The takeaway
+
+Before reaching for a formatting library or writing your own rules, check
+`Intl`: `NumberFormat`, `DateTimeFormat`, `RelativeTimeFormat`,
+`PluralRules`, `ListFormat` and `Collator` cover nearly every case, in every
+language, for zero bytes of bundle size.

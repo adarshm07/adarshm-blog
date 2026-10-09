@@ -53,20 +53,35 @@ function MessageRow({
     : 'bg-neutral-300 dark:bg-neutral-600'
 
   if (span === 0) {
-    // A self-action: a pill centred on the actor's column.
+    // A self-action. Like arrow labels: the current one gets the full width
+    // and may wrap; history rows stay a one-line pill truncated to the column.
+    if (current) {
+      // Span the actor's column plus one neighbour each side, anchored toward
+      // the actor, so the label stays under it but has room to wrap.
+      const c = m.from
+      return (
+        <div className="grid py-0.5" style={{ gridTemplateColumns: `repeat(${columns}, 1fr)` }}>
+          <span
+            className={['rounded-md bg-amber-500/15 px-1.5 py-0.5 text-center font-mono text-[9.5px]', textTone].join(' ')}
+            style={{
+              gridColumn: `${Math.max(1, c)} / ${Math.min(columns, c + 2) + 1}`,
+              justifySelf: c === 0 ? 'start' : c === columns - 1 ? 'end' : 'center',
+            }}
+          >
+            {m.label}
+          </span>
+        </div>
+      )
+    }
     return (
-      <div className="relative h-7">
+      <div className="relative h-6">
         <div
-          className="absolute top-0.5 flex justify-center"
+          className="absolute top-0.5 flex justify-center px-0.5"
           style={{ left: `${(m.from / columns) * 100}%`, width: `${(1 / columns) * 100}%` }}
         >
           <span
-            className={[
-              'max-w-[180%] whitespace-nowrap rounded-md px-1.5 py-0.5 font-mono text-[9.5px] transition-opacity duration-300',
-              current
-                ? 'bg-amber-500/15 ' + textTone
-                : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-400 dark:text-neutral-500',
-            ].join(' ')}
+            title={m.label}
+            className="max-w-full truncate rounded-md bg-neutral-100 dark:bg-neutral-800 px-1.5 py-0.5 font-mono text-[9.5px] text-neutral-400 dark:text-neutral-500"
           >
             {m.label}
           </span>

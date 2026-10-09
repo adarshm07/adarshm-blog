@@ -1,0 +1,122 @@
+---
+title: "Raft: How a Cluster Agrees on a Leader"
+publishedAt: "2026-10-09"
+summary: "Several servers need to agree on one ordered log, even when some crash. How Raft elects a leader with terms and randomized timeouts, why a majority is the magic number, and how replication and stale leaders are handled — the consensus algorithm behind etcd and many databases."
+tags: "System Design"
+---
+
+A single database server is simple and fragile: when it dies, everything
+stops. Run three copies and the data survives a crash — but now the copies
+must **agree**: on which writes happened, and in what order, even while
+servers crash, restart and lose messages.
+
+That's the **consensus** problem. Raft is an algorithm for it, designed
+specifically to be understandable. It powers etcd (and so Kubernetes),
+Consul, and the replication layer of databases like CockroachDB and
+TiKV.
+
+## One leader at a time
+
+Raft simplifies consensus by electing a **leader**. Every write goes to the
+leader, which appends it to its log and copies it to the others — the
+**followers**. Followers never accept writes directly.
+
+Time is divided into numbered **terms**. Each term starts with an election
+and has at most one leader.
+
+<RaftVisualizer />
+
+## Elections
+
+**Heartbeats.** The leader sends regular heartbeats to every follower. Each
+follower has an **election timeout**, reset whenever it hears from the
+leader.
+
+**Randomized timeouts.** The timeouts are random — say, between 150 and
+300 ms — so when the leader dies, one follower almost always times out
+first, instead of all of them starting elections at once.
+
+**Becoming a candidate.** The first follower to time out increments the
+term, votes for itself, and asks every other server for its vote.
+
+**Voting rules.** A server grants a vote if:
+
+1. It hasn't already voted in this term — **one vote per server per term**.
+2. The candidate's log is at least as up to date as its own.
+
+**Winning.** A candidate that gets votes from a **majority** of the cluster
+becomes leader and immediately sends heartbeats to assert it. If nobody
+wins (a split vote), timeouts expire again and a new term starts.
+
+## Why "a majority" is the key
+
+Two majorities of the same cluster always overlap in at least one server.
+So:
+
+- Two candidates can't both win the same term — there aren't enough votes
+  for two majorities.
+- A committed entry is stored on a majority; any future winning candidate
+  needs votes from a majority; at least one voter has that entry and will
+  refuse to vote for a candidate missing it. **A new leader always has every
+  committed write.**
+
+The same overlap explains the arithmetic of cluster sizes:
+
+<Table data={{
+  headers: ["Servers", "Majority", "Failures tolerated"],
+  rows: [
+    ["3", "2", "1"],
+    ["5", "3", "2"],
+    ["7", "4", "3"],
+    ["4", "3", "1 — no better than 3"]
+  ]
+}} />
+
+That's why clusters use odd sizes: a fourth server adds cost without
+tolerating another failure.
+
+## Replication
+
+When a client sends a write:
+
+1. The leader appends it to its log.
+2. It sends the entry to followers in an `AppendEntries` message (which
+   doubles as the heartbeat).
+3. Once a majority have stored it, the entry is **committed**; the leader
+   applies it and answers the client.
+4. Followers learn the new commit point in later messages and apply it
+   too.
+
+If a follower's log has diverged — say it missed messages while
+partitioned — the leader walks back to the last entry they agree on and
+overwrites the rest.
+
+## Stale leaders
+
+A leader that was cut off by a network partition may not know it's been
+replaced. It can't commit anything, though: it can't reach a majority.
+When the partition heals, the first message it sees carries a **higher
+term**, and any server seeing a higher term immediately steps down to
+follower. Terms work as a logical clock that makes old leaders harmless —
+the same idea as the fencing tokens in
+[distributed locks](/blog/distributed-locks-and-fencing).
+
+## What it costs
+
+- **Every write waits for a majority round trip.** Raft clusters are
+  usually kept within one region; spreading them across continents makes
+  every write slow.
+- **Availability needs a majority.** Lose more than half the servers and
+  the cluster stops accepting writes rather than risk diverging — a choice
+  of consistency over availability, as in
+  [CAP](/blog/cap-theorem-and-eventual-consistency).
+- **The leader is a bottleneck** for writes. Large systems run many small
+  Raft groups, each owning a range of the data.
+
+## The takeaway
+
+Raft keeps a cluster consistent with three ideas: one leader per term,
+elected by a majority with randomized timeouts; writes committed only once
+a majority has them; and terms that make any out-of-date leader step down.
+You'll rarely implement it — but etcd, Kubernetes and your database's
+replication behave the way they do because of it.

@@ -1,0 +1,148 @@
+---
+title: "Service Workers: Making a Website Work Offline"
+publishedAt: "2026-10-09"
+summary: "A service worker is a script that sits between your page and the network and can answer requests itself. How it's installed and updated, the main caching strategies — cache-first, network-first, stale-while-revalidate — and the lifecycle details that trip everyone up."
+tags: "Web"
+---
+
+Normally, every request your page makes goes to the network, and with no
+network the page fails. A **service worker** changes that: it's a script the
+browser runs in the background, separately from your page, that can
+intercept every request and decide how to answer — from a cache, from the
+network, or both.
+
+It's the technology behind offline web apps, "installable" Progressive Web
+Apps, and push notifications.
+
+<ServiceWorkerVisualizer />
+
+## Registering
+
+The page registers the worker once. It must be served over HTTPS (or from
+`localhost`), and its location sets its scope — a worker at `/sw.js` can
+control every page on the site.
+
+```javascript
+// in your page
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js');
+}
+```
+
+## Install: precache the app shell
+
+The `install` event runs once per new version of the worker. Use it to
+cache the files needed to show your interface:
+
+```javascript
+// sw.js
+const CACHE = 'shell-v3';
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE).then((cache) =>
+      cache.addAll(['/', '/app.css', '/app.js', '/offline.html'])
+    )
+  );
+});
+```
+
+`waitUntil` keeps the worker alive until the caching finishes; if it fails,
+the install fails and the old worker stays in charge.
+
+## Fetch: choose a strategy per request
+
+Every request from a controlled page triggers the `fetch` event. The
+worker can answer with `event.respondWith(...)`:
+
+```javascript
+self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+
+  if (url.pathname.startsWith('/api/')) {
+    event.respondWith(networkFirst(event.request));
+  } else {
+    event.respondWith(cacheFirst(event.request));
+  }
+});
+
+async function cacheFirst(request) {
+  const cached = await caches.match(request);
+  return cached ?? fetch(request);
+}
+
+async function networkFirst(request) {
+  const cache = await caches.open('data');
+  try {
+    const response = await fetch(request);
+    cache.put(request, response.clone());   // keep a copy for later
+    return response;
+  } catch {
+    return (await cache.match(request)) ?? caches.match('/offline.html');
+  }
+}
+```
+
+The common strategies:
+
+<Table data={{
+  headers: ["Strategy", "How it answers", "Good for"],
+  rows: [
+    ["Cache first", "Cache, falling back to network", "Versioned static assets, fonts"],
+    ["Network first", "Network, falling back to cache", "API data, HTML that must be fresh"],
+    ["Stale-while-revalidate", "Cache now, update cache in background", "Avatars, non-critical content"],
+    ["Network only", "Never cached", "Payments, anything that must be live"]
+  ]
+}} />
+
+`response.clone()` matters: a response body can only be read once, so you
+clone it to both cache it and return it.
+
+## The lifecycle, and why updates confuse people
+
+When you deploy a new `sw.js`, the browser notices it's different and
+installs it — but the new worker **waits**. The old one keeps controlling
+every open tab until all of them are closed, so a page is never served by
+two versions of your code at once.
+
+That's why "I deployed but nothing changed" is the most common service
+worker complaint. Options:
+
+- Call `self.skipWaiting()` in `install` to activate immediately, and
+  `clients.claim()` in `activate` to take over open pages — fine when old
+  and new versions are compatible.
+- Or detect the waiting worker in the page and show "A new version is
+  available — reload".
+
+Use the `activate` event to delete caches from old versions:
+
+```javascript
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
+    )
+  );
+});
+```
+
+## Things to know
+
+- **A service worker can't touch the DOM.** It talks to pages with
+  `postMessage`, like a [Web Worker](/blog/web-workers-off-the-main-thread).
+- **It's easy to cache yourself into a corner.** A bug that caches broken
+  HTML can keep serving it. Always version caches and test updates.
+- **It doesn't replace [HTTP caching](/blog/http-caching-headers)** — it's a
+  programmable layer on top. Get your headers right first.
+- **In DevTools**, the Application panel shows workers and caches, and has
+  "Update on reload" and "Offline" toggles for testing.
+- Libraries like Workbox generate most of this code from a short
+  configuration.
+
+## The takeaway
+
+A service worker is a programmable proxy inside the browser: precache the
+app shell on install, pick a caching strategy per kind of request on fetch,
+and clean up old caches on activate. Mind the update lifecycle, and your
+site can load instantly on repeat visits and keep working with no
+connection at all.

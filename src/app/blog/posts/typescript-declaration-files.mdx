@@ -1,0 +1,149 @@
+---
+title: "Declaration Files (.d.ts): Giving JavaScript Code TypeScript Types"
+publishedAt: "2026-10-09"
+summary: "How TypeScript type-checks code that isn't written in TypeScript: declaration files describe the shape of JavaScript that lives elsewhere. Where they come from — libraries, DefinitelyTyped, your own builds — and how to write one for an untyped module or a global."
+tags: "TypeScript"
+---
+
+Your TypeScript project depends on code that isn't TypeScript: npm
+packages published as JavaScript, browser globals added by a script tag,
+old files nobody has converted. TypeScript can only check what it can see.
+**Declaration files** — files ending in `.d.ts` — are how it sees them.
+
+<DeclarationFileVisualizer />
+
+## What a declaration file is
+
+A `.d.ts` file contains **types only**: signatures, interfaces, type
+aliases. No implementation, and nothing in it ever runs.
+
+```javascript
+// legacy-math.js — plain JavaScript, works at runtime
+export function clamp(n, min, max) {
+  return Math.min(Math.max(n, min), max);
+}
+```
+
+```typescript
+// legacy-math.d.ts — describes it for the type checker
+export declare function clamp(n: number, min: number, max: number): number;
+```
+
+`declare` means: "this exists at runtime somewhere — here's its shape."
+TypeScript pairs the files by name, so importing `./legacy-math` now gives
+fully typed results:
+
+```typescript
+import { clamp } from './legacy-math';
+
+clamp(5, 0, 10);     // ✓ number
+clamp('5', 0, 10);   // error: Argument of type 'string' is not assignable to parameter of type 'number'.
+```
+
+Without the `.d.ts`, strict mode refuses the import:
+
+```
+error TS7016: Could not find a declaration file for module './legacy-math'.
+'…/legacy-math.js' implicitly has an 'any' type.
+```
+
+## Where declaration files come from
+
+**1. The library ships them.** Most modern packages include `.d.ts` files
+and point to them from `package.json`:
+
+```json
+{
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts"
+}
+```
+
+Nothing to install — types just work.
+
+**2. DefinitelyTyped.** For packages that don't ship types, the community
+maintains them in a huge shared repository, published under the `@types`
+scope:
+
+```bash
+npm install --save-dev @types/lodash
+```
+
+TypeScript finds packages in `node_modules/@types` automatically.
+
+**3. Generated from your own TypeScript.** When you publish a TypeScript
+library, the compiler writes them for you:
+
+```json
+{ "compilerOptions": { "declaration": true } }
+```
+
+**4. Written by hand**, for the cases nobody else covers.
+
+## Writing your own
+
+**A whole untyped module, quickly:**
+
+```typescript
+// types/untyped-lib.d.ts
+declare module 'untyped-lib';   // everything from it is `any` — a stopgap
+```
+
+**A module, properly:**
+
+```typescript
+declare module 'tiny-slugify' {
+  export default function slugify(input: string, options?: { lower?: boolean }): string;
+}
+```
+
+**Globals** — something a script tag adds to `window`:
+
+```typescript
+// globals.d.ts
+declare global {
+  interface Window {
+    analytics: { track(event: string): void };
+  }
+}
+export {};   // makes this file a module, so `declare global` is allowed
+```
+
+Now `window.analytics.track('signup')` type-checks, and a typo like
+`window.analytics.trak` is an error (TypeScript even suggests "Did you mean
+'track'?").
+
+**Non-code imports** that your bundler understands:
+
+```typescript
+declare module '*.svg' {
+  const url: string;
+  export default url;
+}
+```
+
+## The catch: declarations are promises, not proof
+
+TypeScript trusts a `.d.ts` completely and never checks it against the
+JavaScript it describes. If the declaration says `clamp` returns a
+`number` but the real function sometimes returns `undefined`, every caller
+is type-checked against a lie, and the bug shows up at runtime. This is the
+same trust boundary as `as` casts and
+[unknown data](/blog/unknown-any-and-never).
+
+So:
+
+- Prefer libraries that ship their own types, built from their source.
+- Keep `@types/*` versions in step with the library version.
+- Keep hand-written declarations small, and close to the code they
+  describe.
+- Turn on `skipLibCheck` if third-party declarations conflict — it skips
+  checking `.d.ts` files themselves, which speeds builds and avoids errors
+  in code you don't control.
+
+## The takeaway
+
+A `.d.ts` file is a contract describing JavaScript TypeScript can't read
+directly. Most of the time it arrives with the library or from `@types`;
+when it doesn't, a few lines of `declare` cover a module or a global. Just
+remember TypeScript believes them — so they need to be true.

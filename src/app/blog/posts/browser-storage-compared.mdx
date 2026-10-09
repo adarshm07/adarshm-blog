@@ -1,0 +1,126 @@
+---
+title: "Cookies, localStorage, sessionStorage, IndexedDB: Which Browser Storage When?"
+publishedAt: "2026-10-09"
+summary: "Browsers offer five places to keep data, and they differ in size, lifetime, scope, speed, and whether the server sees them. A side-by-side guide to choosing — and the security mistakes, like tokens in localStorage, that come from choosing wrong."
+tags: "Web"
+---
+
+A web app often needs to remember things in the browser: a login session,
+a theme preference, a half-written draft, a library of offline data. There
+are five main places to put them, and each is right for different jobs.
+
+<BrowserStorageVisualizer />
+
+## Cookies
+
+```javascript
+document.cookie = 'theme=dark; Max-Age=31536000; Path=/; Secure; SameSite=Lax';
+```
+
+- **Sent to the server automatically** with every request to the site.
+- Small: about 4 KB each.
+- Can be made `HttpOnly`, so JavaScript can't read them at all.
+
+That first property is the whole point of cookies, and the reason not to
+use them for anything large: every byte travels with every request. Use
+them for session IDs and small server-relevant preferences
+([cookies and sessions](/blog/cookies-and-sessions)).
+
+## localStorage
+
+```javascript
+localStorage.setItem('draft', JSON.stringify(draft));
+const draft = JSON.parse(localStorage.getItem('draft') ?? 'null');
+```
+
+- Strings only — serialise objects with JSON.
+- Around 5 MB per origin, kept until cleared.
+- Shared across all tabs of the same site; other tabs get a `storage`
+  event when it changes.
+- **Synchronous**: every read and write blocks the main thread. Fine for
+  small values, bad for large ones.
+
+Good for preferences, small drafts, "last viewed" state.
+
+## sessionStorage
+
+Same API as `localStorage`, but scoped to **one tab** and cleared when the
+tab closes. Each tab gets its own copy, so it's handy for per-tab state like
+the step a user is on in a wizard.
+
+## IndexedDB
+
+```javascript
+// with the small 'idb' wrapper library
+const db = await openDB('app', 1, {
+  upgrade(db) { db.createObjectStore('notes', { keyPath: 'id' }); },
+});
+await db.put('notes', { id: 1, text: 'Hello', updated: Date.now() });
+const note = await db.get('notes', 1);
+```
+
+- A real database: stores objects, arrays, `Blob`s and files, with indexes
+  and transactions.
+- **Asynchronous**, so large reads don't freeze the page — and available
+  inside workers.
+- Can hold a lot: browsers allow a substantial share of free disk space.
+
+The raw API is verbose and event-based, so most people use a small promise
+wrapper. It's the right home for offline data, caches of API results, and
+anything big.
+
+## Cache API
+
+```javascript
+const cache = await caches.open('v1');
+await cache.put('/api/feed', response);
+const cached = await cache.match('/api/feed');
+```
+
+Stores whole HTTP `Request` → `Response` pairs. It's designed for
+[service workers](/blog/service-workers-and-offline) to serve pages and
+assets offline, but pages can use it too.
+
+## Side by side
+
+<Table data={{
+  headers: ["", "Cookies", "localStorage", "sessionStorage", "IndexedDB", "Cache API"],
+  rows: [
+    ["Typical size", "~4 KB each", "~5 MB", "~5 MB", "Large", "Large"],
+    ["Lifetime", "Until expiry", "Until cleared", "Tab closes", "Until cleared", "Until cleared"],
+    ["Sent to server", "Every request", "No", "No", "No", "No"],
+    ["API", "String parsing", "Sync, strings", "Sync, strings", "Async, objects", "Async, responses"],
+    ["Readable by injected scripts", "Not if HttpOnly", "Yes", "Yes", "Yes", "Yes"]
+  ]
+}} />
+
+## Security: where not to put secrets
+
+Anything JavaScript can read, an [XSS](/blog/xss-and-content-security-policy)
+attack can steal. That rules out putting long-lived authentication tokens in
+`localStorage`, `sessionStorage` or IndexedDB: one injected script and
+they're gone, usable from anywhere. An `HttpOnly`, `Secure`, `SameSite`
+cookie can't be read by scripts at all, which is why it's the safer home
+for session credentials.
+
+Also remember:
+
+- Storage is **per origin**, and visible to anyone using the same browser
+  profile. Don't store other people's private data unencrypted.
+- **Browsers can evict** non-cookie storage when disk space runs low,
+  especially for sites the user rarely visits. Call
+  `navigator.storage.persist()` to request durable storage for data you
+  can't re-download.
+- **Private browsing** clears everything when the window closes, and some
+  browsers clear script-written storage for sites that haven't been visited
+  in a while. Treat browser storage as a cache, not the only copy.
+- Every access can **throw** — storage disabled, quota exceeded, private
+  mode. Wrap it in `try/catch` and keep working without it.
+
+## Choosing
+
+- The server needs it on each request → **cookie**.
+- Small preference or draft, shared across tabs → **localStorage**.
+- Per-tab, temporary state → **sessionStorage**.
+- Lots of structured data, files, offline data → **IndexedDB**.
+- Offline copies of pages and HTTP responses → **Cache API**.

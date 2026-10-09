@@ -1,0 +1,125 @@
+---
+title: "Health Checks: Liveness vs Readiness, and the Restart Storm"
+publishedAt: "2026-10-09"
+summary: "'Is it alive?' and 'can it take traffic?' are different questions with different consequences: one restarts the process, the other just routes around it. How liveness, readiness and startup probes work, and the one mistake that turns a database blip into a full outage."
+tags: "System Design"
+---
+
+When you run several instances of a service behind a load balancer or in
+Kubernetes, something has to decide which instances are healthy. That's a
+**health check**: an endpoint the platform calls every few seconds.
+
+The trap is treating "healthy" as one question. There are two, and they
+have very different consequences.
+
+<HealthCheckVisualizer />
+
+## Liveness: should this process be restarted?
+
+A liveness check asks whether the process itself is working, or stuck
+beyond recovery — deadlocked, out of memory, wedged in an infinite loop.
+
+**If it fails, the platform kills the process and starts a new one.**
+
+So a liveness check should only fail for problems a restart would fix. It
+should answer from inside the process, cheaply, and **not depend on other
+services**.
+
+```javascript
+app.get('/livez', (req, res) => {
+  res.status(200).send('ok');   // if the event loop can run this, we're alive
+});
+```
+
+## Readiness: should this instance receive traffic?
+
+A readiness check asks whether the instance can serve requests *right
+now*: has it finished starting up, warmed its caches, connected to what it
+needs?
+
+**If it fails, the instance is taken out of the load balancer's rotation —
+but left running.** When it passes again, traffic comes back.
+
+```javascript
+let shuttingDown = false;
+
+app.get('/readyz', async (req, res) => {
+  if (shuttingDown) return res.status(503).send('draining');
+  try {
+    await db.query('SELECT 1');
+    res.status(200).send('ready');
+  } catch {
+    res.status(503).send('database unavailable');
+  }
+});
+```
+
+## The restart storm
+
+Now the classic mistake: put the database check in **liveness** instead.
+
+1. The database is unreachable for 60 seconds.
+2. Every instance fails liveness at the same moment.
+3. The platform restarts all of them.
+4. They come back, reconnect, fail again, restart again — often hammering
+   the recovering database with reconnection attempts.
+
+A short dependency blip becomes a full outage, plus lost in-memory state
+and cold caches. With the check in **readiness**, instances simply stop
+receiving traffic and resume on their own when the database returns.
+
+The rule: **liveness checks the process; readiness checks the ability to
+serve.**
+
+## Startup probes
+
+Some apps take a long time to start — loading a large model, warming a
+cache. A strict liveness check would kill them before they finish.
+Kubernetes' **startup probe** runs first, with a generous timeout, and
+holds off liveness and readiness checks until it passes.
+
+```yaml
+startupProbe:
+  httpGet: { path: /livez, port: 8080 }
+  failureThreshold: 30
+  periodSeconds: 5        # up to 150 s to start
+livenessProbe:
+  httpGet: { path: /livez, port: 8080 }
+  periodSeconds: 10
+  failureThreshold: 3
+readinessProbe:
+  httpGet: { path: /readyz, port: 8080 }
+  periodSeconds: 5
+```
+
+## Graceful shutdown uses readiness too
+
+During a deploy, an instance is told to stop. To avoid cutting off
+requests mid-flight:
+
+1. On the shutdown signal, start failing **readiness** — set
+   `shuttingDown = true` — so the load balancer stops sending new requests.
+2. Wait a few seconds for that to take effect.
+3. Finish in-flight requests, close connections, exit.
+
+## Design tips
+
+- **Keep checks cheap.** They run every few seconds on every instance.
+- **Don't cascade.** If service A's readiness checks service B, and B's
+  checks C, one failure deep in the chain can empty every load balancer at
+  once. Check only what this instance can't work without.
+- **Require several consecutive failures** before acting, so one slow
+  response doesn't trigger a restart.
+- **Watch for checks passing while users fail.** A health check proves the
+  check works; your error rate and latency metrics prove the service works.
+- Pair readiness with [circuit breakers](/blog/circuit-breaker-pattern) for
+  dependencies that are optional, so the instance can serve degraded
+  responses instead of going unready.
+
+## The takeaway
+
+Two questions, two endpoints. Liveness: "restart me?" — only for problems
+a restart fixes, never for dependencies. Readiness: "send me traffic?" —
+for anything temporary, including dependencies and shutdown. Get the split
+right, and a dependency outage stays a hiccup instead of turning into an
+outage of everything.

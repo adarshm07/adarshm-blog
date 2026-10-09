@@ -1,0 +1,153 @@
+---
+title: "Error Handling in JavaScript: try/catch, Promises, and Error Causes"
+publishedAt: "2026-10-09"
+summary: "How errors travel up the call stack, how try/catch/finally works, why async errors become rejected promises, the fetch call that doesn't reject on a 404, and how to add context with error causes without losing the original problem."
+tags: "JavaScript"
+---
+
+Errors are part of every program: invalid input, missing files, networks
+that drop. Good error handling isn't about catching everything — it's about
+catching errors **where you can do something useful**, and letting the rest
+travel upwards with enough context to debug them.
+
+<ErrorHandlingVisualizer />
+
+## Throwing and catching
+
+When something goes wrong, code **throws** an error. Execution stops at
+that line and the error travels up the
+[call stack](/blog/recursion-and-the-call-stack) — out of the current
+function, into its caller, and so on — until something catches it.
+
+```javascript
+try {
+  const config = JSON.parse(text);
+  start(config);
+} catch (err) {
+  console.error('Could not start:', err.message);
+} finally {
+  hideSpinner();
+}
+```
+
+- **`try`** — run this code.
+- **`catch (err)`** — run this only if something in `try` threw.
+- **`finally`** — run this no matter what: success, error, or even a
+  `return` inside `try`. The place for cleanup.
+
+If nothing catches an error, it reaches the top: in a browser it's logged
+to the console; in Node it crashes the process.
+
+## Throw Error objects, not strings
+
+```javascript
+throw new Error('User not found');   // ✓ has a message and a stack trace
+throw 'User not found';              // ✗ no stack, no type
+```
+
+Built-in error types tell you what kind of problem it was: `TypeError`
+(wrong kind of value), `RangeError` (number out of range), `SyntaxError`
+(invalid JSON, for example). You can make your own:
+
+```javascript
+class NotFoundError extends Error {
+  constructor(resource) {
+    super(`${resource} not found`);
+    this.name = 'NotFoundError';
+  }
+}
+
+try {
+  await loadUser(id);
+} catch (err) {
+  if (err instanceof NotFoundError) showEmptyState();
+  else throw err;   // not ours to handle — let it continue upwards
+}
+```
+
+That last line matters: **catch what you can handle, rethrow the rest.** An
+empty `catch {}` that swallows every error hides bugs for months.
+
+## Adding context with `cause`
+
+A low-level error ("Unexpected token in JSON") rarely says what the program
+was trying to do. Wrap it, keeping the original:
+
+```javascript
+function parseConfig(text) {
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    throw new Error('Invalid config file', { cause: err });
+  }
+}
+```
+
+Now the error says *what* failed (`Invalid config file`) and `err.cause`
+says *why* (the `SyntaxError`). Good logging prints the whole chain.
+
+## Async errors
+
+Inside an `async` function, a thrown error becomes a **rejected promise**.
+You handle it with `try/catch` around `await`, or `.catch()` on the
+promise:
+
+```javascript
+async function loadConfig() {
+  const res = await fetch('/config.json');
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return parseConfig(await res.text());
+}
+
+try {
+  const config = await loadConfig();
+} catch (err) {
+  showError(err);
+}
+```
+
+Two async traps:
+
+**`fetch` doesn't reject on HTTP errors.** A 404 or 500 is still a
+successful *fetch* — the promise resolves. It only rejects if the request
+couldn't be made at all (offline, DNS failure, CORS). Always check
+`res.ok`.
+
+**Unhandled rejections.** A promise that rejects with no handler triggers
+an `unhandledrejection` event; in Node it crashes the process by default.
+Every promise chain needs a `.catch()` or an `await` inside `try`
+somewhere.
+
+```javascript
+// ✗ fire-and-forget — the error goes nowhere
+saveDraft(draft);
+
+// ✓
+saveDraft(draft).catch((err) => console.error('Draft not saved', err));
+```
+
+With `Promise.all`, the first rejection rejects the whole thing; use
+`Promise.allSettled` when you want every result regardless of failures
+([promises in depth](/blog/javascript-promises-in-depth)).
+
+## A last line of defence
+
+For errors nothing else caught, add global handlers that log and report:
+
+```javascript
+window.addEventListener('error', (event) => report(event.error));
+window.addEventListener('unhandledrejection', (event) => report(event.reason));
+```
+
+In React, an error boundary catches errors during rendering and shows a
+fallback instead of a blank page.
+
+## Rules of thumb
+
+- Handle errors where you can **recover or inform the user**; elsewhere,
+  let them propagate.
+- Throw `Error` objects, with messages that say what was being attempted.
+- Add context with `{ cause }` instead of replacing the original error.
+- Check `res.ok` after `fetch`.
+- Never leave a promise without a handler.
+- Never swallow errors silently — at minimum, log them.
