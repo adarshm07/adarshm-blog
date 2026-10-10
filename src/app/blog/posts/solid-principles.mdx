@@ -1,0 +1,140 @@
+---
+title: "SOLID Principles, Shown on One Class"
+publishedAt: "2026-10-10"
+summary: "Five principles for object-oriented design, applied one at a time to a single order service. What each one actually prevents, how to spot a violation in a code review, and when following them blindly makes code worse."
+tags: "LLD"
+---
+
+SOLID is five design principles for object-oriented code, collected by
+Robert C. Martin. They come up in every low-level design interview, and they
+are often taught as five separate definitions to memorise. They make more
+sense applied to one piece of code, one at a time.
+
+Here is the starting point — an order service that does everything itself:
+
+```typescript
+class OrderService {
+  async place(order: Order) {
+    if (order.items.length === 0) throw new Error('Empty order')
+    if (order.total > 100_000) throw new Error('Needs approval')
+
+    const card = new CardApiClient(process.env.CARD_KEY!)
+    const receipt = await card.charge(order.total, order.cardToken)
+
+    await db.query('INSERT INTO orders (id, total, receipt) VALUES ($1, $2, $3)',
+      [order.id, order.total, receipt.id])
+
+    await smtp.send(order.customer.email, 'Order placed', renderTemplate(order))
+  }
+}
+```
+
+It works. The trouble starts when things change. Step through the refactor
+below, one principle per step:
+
+<SolidVisualizer />
+
+## S — Single responsibility
+
+> A class should have one reason to change.
+
+"One responsibility" is vague. "One reason to change" is testable: list the
+people or events that would make you edit this class. The original
+`OrderService` changes when the business rules change, when the card provider
+changes, when the schema changes, and when marketing rewrites the email. Four
+reasons, four different teams editing one file.
+
+The fix is not "one method per class". It is to move each concern to the
+object that owns it: validation to `Order`, persistence to a repository,
+charging to a gateway. `OrderService` keeps the one thing that is genuinely
+its own — the order of the steps.
+
+## O — Open/closed
+
+> Open for extension, closed for modification.
+
+Adding UPI payments to the original means another branch:
+
+```typescript
+if (order.method === 'card') { /* … */ }
+else if (order.method === 'upi') { /* … */ }   // edit, re-test, redeploy
+```
+
+With a `PaymentGateway` interface, a new method is a new class. Existing,
+tested code isn't touched. That is the whole idea: put the parts that *will*
+vary behind an interface, so variation means adding code rather than
+editing it.
+
+Note the word *will*. You can't make code closed against every possible
+change, and trying produces interfaces with one implementation each. Apply it
+where you can already see a second case coming.
+
+## L — Liskov substitution
+
+> Subtypes must be usable through the base type without the caller knowing.
+
+This is about contracts, not just type signatures. If `PaymentGateway.charge`
+promises "returns a receipt, or throws `Declined`", every implementation has
+to keep that promise. A gateway that returns `null` on failure compiles fine
+and still breaks every caller.
+
+The classic violation is the square that extends a rectangle: setting a
+square's width also changes its height, so code that sets width and height
+separately on "a rectangle" gets the wrong area. The smell in real code is
+`instanceof` checks: if callers have to ask which subtype they got, the
+subtypes aren't substitutable.
+
+## I — Interface segregation
+
+> Clients shouldn't depend on methods they don't use.
+
+`OrderService` sends one message. If it depended on a `CustomerComms`
+interface with `send`, `sendBulk`, `unsubscribe` and template management,
+then every fake in its tests would need all of those, and every change to
+bulk mail would show up as a change to its dependency. Small interfaces,
+shaped around what the caller needs, keep unrelated changes apart.
+
+## D — Dependency inversion
+
+> High-level policy shouldn't depend on low-level details. Both depend on
+> abstractions.
+
+The original constructs `CardApiClient` itself and imports the database
+module. The refactored version receives its collaborators:
+
+```typescript
+// main.ts — the one place that knows about concrete classes
+const service = new OrderService(
+  new PostgresOrderRepository(pool),
+  new CardGateway(process.env.CARD_KEY!),
+  new EmailNotifier(smtp),
+)
+
+// order-service.test.ts
+const service = new OrderService(new InMemoryRepo(), new FakeGateway(), new SpyNotifier())
+```
+
+The "inversion" is in the direction of the dependency: the low-level
+`CardGateway` now depends on an interface that the high-level module defines,
+instead of the high-level module depending on the card SDK.
+
+## How to use them
+
+SOLID principles are heuristics for managing change, not rules to satisfy.
+Each one costs something — more types, more indirection, more files to read
+to follow one request. They pay off in proportion to how much the code
+changes.
+
+- **Use them to explain a smell**, not to generate structure. "This class
+  has three reasons to change" is a useful review comment. "This class
+  violates SRP" without saying why isn't.
+- **Wait for the second case** before adding an interface, unless the
+  boundary is an external system (payments, email, storage) — those are
+  worth abstracting early because you'll want fakes in tests.
+- **In an interview**, name the principle when you make a decision, not as
+  a checklist at the end: "I'll put pricing behind an interface because
+  weekend pricing is already a second rule."
+
+Try it on a real problem: the [LLD practice tool](/tools/lld) scores
+designs on responsibilities and extensibility, which is most of SOLID in
+practice.

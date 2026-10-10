@@ -1,0 +1,127 @@
+---
+title: "Composition over Inheritance, with Numbers"
+publishedAt: "2026-10-10"
+summary: "Why inheritance hierarchies explode when behaviours combine, how composing small objects avoids it, and when inheritance is still the right tool. With the arithmetic, the fragile base class problem, and decorators in TypeScript."
+tags: "LLD"
+---
+
+"Favour composition over inheritance" is one of the oldest pieces of
+object-oriented advice — it's in the 1994 *Design Patterns* book. It's easy to
+nod along to and hard to apply until you see the failure it prevents. That
+failure is easiest to see as a count.
+
+## The class explosion
+
+A notifier sends messages by email or SMS. Two subclasses — fine. Then some
+callers need retries on failure, and some need every message logged.
+Inheritance has one way to add behaviour: another subclass. Every
+combination of channel and features becomes its own class.
+
+<CompositionVisualizer />
+
+With *c* channels and *f* independent features, inheritance needs a class
+for every channel and every subset of features: **c × 2<sup>f</sup>**.
+Composition needs one class per channel and one wrapper per feature:
+**c + f**. Two channels and three features: 16 classes against 5.
+
+## Composition in TypeScript
+
+The composed version uses one small interface and wrappers that take a
+`Channel` and return a `Channel` — the **decorator** pattern:
+
+```typescript
+interface Channel {
+  send(to: string, message: string): Promise<void>
+}
+
+class Email implements Channel {
+  async send(to: string, message: string) { /* SMTP */ }
+}
+
+function withRetry(inner: Channel, attempts = 3): Channel {
+  return {
+    async send(to, message) {
+      for (let i = 1; ; i++) {
+        try { return await inner.send(to, message) }
+        catch (err) { if (i === attempts) throw err }
+      }
+    },
+  }
+}
+
+function withLogging(inner: Channel, log: (s: string) => void): Channel {
+  return {
+    async send(to, message) {
+      log(`send → ${to}`)
+      await inner.send(to, message)
+    },
+  }
+}
+
+const notifier = withLogging(withRetry(new Email()), console.log)
+```
+
+Each piece is tested on its own, and the order is a decision you can see:
+logging outside retry logs once per message; inside, it logs every attempt.
+With inheritance, that choice would be frozen into the class hierarchy.
+
+## Why inheritance is fragile
+
+The count isn't the only problem. A subclass depends on its parent's
+*implementation*, not just its interface — the **fragile base class
+problem**:
+
+```typescript
+class CountingSet<T> extends Set<T> {
+  added = 0
+  add(value: T) {
+    this.added++
+    return super.add(value)
+  }
+}
+
+const s = new CountingSet([1, 2, 3])
+s.size    // 3
+s.added   // 0 — not 3
+```
+
+Two details of the parent's implementation collide. `Set`'s constructor adds
+the initial values by calling `this.add`, so it reaches the subclass's
+override. But that happens inside `super()`, *before* the subclass's field
+initialiser runs: `this.added++` turns `undefined` into `NaN` three times,
+and then `added = 0` resets it. Nothing in `Set`'s public interface tells
+you either fact.
+
+A wrapper that holds a `Set` and forwards calls has neither problem: it only
+sees the public interface, and its own constructor runs in an order it
+controls.
+
+## When inheritance is right
+
+Inheritance still has a place:
+
+- **A real "is-a" with a shared invariant.** Every `Shape` has an area and
+  a bounding box; a `Circle` is completely a shape. Liskov substitution (the
+  L in [SOLID](/blog/solid-principles)) is the test: can every subclass be
+  used anywhere the parent is expected, with no special cases?
+- **Frameworks built around it.** `class MyError extends Error` keeps stack
+  traces and `instanceof` working, and Web Components require
+  `extends HTMLElement`.
+- **Shallow hierarchies with one axis of variation.** One level of
+  subclasses for one dimension is fine. The trouble starts at the second
+  axis.
+
+A useful smell: if a class name has two adjectives
+(`LoggedRetryingEmailNotifier`), two axes have been flattened into one
+hierarchy. Pull one of them out into something you compose.
+
+## In an interview
+
+Interviewers look for this in nearly every LLD problem. Typical cases:
+`Vehicle` subclasses versus a `VehicleType` plus a spot-fitting rule in a
+parking lot; `Book` versus `BookItem` in a library (a copy *has* a book, it
+isn't one); split types in an expense app. When you reach for `extends`, say
+why it's an "is-a" with a shared contract. When there's more than one axis,
+compose. The [Strategy pattern](/blog/strategy-pattern) is composition
+applied to one varying algorithm. Try both in the
+[LLD practice tool](/tools/lld).

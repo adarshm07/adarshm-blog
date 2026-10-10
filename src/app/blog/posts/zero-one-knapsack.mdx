@@ -1,0 +1,146 @@
+---
+title: "The 0/1 Knapsack Problem, Step by Step"
+publishedAt: "2026-10-10"
+summary: "Pick items with weights and values to maximise value without going over a capacity, using each at most once. Why greedy fails, how a table of 'best value with these items and this capacity' solves it, how to recover the chosen items, and the one-array version that iterates backwards."
+tags: "DSA"
+---
+
+You're packing a bag that holds 7 kg. Four items, each with a weight and a
+value:
+
+<Table
+  data={{
+    headers: ['item', 'weight', 'value', 'value per kg'],
+    rows: [
+      ['A', '1', '1', '1.0'],
+      ['B', '3', '4', '1.33'],
+      ['C', '4', '5', '1.25'],
+      ['D', '5', '7', '1.4'],
+    ],
+  }}
+/>
+
+Each item is taken whole or left behind — that's the "0/1". Which set has
+the most value without exceeding 7 kg?
+
+## Greedy doesn't work
+
+The natural idea is to take the best value per kilo first. D has the best
+ratio, so take D (5 kg, value 7). Two kilos remain; only A fits. Total: **8**.
+
+But B + C weighs exactly 7 and is worth **9**. Taking D used capacity
+badly: the 2 kg it left over could only hold a weak item. Greedy decides
+each item on its own, and knapsack is about combinations. (Greedy *is*
+optimal for the *fractional* knapsack, where you can take part of an item —
+there's never leftover space.)
+
+Trying every subset works, but *n* items have 2<sup>n</sup> subsets. Forty
+items is a trillion.
+
+## Smaller questions
+
+The [dynamic programming](/blog/dynamic-programming-intro) move is to
+answer a family of smaller questions:
+
+> `best[i][c]` = the most value you can get using only the first `i` items,
+> with capacity `c`.
+
+For item `i`, there are only two choices:
+
+- **Skip it**: the answer is whatever the first `i − 1` items achieve with
+  the same capacity — `best[i−1][c]`.
+- **Take it** (if it fits): its value, plus the best the first `i − 1` items
+  can do in the space left — `value + best[i−1][c − weight]`.
+
+`best[i][c]` is the larger of the two. Both look only at the row above, which
+is what stops an item being used twice.
+
+<KnapsackVisualizer />
+
+## The code
+
+```javascript
+function knapsack(items, capacity) {
+  const n = items.length
+  const best = Array.from({ length: n + 1 }, () => new Array(capacity + 1).fill(0))
+
+  for (let i = 1; i <= n; i++) {
+    const { weight, value } = items[i - 1]
+    for (let c = 0; c <= capacity; c++) {
+      best[i][c] = best[i - 1][c]                       // skip
+      if (weight <= c) {
+        best[i][c] = Math.max(best[i][c], best[i - 1][c - weight] + value)  // take
+      }
+    }
+  }
+
+  // Walk back up: if the value changed from the row above, item i was taken.
+  const chosen = []
+  for (let i = n, c = capacity; i > 0; i--) {
+    if (best[i][c] !== best[i - 1][c]) {
+      chosen.push(items[i - 1].name)
+      c -= items[i - 1].weight
+    }
+  }
+  return { value: best[n][capacity], chosen: chosen.reverse() }
+}
+
+knapsack(items, 7)   // { value: 9, chosen: ['B', 'C'] }
+```
+
+Time and space are **O(n × W)** for *n* items and capacity *W*.
+
+## One row is enough
+
+Each row only reads the row above, so you can keep a single array and
+overwrite it — as long as you go through capacities **from high to low**:
+
+```javascript
+function knapsackValue(items, capacity) {
+  const best = new Array(capacity + 1).fill(0)
+  for (const { weight, value } of items) {
+    for (let c = capacity; c >= weight; c--) {
+      best[c] = Math.max(best[c], best[c - weight] + value)
+    }
+  }
+  return best[capacity]
+}
+```
+
+Why backwards? `best[c - weight]` must still hold the *previous* item's
+answer. Going downwards, the smaller index hasn't been overwritten yet in
+this pass. Going upwards, it has — so the current item could be added again
+on top of itself.
+
+That bug is a feature in disguise: iterate **upwards** and you get the
+**unbounded knapsack**, where each item can be taken any number of times.
+Coin change ("fewest coins to make 63") is the unbounded version.
+
+The cost of the one-array version: you can no longer walk back to find which
+items were chosen. Keep the full table if you need them.
+
+## "Polynomial" with an asterisk
+
+O(n × W) looks polynomial, but *W* is a number, not a count of inputs.
+Writing 1,000,000 takes 7 digits; the table has a million columns. Add one
+digit to the capacity and the work grows tenfold. That makes this
+**pseudo-polynomial**, and knapsack is NP-hard in general. The DP is fast
+when capacities are small integers — which, in interviews and in many real
+problems (budgets in rupees, sizes in KB), they are.
+
+## Spotting knapsack in disguise
+
+The pattern is "choose a subset, subject to a total, optimise something":
+
+- **Partition equal subset sum**: can the numbers be split into two halves
+  with the same sum? Knapsack with capacity `sum / 2`, where value equals
+  weight.
+- **Target sum**: assign + or − to each number to reach a target. Reduces
+  to counting subsets with a given sum.
+- **Last stone weight II**, **ones and zeroes** (two capacities — the table
+  gets a third dimension).
+- Real ones: picking ads to fill a time slot, features to fit a sprint,
+  files to fit a backup volume.
+
+When the subproblem is "the first `i` things, with `c` of something left",
+reach for this table.

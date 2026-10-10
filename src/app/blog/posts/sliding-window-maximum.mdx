@@ -1,0 +1,113 @@
+---
+title: "Sliding Window Maximum with a Monotonic Deque"
+publishedAt: "2026-10-10"
+summary: "The maximum of every window of size k in an array, in O(n) instead of O(n·k). How a deque of indices with decreasing values throws away elements that can never win, why every element is pushed and popped at most once, and where the same idea shows up."
+tags: "DSA"
+---
+
+Given an array and a window size `k`, report the largest value in every
+window as it slides from left to right:
+
+```
+nums = [1, 3, -1, -3, 5, 3, 6, 7],  k = 3
+
+[1  3  -1] -3  5  3  6  7     → 3
+ 1 [3  -1  -3] 5  3  6  7     → 3
+ 1  3 [-1  -3  5] 3  6  7     → 5
+ 1  3  -1 [-3  5  3] 6  7     → 5
+ 1  3  -1  -3 [5  3  6] 7     → 6
+ 1  3  -1  -3  5 [3  6  7]    → 7
+```
+
+Recomputing each window's maximum costs O(k), so O(n·k) in total — 10¹⁰
+operations for a million elements and a window of ten thousand. A running
+maximum doesn't work either: when the maximum leaves the window, you don't
+know what the next largest is.
+
+## The insight: some elements can never win
+
+Look at the window `[3, -1, -3]` and then the 5 that arrives next. Once 5 is
+in the window, −1 and −3 can never be a window's maximum again. They're
+smaller than 5, *and* they'll leave the window before 5 does. They can be
+thrown away.
+
+What's left is always a sequence that **decreases** from oldest to newest.
+Each element in it is "the largest of everything that came after the one
+before it". Keep that sequence in a double-ended queue:
+
+- **Back**: when a new value arrives, pop every smaller-or-equal value off the
+  back — they're dominated — then push the new one.
+- **Front**: if the front index has slid out of the window, drop it.
+- **Answer**: the front is the window's maximum.
+
+The deque stores **indices**, not values, so you can tell when the front has
+expired.
+
+<SlidingWindowMaxVisualizer />
+
+## The code
+
+JavaScript has no built-in deque, and `Array.prototype.shift` is O(n). A head
+pointer into an ordinary array gives O(1) operations at both ends:
+
+```javascript
+function maxSlidingWindow(nums, k) {
+  const deque = []   // indices; their values decrease from front to back
+  let head = 0       // deque[head] is the front
+  const out = []
+
+  for (let i = 0; i < nums.length; i++) {
+    // Front: drop the index that just left the window.
+    if (head < deque.length && deque[head] <= i - k) head++
+
+    // Back: drop values the new one dominates.
+    while (deque.length > head && nums[deque[deque.length - 1]] <= nums[i]) {
+      deque.pop()
+    }
+    deque.push(i)
+
+    if (i >= k - 1) out.push(nums[deque[head]])
+  }
+  return out
+}
+
+maxSlidingWindow([1, 3, -1, -3, 5, 3, 6, 7], 3)   // [3, 3, 5, 5, 6, 7]
+```
+
+Only one index can expire per step, because the window moves by one — hence
+`if`, not `while`, at the front. (In this version the array keeps growing
+behind `head`. For a long-running stream, compact it from time to time or
+use a ring buffer.)
+
+## Why it's O(n)
+
+There's a `while` loop inside a `for` loop, which looks quadratic. Count
+operations per element instead: each index is pushed exactly once and popped
+— from the back or past the front — at most once. That's at most 2n
+operations in total, so **O(n)** time. The deque holds at most `k` live
+indices, so **O(k)** extra space.
+
+This "amortised" argument is the same one that makes the
+[monotonic stack](/blog/monotonic-stack) linear. A monotonic deque is a
+monotonic stack that can also lose elements from the bottom, because the
+window has a left edge.
+
+## Variations
+
+- **Minimum** instead of maximum: keep the deque *increasing* — flip `<=` to
+  `>=`.
+- **Longest subarray where max − min ≤ limit**: run two deques (one for max,
+  one for min) inside a [two-pointer window](/blog/two-pointers-and-sliding-window)
+  that shrinks from the left whenever the difference is too big.
+- **Shortest subarray with sum ≥ K** (with negative numbers): a monotonic
+  deque over [prefix sums](/blog/prefix-sums-and-difference-arrays).
+- **DP with a window**: `dp[i] = nums[i] + max(dp[i-k..i-1])` (the "jump
+  game VI" family) turns O(n·k) into O(n) by keeping that max in a deque.
+
+## Outside interviews
+
+The same structure computes a **rolling maximum** over a time window — the
+peak latency over the last five minutes on a dashboard, or the highest price
+in the last N trades. Each new sample is pushed, old ones expire from the
+front, and the current peak is always at the front without rescanning the
+window.
