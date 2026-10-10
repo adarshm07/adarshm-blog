@@ -1,0 +1,134 @@
+---
+title: "The Observer Pattern: Telling Others Without Knowing Them"
+publishedAt: "2026-10-10"
+summary: "How a subject notifies a list of observers through a small interface, so new reactions can be added without editing the code that triggers them. Implementing it in TypeScript, its pitfalls — ordering, errors, leaks, re-entrancy — and how it relates to event emitters, pub/sub and the DOM."
+tags: "LLD"
+---
+
+When a library book is returned, several things should happen. The next
+person on the waiting list gets it held for them; they get an email; the
+catalogue shows it as available again. The tempting implementation is to do
+all of that in `returnBook()`:
+
+```typescript
+returnBook(copy: BookItem) {
+  copy.status = 'available'
+  this.holdQueue.assign(copy)
+  this.mailer.sendHoldNotice(copy)
+  this.searchIndex.update(copy)
+}
+```
+
+Now the lending code imports the hold queue, the mailer and the search
+index. Adding late fines means editing it again. The **Observer pattern**
+reverses those dependencies:
+
+> A subject keeps a list of observers and notifies them when something
+> happens. It knows only that they implement a small interface.
+
+<ObserverVisualizer />
+
+## The code
+
+```typescript
+interface ReturnObserver {
+  onReturned(copy: BookItem): void
+}
+
+class BookItem {
+  private observers: ReturnObserver[] = []
+  status: 'on-loan' | 'available' | 'held' = 'on-loan'
+
+  subscribe(o: ReturnObserver) {
+    this.observers.push(o)
+    return () => {
+      this.observers = this.observers.filter((x) => x !== o)
+    }
+  }
+
+  markReturned() {
+    this.status = 'available'
+    for (const o of [...this.observers]) o.onReturned(this)
+  }
+}
+```
+
+Two details matter. `subscribe` returns an unsubscribe function, so callers
+can clean up. And the loop iterates over a **copy** of the list, so an
+observer that unsubscribes while being notified doesn't make the loop skip
+the next one.
+
+In practice you rarely subscribe to each object separately. More often,
+observers subscribe to a domain-wide event — "any copy returned" — through a
+shared emitter.
+
+## You already use it
+
+- **The DOM**: `button.addEventListener('click', handler)` — the button is
+  the subject, handlers are observers. See
+  [event delegation](/blog/event-delegation-and-propagation).
+- **Node's `EventEmitter`**: `emitter.on('data', fn)`.
+- **React state stores**: `useSyncExternalStore(subscribe, getSnapshot)`
+  is the Observer contract — subscribe, get a callback, read the new value.
+- **RxJS observables**, **MobX**, Vue's reactivity: Observer with
+  operators added.
+
+## The pitfalls
+
+**Errors.** If one observer throws, the loop above stops, and later
+observers never hear the event. Decide on a policy. Usually that means
+catching each observer's error, reporting it, and carrying on:
+
+```typescript
+for (const o of [...this.observers]) {
+  try { o.onReturned(this) } catch (err) { reportError(err) }
+}
+```
+
+**Ordering.** Observers run in subscription order, and nothing in the
+interface says so. If the mailer depends on the hold queue having run first,
+that's a hidden coupling. Make it explicit with a chained event instead: the
+hold queue publishes `held`, and the mailer listens to that.
+
+**Memory leaks.** The subject holds a reference to every observer. A
+component that subscribes and never unsubscribes stays in memory for as long
+as the subject does — the classic leak in long-lived single-page apps. Always
+keep the unsubscribe function and call it on teardown.
+
+**Re-entrancy.** An observer that changes the subject during notification
+can trigger another round of notifications before the first finishes. Keep
+handlers small, or queue events and deliver them after the current one
+completes.
+
+**Invisible control flow.** "What happens when a book is returned?" no
+longer has an answer in one file. That's the cost of decoupling. Keep a
+list of subscribers somewhere discoverable, and log events in development.
+
+## Observer vs. pub/sub vs. message queues
+
+<Table
+  data={{
+    headers: ['', 'Observer', 'In-process pub/sub', 'Message broker'],
+    rows: [
+      ['Subscribers know the subject?', 'Yes — they subscribe to it', 'No — only a topic name', 'No'],
+      ['Delivery', 'Synchronous call', 'Usually synchronous', 'Asynchronous, durable'],
+      ['Survives a crash?', 'No', 'No', 'Yes'],
+    ],
+  }}
+/>
+
+The ideas are the same at every scale: the code that publishes doesn't know
+who listens. Once listeners live in other services and must not miss events,
+you need a broker — see
+[message queues vs. event logs](/blog/message-queues-vs-event-logs) and the
+[outbox pattern](/blog/dual-writes-and-the-outbox-pattern) for publishing
+reliably.
+
+## In an interview
+
+Observer is the expected answer whenever a requirement says "notify":
+reservation alerts in a library, price-drop alerts, seat-availability
+updates in ticket booking. Say what the event is, who subscribes, and
+whether delivery must be reliable — that last question is where a good
+answer turns into a system design discussion. Practise it on the library
+problem in the [LLD practice tool](/tools/lld).

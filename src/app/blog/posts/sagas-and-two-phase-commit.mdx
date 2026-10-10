@@ -1,0 +1,137 @@
+---
+title: "Sagas vs. Two-Phase Commit: Transactions Across Services"
+publishedAt: "2026-10-10"
+summary: "When one business operation spans several databases, there's no single transaction to wrap it in. How two-phase commit makes it atomic at the price of blocking, how sagas use compensating actions instead, orchestration vs. choreography, and the isolation problems sagas leave you to solve."
+tags: "System Design"
+---
+
+Placing an order creates the order, charges the customer and reserves stock.
+In a monolith with one database, that's one transaction: all three happen or
+none do. Split those into an orders service, a payments service and an
+inventory service, each with its own database, and the transaction is gone.
+If the stock reservation fails after the card was charged, something has to
+put things right.
+
+There are two classic answers.
+
+## Two-phase commit (2PC)
+
+A **coordinator** asks every participant to get ready, then tells them all
+to commit:
+
+```
+Phase 1 — prepare
+  coordinator → orders, payments, inventory:  "can you commit?"
+  each participant: does the work, holds its locks, writes a durable
+                    "prepared" record, votes yes or no
+
+Phase 2 — commit
+  all voted yes →  coordinator logs COMMIT, tells everyone to commit
+  any voted no  →  coordinator logs ABORT, tells everyone to roll back
+```
+
+It gives real atomicity: everyone commits or nobody does. The catch is the
+gap between the phases. A participant that voted yes has promised to commit
+and **can't change its mind** — it must hold its locks until it hears the
+decision. If the coordinator crashes there, participants stay blocked, with
+rows locked, until it recovers. 2PC is a *blocking* protocol.
+
+Other costs follow from that:
+
+- **Latency**: two round trips to every participant, with locks held the
+  whole time.
+- **Availability**: the transaction needs every participant up. With five
+  services each at 99.9%, the combination is about 99.5%.
+- **Support**: every participant must speak the protocol (XA, for example).
+  Most message brokers, SaaS APIs and NoSQL stores don't, and a card
+  network certainly won't hold a lock for you.
+
+2PC is used inside systems that control all the participants — distributed
+databases such as Spanner and CockroachDB run commit protocols across their
+own shards, with consensus making the coordinator fault-tolerant. Across
+independently owned services, it's rarely an option.
+
+## Sagas
+
+A **saga** gives up atomicity and goes for eventual consistency. The
+operation becomes a sequence of **local** transactions, each committed
+immediately in its own service. Each step has a **compensating action** that
+semantically undoes it. If a step fails, the saga runs the compensations for
+the steps that already succeeded, in reverse order.
+
+<SagaVisualizer />
+
+The idea goes back to a 1987 database paper (Garcia-Molina and Salem) about
+long-lived transactions. It fits microservices well because each step is an
+ordinary local transaction.
+
+## Compensation is not rollback
+
+A rollback erases. A compensation is a new, forward action that leaves a
+trace:
+
+- `charge` is compensated by `refund` — the statement shows both.
+- `reserve stock` by `release stock`.
+- `send confirmation email` can't be unsent. The compensation is a second
+  email: "Sorry, your order was cancelled."
+
+So **order the steps carefully**. Do steps that are easy to undo, or that
+are likely to fail, first. Put the step that can't be undone — the *pivot* —
+as late as possible. Above, reserving stock before charging the card would
+have avoided the refund altogether. Steps after the pivot should be ones
+that can be retried until they succeed.
+
+## Orchestration vs. choreography
+
+**Orchestration**: one orchestrator tells each service what to do next and
+records progress, like the diagram above. The flow is in one place, which
+makes it easy to read, monitor and change. The orchestrator must persist its
+state, so that after a crash it resumes instead of starting over. Workflow
+engines (Temporal, AWS Step Functions, Camunda) exist largely to do this.
+
+**Choreography**: no central coordinator. Each service reacts to events:
+orders publishes `OrderCreated`, payments hears it, charges and publishes
+`PaymentCompleted`, inventory hears that, and so on. Compensation is also
+event-driven: `StockUnavailable` makes payments refund. There's less
+coupling to a central service, but the flow exists only as the sum of
+subscriptions, so it's hard to see, and cycles creep in. Choreography suits
+two or three steps; orchestration scales better as flows grow.
+
+Either way, each service must update its database *and* publish its event
+reliably. That's the [outbox pattern](/blog/dual-writes-and-the-outbox-pattern).
+
+## The parts sagas don't solve for you
+
+**Retries mean duplicates.** The orchestrator retries any step whose result
+it didn't record, so every step and every compensation must be
+[idempotent](/blog/idempotency-keys). Pass a saga ID and step name as the
+idempotency key.
+
+**No isolation.** Between steps, other requests can see intermediate state:
+an order that is PENDING, a charge that is about to be refunded. Common
+countermeasures:
+
+- **Semantic locks**: mark records with a pending state (`PENDING`,
+  `RESERVED`) and have other operations treat them carefully — don't ship a
+  PENDING order.
+- **Commutative updates**: design operations that give the same result in
+  any order, such as incrementing a balance instead of setting it.
+- **Re-reading values**: check that data hasn't changed before a step that
+  depends on it, as optimistic locking does.
+
+**Compensations can fail too.** A refund API might be down. Compensations
+must be retried until they succeed, with an alert and a human queue as the
+last resort.
+
+## Which one?
+
+- **One database?** Use its transactions. Don't split data across services
+  that needs to change atomically, unless you must.
+- **Your own distributed database?** It already runs a commit protocol;
+  use its transactions.
+- **Independent services, external APIs, long-running steps?** Sagas, with
+  idempotent steps, an outbox, and a deliberate step order.
+
+The question to ask in a design review is: "What does the user see if this
+fails halfway, and how does it get fixed?" A saga is a way of answering it
+explicitly.

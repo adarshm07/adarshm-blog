@@ -76,13 +76,13 @@ html {
   @apply visible;
 }
 
-.prose .anchor:after:not(.not-prose *) {
+.prose .anchor:not(.not-prose *):after {
   content: "#";
   color: #d1d5db;
 }
 
 @media (prefers-color-scheme: dark) {
-  .prose .anchor:after:not(.not-prose *) {
+  .prose .anchor:not(.not-prose *):after {
     color: #374151;
   }
 }

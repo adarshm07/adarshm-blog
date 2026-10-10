@@ -16,6 +16,15 @@ export const metadata = {
   },
 }
 
+const READING: [string, string][] = [
+  ['/blog/solid-principles', 'SOLID'],
+  ['/blog/strategy-pattern', 'Strategy'],
+  ['/blog/state-pattern-and-state-machines', 'State'],
+  ['/blog/observer-pattern', 'Observer'],
+  ['/blog/composition-over-inheritance', 'composition over inheritance'],
+  ['/blog/lru-cache-from-scratch', 'building an LRU cache'],
+]
+
 export default function Page() {
   return (
     <section>
@@ -28,13 +37,14 @@ export default function Page() {
         notes, draw the class diagram, and sketch the key code — then get it
         reviewed against the same six-part rubric every time. Everything stays in
         your browser. Background reading:{' '}
-        <Link href="/blog/lru-cache-from-scratch" className="text-green-600 dark:text-green-400 hover:underline">
-          building an LRU cache
-        </Link>{' '}
-        and{' '}
-        <Link href="/blog/rate-limiting-algorithms" className="text-green-600 dark:text-green-400 hover:underline">
-          rate-limiting algorithms
-        </Link>
+        {READING.map(([href, label], i) => (
+          <span key={href}>
+            {i > 0 ? (i === READING.length - 1 ? ' and ' : ', ') : null}
+            <Link href={href} className="text-green-600 dark:text-green-400 hover:underline">
+              {label}
+            </Link>
+          </span>
+        ))}
         .
       </p>
 

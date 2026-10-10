@@ -1,0 +1,130 @@
+---
+title: "State Machines and the State Pattern"
+publishedAt: "2026-10-10"
+summary: "A vending machine, an order, a TCP connection: objects that respond to the same event differently depending on what happened before. How to model them as explicit state machines, implement them with the State pattern or a transition table, and stop invalid states from existing."
+tags: "LLD"
+---
+
+Press a vending machine's button before inserting money and it asks for
+coins. Press it after inserting enough and it dispenses. Same button,
+different result — the machine's response depends on its **state**.
+
+The usual first implementation tracks that state with flags:
+
+```typescript
+class VendingMachine {
+  balance = 0
+  dispensing = false
+  maintenance = false
+
+  select(slot: string) {
+    if (this.maintenance) return this.show('Out of service')
+    if (this.dispensing) return
+    if (this.balance === 0) return this.show('Insert coins first')
+    // …
+  }
+}
+```
+
+Every method starts with the same pile of checks, and nothing stops
+`dispensing` and `maintenance` from both being true. Three booleans allow
+eight combinations; maybe four of them make sense.
+
+## Draw the machine first
+
+A **finite state machine** is a set of states, the events each state
+accepts, and the transitions between them:
+
+```
+Idle      ── insert ──────────────────▶ HasMoney
+HasMoney  ── insert ──────────────────▶ HasMoney   (balance grows)
+HasMoney  ── cancel ──────────────────▶ Idle       (refund)
+HasMoney  ── select, enough money ────▶ Dispensing
+Dispensing ── done, items left ───────▶ Idle
+Dispensing ── done, slot empty ───────▶ SoldOut
+```
+
+Drawing it before coding answers questions that flags leave implicit: what
+does `insert` do while dispensing? Can you cancel from `Idle`? Every cell in
+the "state × event" grid needs an answer, even if the answer is "ignore it"
+or "error".
+
+## The State pattern
+
+The **State pattern** gives each state its own class implementing the same
+interface. The machine holds the current state object and forwards every
+event to it. States perform transitions by replacing the machine's state.
+
+<StateMachineVisualizer />
+
+What this buys you:
+
+- **No scattered conditionals.** `HasMoney.select` doesn't check whether
+  there is money; being in that state means there is.
+- **Invalid combinations can't be represented.** There's one current state,
+  not three independent flags.
+- **New states are additive.** A `Maintenance` state is a new class whose
+  methods all show "Out of service". The other states don't change, except
+  the ones that transition into it.
+
+## A transition table is often simpler
+
+For machines where states have no behaviour of their own — only "which state
+comes next" — a table beats a class per state:
+
+```typescript
+type OrderState = 'pending' | 'paid' | 'shipped' | 'delivered' | 'cancelled'
+type OrderEvent = 'pay' | 'ship' | 'deliver' | 'cancel'
+
+const transitions: Record<OrderState, Partial<Record<OrderEvent, OrderState>>> = {
+  pending: { pay: 'paid', cancel: 'cancelled' },
+  paid: { ship: 'shipped', cancel: 'cancelled' },
+  shipped: { deliver: 'delivered' },
+  delivered: {},
+  cancelled: {},
+}
+
+function next(state: OrderState, event: OrderEvent): OrderState {
+  const to = transitions[state][event]
+  if (!to) throw new Error(`Can't ${event} an order that is ${state}`)
+  return to
+}
+```
+
+The whole lifecycle is visible in ten lines, it's trivial to test every
+transition, and the same table can render a diagram or validate an API
+request. Use the State pattern when states carry real behaviour — different
+calculations, different side effects; use a table when they're just labels
+with rules about order.
+
+## Model state in the types
+
+TypeScript's [discriminated unions](/blog/discriminated-unions-in-typescript)
+go one step further: they attach data that only exists in some states.
+
+```typescript
+type Connection =
+  | { state: 'disconnected' }
+  | { state: 'connecting'; attempt: number }
+  | { state: 'connected'; socket: WebSocket }
+  | { state: 'failed'; error: Error }
+```
+
+There's no `socket` while connecting, so code can't accidentally send on
+one. The compiler forces a check of `state` first. "Make invalid states
+unrepresentable" is the same idea as the State pattern, enforced at compile
+time.
+
+## Where state machines show up
+
+- **UI flows**: a form that is idle, submitting, succeeded or failed.
+- **Protocols**: TCP's connection states, an HTTP/2 stream's lifecycle.
+- **Workflows**: orders, payments, support tickets, approvals.
+- **Interview problems**: vending machines, elevators (idle, moving up,
+  moving down, doors open, maintenance), traffic lights, ATMs.
+
+In an LLD interview, drawing the state diagram first is almost always the
+right move for these problems: it is quick, it surfaces edge cases ("what if
+someone presses cancel while dispensing?"), and the classes follow from it.
+Try it on the vending machine and elevator problems in the
+[LLD practice tool](/tools/lld).

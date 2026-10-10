@@ -136,6 +136,17 @@ import {
   RaftVisualizer,
   ServiceWorkerVisualizer,
 } from '@/app/components/platform-visualizers'
+import { KnapsackVisualizer, SlidingWindowMaxVisualizer } from '@/app/components/dp-window-visualizers'
+import {
+  CompositionVisualizer,
+  EstimationVisualizer,
+  HybridSearchVisualizer,
+  ObserverVisualizer,
+  SagaVisualizer,
+  SolidVisualizer,
+  StateMachineVisualizer,
+  StrategyVisualizer,
+} from '@/app/components/design-visualizers'
 import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
@@ -386,6 +397,16 @@ const components = {
   ErrorHandlingVisualizer,
   IntlVisualizer,
   DeclarationFileVisualizer,
+  KnapsackVisualizer,
+  SlidingWindowMaxVisualizer,
+  SolidVisualizer,
+  StrategyVisualizer,
+  StateMachineVisualizer,
+  ObserverVisualizer,
+  CompositionVisualizer,
+  SagaVisualizer,
+  EstimationVisualizer,
+  HybridSearchVisualizer,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {

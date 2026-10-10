@@ -1,0 +1,101 @@
+---
+title: "Back-of-the-Envelope Estimation for System Design"
+publishedAt: "2026-10-10"
+summary: "How to turn 'a hundred million users' into requests per second, storage, bandwidth and cache size in a few lines of arithmetic. The handful of numbers worth memorising, a worked URL-shortener example, and how each estimate should change the design."
+tags: "System Design"
+---
+
+"Design a URL shortener" means nothing until you know how big it is. One
+server and a SQLite file? A sharded cluster across three regions? Estimation
+is how you find out in two minutes, before drawing boxes. You're after the
+**order of magnitude**: 40 versus 4,000 versus 400,000 requests a second are
+three different designs. 38.6 versus 40 doesn't matter.
+
+## Numbers worth knowing
+
+**Time.** A day is 86,400 seconds — call it **10<sup>5</sup>**. A month is
+about 2.6 × 10<sup>6</sup> seconds, a year about 3 × 10<sup>7</sup>. So:
+
+- 1 million per day ≈ **12 per second**
+- 100 million per day ≈ **1,200 per second**
+- 1 billion per month ≈ **400 per second**
+
+**Sizes.** KB = 10<sup>3</sup>, MB = 10<sup>6</sup>, GB = 10<sup>9</sup>,
+TB = 10<sup>12</sup> bytes. A typical row with a few short strings is
+hundreds of bytes. A compressed photo is hundreds of KB. A minute of HD
+video is tens of MB.
+
+**Latency, roughly** — each line is about an order of magnitude apart:
+
+<Table
+  data={{
+    headers: ['operation', 'time'],
+    rows: [
+      ['read from main memory', '~100 ns'],
+      ['random read from an SSD', '~100 µs'],
+      ['round trip within a data centre', '~0.5 ms'],
+      ['disk seek (spinning disk)', '~5–10 ms'],
+      ['round trip between continents', '~150 ms'],
+    ],
+  }}
+/>
+
+**What one machine can do, very roughly**: a simple cached read endpoint
+handles thousands to tens of thousands of requests a second; a single
+relational database, thousands of simple writes a second; a cache node,
+hundreds of thousands of operations a second. Real numbers depend heavily on
+the workload — treat these as a sanity check, not a promise.
+
+## A worked example
+
+Assumptions, stated out loud: 100 million new short links a month; each link
+is read 100 times on average; records are about 500 bytes; keep five years.
+
+<EstimationVisualizer />
+
+## Turn every number into a decision
+
+An estimate is useful only if it changes the design. From the walkthrough:
+
+- **40 writes a second** is nothing for one database. No write sharding is
+  needed, and generating unique keys can be simple — a counter, or a random
+  key with a collision check.
+- **12,000 reads a second at peak**, mostly for popular links, says: put a
+  cache in front, and serve redirects from the cache. Several stateless app
+  servers behind a [load balancer](/blog/load-balancing-strategies) cover
+  it with room to spare.
+- **3 TB over five years** fits on one machine, but one machine is a single
+  point of failure. Replicate for availability. Shard later, by key hash, if
+  assumptions change — see
+  [sharding and replication](/blog/database-sharding-and-replication).
+- **35 GB of hot data** fits in memory on one cache node, or across a few.
+- **3.5 trillion possible 7-character keys** against 6 billion needed means
+  collisions are rare. Six characters (57 billion) would also work, but with
+  less headroom.
+
+Bandwidth is worth a line too: 4,000 reads a second × 500 bytes is 2 MB/s.
+Negligible — and saying so is part of the answer.
+
+## Habits that keep it honest
+
+- **State assumptions before computing**, and write them where the
+  interviewer (or your team) can see them. Wrong assumptions are easy to fix
+  if they're visible.
+- **Round aggressively.** 86,400 → 10<sup>5</sup>, 2.6M → 3M. Keep one
+  significant figure, multiply in powers of ten.
+- **Average, then peak.** Size for peak (2–10× the average, depending on
+  how spiky traffic is) and storage for growth.
+- **Separate reads from writes.** They usually differ by orders of magnitude
+  and lead to different decisions: caching and replicas for reads,
+  partitioning and queues for writes.
+- **Watch for the multiplier you forgot**: replication factor (×3),
+  indexes, metadata, backups, logs. Storage estimates are often low by
+  several times.
+- **Sanity-check against something known.** If your estimate says a chat
+  app for a small company needs 500 servers, an assumption is wrong.
+
+## Try it
+
+The [capacity calculator](/tools/capacity) does this arithmetic from a few
+inputs. Use it to check your mental maths, not to replace it — in an
+interview, what matters is the reasoning from each number to a decision.

@@ -1,0 +1,120 @@
+---
+title: "The Strategy Pattern: Swapping Behaviour Without if/else"
+publishedAt: "2026-10-10"
+summary: "When one step of an algorithm varies — pricing, sorting, retry policy, compression — the Strategy pattern puts each variant behind an interface and picks one at runtime. How it works, how it looks in TypeScript with classes or plain functions, and when a switch statement is still better."
+tags: "LLD"
+---
+
+A parking lot charges ₹40 an hour on weekdays and a flat ₹100 on weekends.
+The first version of the exit gate usually looks like this:
+
+```typescript
+checkout(ticket: Ticket) {
+  if (isWeekend(ticket.exitTime)) return 100
+  return Math.ceil(ticket.hours()) * 40
+}
+```
+
+Then comes "first hour free for members", then "EV spots at a different
+rate", then "festival pricing". Each one adds a branch to `checkout`, and
+each branch can break the others. The **Strategy pattern** is the standard
+fix:
+
+> Define a family of algorithms, put each one in its own class behind a
+> common interface, and let the client choose which one to use.
+
+## The three parts
+
+1. **The strategy interface** — the one thing that varies, as a method.
+   Here: `feeFor(ticket): number`.
+2. **Concrete strategies** — one class per variant: `Hourly`, `FlatRate`,
+   `FirstHourFree`.
+3. **The context** — the class that *uses* a strategy without knowing
+   which: `ExitGate`. It holds a reference and delegates.
+
+<StrategyVisualizer />
+
+## Who chooses the strategy?
+
+The context shouldn't — if `ExitGate` decides between `Hourly` and
+`FlatRate`, the `if` has just moved. The choice belongs somewhere higher up:
+
+```typescript
+// Chosen once, at startup, from configuration
+const pricing: PricingStrategy =
+  config.pricing === 'flat' ? new FlatRate(config.amount) : new Hourly(config.rate)
+const gate = new ExitGate(pricing)
+```
+
+Or per request, by a small factory:
+
+```typescript
+function pricingFor(ticket: Ticket): PricingStrategy {
+  if (ticket.member) return new FirstHourFree(new Hourly(40))
+  if (isWeekend(ticket.exitTime)) return new FlatRate(100)
+  return new Hourly(40)
+}
+```
+
+There is still an `if` — selection has to happen somewhere. The difference
+is that it lives in one place, picks between whole behaviours, and contains
+no pricing arithmetic. Notice too that `FirstHourFree` wraps another
+strategy: strategies compose.
+
+## In TypeScript, a strategy can just be a function
+
+If the interface has one method and no state, a function type does the same
+job with less ceremony:
+
+```typescript
+type Pricing = (ticket: Ticket) => number
+
+const hourly = (rate: number): Pricing => (t) => Math.ceil(t.hours()) * rate
+const flat = (amount: number): Pricing => () => amount
+
+class ExitGate {
+  constructor(private pricing: Pricing) {}
+  checkout(t: Ticket) { return this.pricing(t) }
+}
+```
+
+You've used this many times already: the comparator passed to
+`Array.prototype.sort` is a strategy. So is the `reviver` in `JSON.parse`,
+and the `backoff` option in most retry libraries. Use classes when the
+strategy has several methods, holds configuration you want named, or needs
+to be identified in logs.
+
+## Strategy vs. a switch statement
+
+The pattern isn't free: more types, and you have to look in another file to
+see what a fee will be. A `switch` is better when:
+
+- the variants are **closed** and unlikely to grow (four compass
+  directions);
+- each branch is **a line or two**; and
+- nobody outside the module needs to add a variant.
+
+Strategy earns its place when variants are **open** (business rules keep
+adding them), **non-trivial** (each needs its own tests), or **supplied by
+someone else** (plugins, configuration, the caller of a library).
+
+## Strategy vs. State
+
+The two patterns have the same class diagram: a context delegating to an
+interface. The difference is who changes the object:
+
+- In **Strategy**, the *client* picks the behaviour, and it usually stays
+  fixed for the context's lifetime.
+- In **[State](/blog/state-pattern-and-state-machines)**, the *states
+  themselves* switch the context to a different state as events arrive.
+
+## In an interview
+
+Strategy is the most useful pattern in low-level design rounds, because
+almost every problem has a "this rule will change" requirement: pricing in a
+parking lot, dispatch in an elevator, eviction in a cache, splitting in an
+expense app. Name the varying rule, put it behind an interface, and show
+where the concrete one is chosen. Then practise it on the
+[parking lot problem](/tools/lld) — and see the
+[rate limiter post](/blog/rate-limiting-algorithms) for four algorithms
+that make a natural strategy family.

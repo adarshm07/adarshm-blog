@@ -104,6 +104,11 @@ export const curriculum: CurriculumPhase[] = [
         note: 'A stack that stays ordered, and the four "nearest greater/smaller element" questions it answers in O(n).',
       },
       {
+        slug: 'sliding-window-maximum',
+        difficulty: 'Advanced',
+        note: 'The monotonic stack with a moving left edge: a deque that gives every window\'s maximum in O(n).',
+      },
+      {
         slug: 'quick-sort-and-heap-sort',
         difficulty: 'Intermediate',
         note: 'Divide-and-conquer and heap ideas applied back to sorting — partitioning shows up far beyond sort itself.',
@@ -127,6 +132,11 @@ export const curriculum: CurriculumPhase[] = [
         slug: 'dynamic-programming-intro',
         difficulty: 'Advanced',
         note: 'Overlapping subproblems, memoization, and tabulation — the pattern people find hardest, made mechanical.',
+      },
+      {
+        slug: 'zero-one-knapsack',
+        difficulty: 'Advanced',
+        note: 'The classic "choose a subset under a budget" DP — a two-dimensional table, then the one-array version that iterates backwards.',
       },
     ],
   },
