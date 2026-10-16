@@ -1,0 +1,151 @@
+---
+title: "Factory and Builder: Two Patterns for Creating Objects"
+publishedAt: "2026-10-16"
+summary: "When 'new SomeClass(...)' starts spreading decisions and long argument lists through your code, two creational patterns help. A factory decides which class to build; a builder assembles a complex object step by step. When each one earns its place, and how they look in idiomatic TypeScript."
+tags: "LLD"
+---
+
+`new` is the simplest way to create an object, and usually the right one.
+It becomes a problem in two specific situations:
+
+1. **The caller shouldn't decide which class to create.** Code that sends a
+   notification shouldn't contain `if (channel === 'email') new
+   EmailNotifier(smtpConfig)` — and certainly not in twenty places.
+2. **The object has many parts, most of them optional.** A constructor with
+   eight positional arguments is easy to call wrongly and hard to read.
+
+The **factory** pattern addresses the first; the **builder** the second.
+
+<FactoryBuilderVisualizer />
+
+## Factory: deciding what to build
+
+A factory is a function (or method) that returns an object of some
+interface, choosing and configuring the concrete class itself:
+
+```typescript
+interface Notifier {
+  send(to: User, message: string): Promise<void>
+}
+
+function createNotifier(channel: Channel): Notifier {
+  switch (channel) {
+    case 'email': return new EmailNotifier(smtpConfig)
+    case 'sms': return new SmsNotifier(smsClient)
+    case 'push': return new PushNotifier(fcmClient)
+  }
+}
+
+// callers
+await createNotifier(user.preferredChannel).send(user, 'Your order shipped')
+```
+
+What it buys you:
+
+- **Callers depend only on the interface.** They never import the concrete
+  classes or know what each needs to be constructed.
+- **One place for the decision.** Adding a channel means a new class and a
+  new case, not a search through the codebase.
+- **Freedom to change construction.** The factory can return a cached
+  instance, a decorated one (`withRetry(new EmailNotifier(...))`), or a fake
+  in tests — callers don't change.
+
+With `Channel` as a union type and `strict` on, TypeScript checks that the
+switch covers every case: add `'whatsapp'` to the union, and the function
+fails to compile until it's handled.
+
+A registry is a common variation when the set of types is open — plugins,
+for example:
+
+```typescript
+const notifiers = new Map<string, () => Notifier>()
+notifiers.set('email', () => new EmailNotifier(smtpConfig))
+
+function createNotifier(channel: string): Notifier {
+  const make = notifiers.get(channel)
+  if (!make) throw new Error(`No notifier for ${channel}`)
+  return make()
+}
+```
+
+The Gang of Four book distinguishes the **Factory Method** (a subclass
+overrides a method to choose the class) from the **Abstract Factory** (an
+object that creates a whole family of related objects, like all the widgets
+for one UI theme). In TypeScript and JavaScript, a plain function usually
+does the job of both.
+
+## Builder: assembling something complex
+
+Compare:
+
+```typescript
+new HttpRequest('https://api.example.com/orders', 'POST', headers, body, 5000, 3, true)
+
+new RequestBuilder('https://api.example.com/orders')
+  .method('POST')
+  .header('Idempotency-Key', key)
+  .json({ items })
+  .timeout(5_000)
+  .retry({ attempts: 3 })
+  .build()
+```
+
+The builder names every part, skips the parts you don't need, and can
+validate the combination once, in `build()`:
+
+```typescript
+class RequestBuilder {
+  private init: { method: string; headers: Record<string, string>; body?: string; timeoutMs: number } = {
+    method: 'GET',
+    headers: {},
+    timeoutMs: 10_000,
+  }
+  constructor(private url: string) {}
+
+  method(m: string) { this.init.method = m; return this }
+  header(name: string, value: string) { this.init.headers[name] = value; return this }
+  json(data: unknown) {
+    this.init.body = JSON.stringify(data)
+    return this.header('Content-Type', 'application/json')
+  }
+  timeout(ms: number) { this.init.timeoutMs = ms; return this }
+
+  build(): Readonly<HttpRequest> {
+    if (this.init.body && this.init.method === 'GET') throw new Error('GET requests have no body')
+    return Object.freeze({ url: this.url, ...this.init, headers: { ...this.init.headers } })
+  }
+}
+```
+
+Each method returns `this`, so calls chain. The builder is mutable
+scaffolding, and the product is immutable once built.
+
+## In JavaScript, an options object is often enough
+
+For many cases, a single options object with defaults gives you named,
+optional parameters without a builder class:
+
+```typescript
+function request(url: string, { method = 'GET', headers = {}, timeoutMs = 10_000 }: RequestOptions = {}) {
+  // …
+}
+
+request('https://api.example.com/orders', { method: 'POST', timeoutMs: 5_000 })
+```
+
+Reach for a builder when construction is genuinely **stepwise**: parts
+depend on each other (`json()` sets a header too), validation needs the
+whole object, or the object is built up across several places — SQL query
+builders such as Knex and Kysely, test-data builders
+(`aUser().withRole('admin').build()`), and HTTP clients are good examples.
+
+## In an interview
+
+Creational patterns come up in most LLD problems: creating a `Vehicle` of
+the right type at a parking-lot entrance, a `Notifier` per channel, or a
+`Pizza` with optional toppings (a classic builder prompt). Name the pattern
+when it solves a stated problem. "A factory, because the entrance shouldn't
+know about vehicle subclasses" is good. Adding factories everywhere "for
+flexibility" is not. Pair them with the
+[Strategy pattern](/blog/strategy-pattern) — factories often choose which
+strategy to build — and practise in the [LLD tool](/tools/lld).

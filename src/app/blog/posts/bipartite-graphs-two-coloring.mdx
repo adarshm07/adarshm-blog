@@ -1,0 +1,108 @@
+---
+title: "Bipartite Graphs and Two-Colouring"
+publishedAt: "2026-10-16"
+summary: "Can a graph's nodes be split into two groups so every edge crosses between them? How a BFS that alternates two colours answers it in linear time, why the answer is 'no' exactly when there's an odd cycle, and the problems that are secretly this one — from scheduling to splitting people into teams."
+tags: "DSA"
+---
+
+A graph is **bipartite** if its nodes can be split into two groups so that
+every edge goes from one group to the other — never within a group.
+
+Many real relationships have this shape: students and courses, job seekers
+and jobs, users and the products they bought. Others hide it. "Can these
+people be split into two teams so that no two people who dislike each other
+end up together?" is the same question, with dislikes as edges.
+
+## The test: colour with two colours
+
+Try to colour each node red or blue so that no edge connects two nodes of
+the same colour:
+
+1. Pick an uncoloured node and colour it red.
+2. Every neighbour must be blue. Every neighbour of those must be red. And
+   so on — each colour is **forced** by the previous one.
+3. If you ever find an edge whose two ends have the same colour, the graph
+   isn't bipartite.
+
+<BipartiteVisualizer />
+
+## Why odd cycles are the only obstacle
+
+Walk around a cycle: colours must alternate red, blue, red, blue… Back at
+the start after an **even** number of steps, the colour matches — fine.
+After an **odd** number, the start would have to be both colours. So a
+graph with an odd cycle can't be bipartite.
+
+The converse also holds: if there's no odd cycle, the BFS never finds a
+conflict. That gives a clean statement:
+
+> A graph is bipartite if and only if it contains no cycle of odd length.
+
+Trees have no cycles at all, so every tree is bipartite: colour by depth,
+even and odd.
+
+## The code
+
+```javascript
+function isBipartite(n, edges) {
+  const adj = Array.from({ length: n }, () => [])
+  for (const [a, b] of edges) {
+    adj[a].push(b)
+    adj[b].push(a)
+  }
+
+  const color = new Array(n).fill(-1)
+  for (let start = 0; start < n; start++) {
+    if (color[start] !== -1) continue    // already coloured
+    color[start] = 0
+    const queue = [start]
+    for (let head = 0; head < queue.length; head++) {
+      const u = queue[head]
+      for (const v of adj[u]) {
+        if (color[v] === -1) {
+          color[v] = 1 - color[u]
+          queue.push(v)
+        } else if (color[v] === color[u]) {
+          return { bipartite: false, conflict: [u, v] }
+        }
+      }
+    }
+  }
+  return { bipartite: true, color }
+}
+```
+
+The outer loop matters: a graph can have several disconnected pieces, and
+each needs its own start. Every node and edge is visited once: **O(V + E)**.
+
+A DFS works just as well — colour a node, recurse into neighbours with the
+other colour. So does [union-find](/blog/union-find-disjoint-set): for each
+node, union all its neighbours together; if a node ends up in the same set
+as one of its neighbours, the graph isn't bipartite.
+
+## Problems that are secretly bipartite checks
+
+- **Possible bipartition**: split people into two groups given a list of
+  pairs who dislike each other. Dislikes are edges.
+- **Is graph bipartite?** directly, given an adjacency list.
+- **Two-room scheduling**: can meetings that conflict be split between two
+  rooms? Conflicts are edges.
+- **Board colouring**: a chessboard's squares, with knight moves as edges, are
+  bipartite — a knight always moves to the other colour.
+
+## What bipartite graphs unlock
+
+Several problems that are hard on general graphs become tractable on
+bipartite ones:
+
+- **Maximum matching**: pair up as many nodes as possible across the two
+  sides — jobs to workers, students to projects. Solved by augmenting paths
+  (Hopcroft–Karp runs in O(E√V)).
+- **Assignment with costs**: the Hungarian algorithm finds the cheapest
+  perfect matching.
+- **Graph colouring**: deciding whether a general graph can be coloured
+  with 3 colours is NP-hard. With 2 colours, it's this linear-time BFS.
+
+Recommendation systems model users and items as a bipartite graph, too:
+"people who bought this also bought" is a walk from item to users and back
+to items.

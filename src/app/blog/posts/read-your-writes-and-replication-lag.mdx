@@ -1,0 +1,104 @@
+---
+title: "Read-Your-Writes and Replication Lag"
+publishedAt: "2026-10-16"
+summary: "You save a change, the page reloads, and your change is gone — then it reappears. Asynchronous replicas lag behind the primary, and reads routed to them break guarantees users take for granted. The consistency guarantees that matter (read-your-writes, monotonic reads, consistent prefix) and how to provide each one."
+tags: "System Design"
+---
+
+A common way to scale reads is to add **read replicas**: copies of the
+database that replay the primary's [write-ahead log](/blog/write-ahead-logging),
+with writes going to the primary and reads spread across the copies. It works
+very well — until a user saves a change and immediately doesn't see it.
+
+<ReadYourWritesVisualizer />
+
+## Why replicas lag
+
+With asynchronous replication, the primary commits and replies without
+waiting for replicas. Each replica receives and applies the log a little
+later. Usually the gap is milliseconds. Under heavy write load, a long
+query on the replica, or a network blip, it can grow to seconds or minutes.
+
+Synchronous replication — wait for a replica to confirm before committing —
+closes the gap, but every write then pays a network round trip and stalls if
+that replica is slow or down. Most systems replicate asynchronously and deal
+with the lag in the application.
+
+The lag is easy to forget because it's usually tiny. Bugs show up under
+load, which is exactly when replicas fall behind.
+
+## The guarantees users assume
+
+Users don't think in terms of replicas. They expect:
+
+**Read-your-writes.** After I change something, I see my change. Other
+people may see it a moment later, and that's fine.
+
+**Monotonic reads.** Once I've seen something, I don't later see an older
+version. Without this, a comment appears, disappears on refresh (a more
+lagged replica), and reappears.
+
+**Consistent prefix.** If writes happened in an order, I see them in that
+order. A reply should never appear before the message it replies to.
+
+None of these require full [strong consistency](/blog/cap-theorem-and-eventual-consistency).
+They're cheaper session guarantees, and each has standard fixes.
+
+## Fixes for read-your-writes
+
+**Read your own data from the primary.** Anything the user can edit — their
+profile, their settings — is read from the primary when the user reads it
+themselves. Other people's profiles still come from replicas.
+
+**Route to the primary for a while after a write.** Record the time of the
+user's last write (in the session or a cookie). For the next few seconds,
+send their reads to the primary. Simple, but it's a guess about how much
+lag there is.
+
+**Track the log position.** After a write, note the primary's log position
+(an LSN in Postgres, a GTID in MySQL) in the session. A read can then go to
+any replica that has replayed at least that far, or wait briefly until one
+has:
+
+```sql
+-- On the primary, after the write:
+SELECT pg_current_wal_lsn();          -- e.g. 0/5A3F2C8
+-- On a replica, before the read:
+SELECT pg_last_wal_replay_lsn() >= '0/5A3F2C8';
+```
+
+This is precise. It's what managed databases and proxies offer as "causal
+consistency" or "read-after-write" routing.
+
+**Update the client optimistically.** The UI shows the saved value from its
+own state instead of reloading it. This hides the problem for the user who
+made the change — but not on their other devices.
+
+## Fixes for the other two
+
+**Monotonic reads**: pin each user to one replica (by hashing the user ID),
+so their reads never move to a more lagged copy. If that replica fails, they
+move, and may briefly see older data.
+
+**Consistent prefix**: mostly a problem in [sharded](/blog/database-sharding-and-replication)
+systems, where related writes live in different partitions that replicate
+independently. Keep causally related data in the same partition — a
+conversation's messages together — or carry
+[version information](/blog/lamport-and-vector-clocks) and have readers wait
+for the dependencies.
+
+## Caches have the same problem
+
+A cache in front of the database is another lagging copy. "Write to the
+database, then delete the cache key" can still race with a concurrent reader
+that refills the cache with the old value. The same tools apply: short TTLs,
+versioned cache entries, or reading through to the source for the user who
+just wrote. See [caching strategies](/blog/caching-strategies-explained).
+
+## In a design interview
+
+When you add read replicas or a cache, say what consistency users get and
+where it matters: "Feeds can be a few seconds stale. Profile edits use
+read-your-writes, by reading the user's own profile from the primary."
+Interviewers ask about this because it's the gap between a design that
+scales and one users trust.

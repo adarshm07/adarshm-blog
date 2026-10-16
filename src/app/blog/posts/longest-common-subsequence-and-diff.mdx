@@ -1,0 +1,143 @@
+---
+title: "Longest Common Subsequence: The Algorithm Behind diff"
+publishedAt: "2026-10-16"
+summary: "The longest sequence of items two lists share in order, not necessarily side by side. How a small DP table finds it, how walking back through the table recovers it, and how the same idea — applied to lines instead of letters — produces the diffs you read in every code review."
+tags: "DSA"
+---
+
+Open any pull request and you see a diff: lines removed in red, lines added
+in green, everything else unchanged. Producing that view means answering:
+**which lines did the two versions keep in common?** Once you know that,
+everything else is either an insert or a delete.
+
+That question is the **longest common subsequence** (LCS) problem.
+
+## Subsequence, not substring
+
+A **subsequence** keeps the order of items but may skip some. `ACE` is a
+subsequence of `ABCDE`; `AEC` isn't (wrong order). A substring has to be
+contiguous; a subsequence doesn't.
+
+The LCS of `ABCBDAB` and `BDCABA` has length 4. One answer is `BCBA`:
+
+```
+A B C B D A B          B D C A B A
+  ^ ^ ^   ^            ^   ^   ^ ^
+  B C B   A            B   C   B A
+```
+
+## Building the table
+
+Let `L[i][j]` be the LCS length of the first `i` letters of `x` and the first
+`j` letters of `y`. Look at the last letters of those two prefixes:
+
+- **They match**: that letter can end the common subsequence.
+  `L[i][j] = L[i-1][j-1] + 1`.
+- **They differ**: at least one of them isn't in the LCS. Drop one or the
+  other and take the better result: `L[i][j] = max(L[i-1][j], L[i][j-1])`.
+
+This is the same shape as [edit distance](/blog/edit-distance-levenshtein) —
+fill a table from smaller prefixes to larger ones.
+
+<LcsVisualizer />
+
+## The code
+
+```javascript
+function lcs(x, y) {
+  const m = x.length, n = y.length
+  const L = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0))
+
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      L[i][j] = x[i - 1] === y[j - 1]
+        ? L[i - 1][j - 1] + 1
+        : Math.max(L[i - 1][j], L[i][j - 1])
+    }
+  }
+
+  // Walk back from the corner to recover one LCS.
+  const out = []
+  let i = m, j = n
+  while (i > 0 && j > 0) {
+    if (x[i - 1] === y[j - 1]) { out.push(x[i - 1]); i--; j-- }
+    else if (L[i - 1][j] >= L[i][j - 1]) i--
+    else j--
+  }
+  return out.reverse()
+}
+
+lcs('ABCBDAB', 'BDCABA').join('')   // 'BCBA'
+```
+
+**O(m · n)** time and space. If you only need the length, keep two rows and
+the space drops to O(min(m, n)).
+
+## From LCS to a diff
+
+Run the same algorithm on **arrays of lines** instead of strings of letters.
+Lines in the LCS are unchanged. Lines of the old file that aren't in it were
+deleted; lines of the new file that aren't in it were added. The backtrack
+already visits them in order:
+
+```javascript
+function diff(oldLines, newLines) {
+  const m = oldLines.length, n = newLines.length
+  const L = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0))
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      L[i][j] = oldLines[i - 1] === newLines[j - 1]
+        ? L[i - 1][j - 1] + 1
+        : Math.max(L[i - 1][j], L[i][j - 1])
+
+  const out = []
+  let i = m, j = n
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+      out.push('  ' + oldLines[i - 1]); i--; j--
+    } else if (j > 0 && (i === 0 || L[i][j - 1] >= L[i - 1][j])) {
+      out.push('+ ' + newLines[j - 1]); j--
+    } else {
+      out.push('- ' + oldLines[i - 1]); i--
+    }
+  }
+  return out.reverse()
+}
+
+diff(
+  ['const a = 1', 'const b = 2', 'log(a + b)'],
+  ['const a = 1', 'const c = 3', 'log(a + c)'],
+)
+// ['  const a = 1', '- const b = 2', '- log(a + b)', '+ const c = 3', '+ log(a + c)']
+```
+
+## What real diff tools do
+
+The quadratic table is fine for small inputs, but two 10,000-line files would
+need a 100-million-cell table. Real tools are smarter:
+
+- **Myers' algorithm** (1986), used by `git diff` by default, finds a
+  shortest edit script in O((m + n) · d) time, where d is the number of
+  differences. For typical changes — a few edits in a big file — that's
+  close to linear.
+- **Trimming**: strip the common prefix and suffix first. Most edits touch a
+  small region.
+- **Hashing lines** so comparisons are integer comparisons, not string
+  comparisons.
+- **Patience and histogram diff** (`git diff --patience`, `--histogram`)
+  anchor the diff on lines that appear exactly once in both files. The
+  result is often more readable for code: a moved function shows as a move,
+  not as a confusing interleaving of matching braces.
+
+There can be several LCSs of the same length, and they give different diffs.
+That's why diff tools sometimes match a stray `}` with the wrong block — the
+answer is optimal, but not the one a human would pick.
+
+## Related problems
+
+- **Edit distance** allows substitutions as well as inserts and deletes.
+- **Shortest common supersequence**: its length is m + n − LCS.
+- **Minimum deletions to make two strings equal**: m + n − 2 · LCS.
+- **[Longest increasing subsequence](/blog/longest-increasing-subsequence)**
+  is the LCS of an array and its sorted copy — though it has a faster
+  O(n log n) solution of its own.

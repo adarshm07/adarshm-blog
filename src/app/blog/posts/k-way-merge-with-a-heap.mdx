@@ -1,0 +1,120 @@
+---
+title: "K-Way Merge: Combining Sorted Lists with a Heap"
+publishedAt: "2026-10-16"
+summary: "Merging k sorted lists into one by repeatedly taking the smallest head — with a min-heap so each step costs O(log k). The pattern behind merge-sort's final pass, external sorting of files bigger than memory, LSM-tree compaction, and a family of interview problems."
+tags: "DSA"
+---
+
+Merging **two** sorted lists is the last step of merge sort: compare the
+two front elements, take the smaller, repeat. Merging **k** lists is the
+same idea, except "compare the front elements" now means finding the
+smallest of k values every step.
+
+Scanning all k fronts each time costs O(k) per element, so O(N · k) for N
+elements in total. A [min-heap](/blog/heaps-and-priority-queues) holding one
+front element from each list finds the smallest in O(1) and replaces it in
+O(log k) — **O(N log k)** in total.
+
+<KWayMergeVisualizer />
+
+## The code
+
+JavaScript has no built-in priority queue, so here's a small binary heap,
+followed by the merge:
+
+```javascript
+class MinHeap {
+  constructor(compare) { this.items = []; this.compare = compare }
+  get size() { return this.items.length }
+  push(item) {
+    const a = this.items
+    a.push(item)
+    for (let i = a.length - 1; i > 0; ) {
+      const p = (i - 1) >> 1
+      if (this.compare(a[i], a[p]) >= 0) break
+      ;[a[i], a[p]] = [a[p], a[i]]
+      i = p
+    }
+  }
+  pop() {
+    const a = this.items
+    const top = a[0]
+    const last = a.pop()
+    if (a.length > 0) {
+      a[0] = last
+      for (let i = 0; ; ) {
+        const l = 2 * i + 1, r = l + 1
+        let m = i
+        if (l < a.length && this.compare(a[l], a[m]) < 0) m = l
+        if (r < a.length && this.compare(a[r], a[m]) < 0) m = r
+        if (m === i) break
+        ;[a[i], a[m]] = [a[m], a[i]]
+        i = m
+      }
+    }
+    return top
+  }
+}
+
+function mergeSorted(lists) {
+  // Heap entries: [value, which list, index within that list]
+  const heap = new MinHeap((x, y) => x[0] - y[0])
+  lists.forEach((list, k) => { if (list.length) heap.push([list[0], k, 0]) })
+
+  const out = []
+  while (heap.size) {
+    const [value, k, i] = heap.pop()
+    out.push(value)
+    if (i + 1 < lists[k].length) heap.push([lists[k][i + 1], k, i + 1])
+  }
+  return out
+}
+
+mergeSorted([[1, 4, 9], [2, 3, 11], [5, 6, 7]])
+// [1, 2, 3, 4, 5, 6, 7, 9, 11]
+```
+
+Each entry remembers which list it came from and where, so after popping it
+we know which successor to push. The heap never holds more than k entries.
+
+## Why not concatenate and sort?
+
+Concatenating and sorting costs O(N log N) and ignores the fact that each
+list is already sorted. K-way merge costs O(N log k), which matters when k
+is much smaller than N. More importantly, it **streams**: it needs only the
+current front of each list, so the lists can be files, network streams, or
+iterators too big to hold in memory.
+
+## Where it's used
+
+**External sorting.** To sort a 100 GB file with 4 GB of memory: read 4 GB
+at a time, sort it in memory, and write it out as a sorted "run". That gives
+25 runs. Then k-way merge the 25 runs, reading a buffer from each — one pass
+over the data. Databases sort large result sets this way when they don't fit
+in `work_mem`.
+
+**LSM-tree compaction.** [LSM-tree](/blog/lsm-trees-and-write-optimized-storage)
+storage engines keep many sorted files on disk. Compaction merges them into
+fewer, larger sorted files with exactly this algorithm, keeping only the
+newest version of each key.
+
+**Distributed queries.** Each shard returns its own top results, sorted;
+the coordinator merges them. With a `LIMIT`, it stops after the first few
+outputs.
+
+**Log merging.** Combining timestamp-ordered logs from many servers into one
+timeline.
+
+## Interview variations
+
+- **Merge k sorted linked lists**: the problem above, with list nodes
+  instead of arrays.
+- **Kth smallest element in a sorted matrix**: each row is a sorted list;
+  pop k times.
+- **Smallest range covering elements from k lists**: keep the heap's minimum
+  and track the current maximum; advance the list that holds the minimum.
+- **Find K pairs with the smallest sums**: treat each `a[i] + b[0..]` as a
+  sorted list, and merge lazily.
+
+The pattern to recognise: **several sorted sources, and you need the
+globally smallest items in order** — keep one candidate per source in a heap.

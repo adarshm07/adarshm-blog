@@ -1,0 +1,104 @@
+---
+title: "Load Shedding and Graceful Degradation"
+publishedAt: "2026-10-16"
+summary: "An overloaded server that accepts everything ends up serving nothing: queues grow, every request times out, and retries make it worse. How bounded queues and concurrency limits turn overload into fast rejections, how to shed the least important work first, and how to degrade features instead of failing whole pages."
+tags: "System Design"
+---
+
+Every server has a capacity: so many requests a second it can serve at
+normal latency. What happens just past that point decides whether you get a
+slow afternoon or an outage.
+
+## Overload without limits
+
+Suppose a server can handle 1,000 requests a second, and traffic arrives at
+2,000. Requests start to queue. The queue keeps growing, so latency keeps
+growing, until it passes the client's timeout. Now the server is spending
+its whole capacity on requests whose callers have already given up. Each
+one completes, to nobody.
+
+Then clients **retry**. The 2,000 requests a second become 4,000. This is
+how a brief spike turns into a long outage: the system is busy, yet gets
+almost nothing useful done. Recovering often requires cutting traffic to
+zero.
+
+## Shed load deliberately
+
+**Load shedding** means rejecting some requests on purpose, quickly, so the
+rest can be served well. A 503 returned in a millisecond is far better —
+for the user and for the server — than a timeout after 30 seconds.
+
+<LoadSheddingVisualizer />
+
+The building blocks:
+
+- **Concurrency limits**: cap the requests in progress. Concurrency maps more
+  directly to resource use than requests per second does.
+- **Bounded queues**: a short queue absorbs bursts; when it's full, reject.
+  An unbounded queue is just a slow way to fail.
+- **Deadlines**: pass the client's deadline with the request (gRPC does this
+  natively). If the remaining time is less than the expected wait, reject
+  now. Downstream services check the same deadline, so nobody works on
+  requests that are already lost.
+- **Adaptive limits**: instead of a fixed number, measure latency and adjust
+  the limit automatically, using TCP-style congestion control (Netflix's
+  `concurrency-limits` library does this).
+
+## Shed the right things
+
+Not all requests are equal. Shed in priority order:
+
+1. Speculative and background work: prefetches, analytics, recommendation
+   refreshes.
+2. Retries, before first attempts — a retry is more likely to be part of a
+   storm.
+3. Traffic from free tiers, or batch jobs, before interactive users.
+4. Critical paths — login, checkout, payment — last.
+
+This needs a priority on each request, set at the edge (by route, or from
+a header) and respected by every service in the call chain.
+
+## Make clients part of the solution
+
+- Return **503 or 429** with a `Retry-After` header, not a generic 500.
+- Clients retry with [exponential backoff and jitter](/blog/retries-backoff-and-jitter),
+  and cap the share of requests that may be retries (a **retry budget**,
+  say 10%).
+- A [circuit breaker](/blog/circuit-breaker-pattern) on the client stops
+  calling a dependency that's failing, which gives it room to recover.
+
+## Graceful degradation
+
+Shedding drops whole requests. **Degradation** keeps the request but does
+less work on it. A product page could:
+
+- show cached recommendations, or none, instead of calling the
+  recommendation service;
+- show "price updating" instead of failing the page when the pricing service
+  is slow;
+- serve stale data from cache past its TTL when the database is struggling
+  (`stale-while-revalidate` and `stale-if-error` in
+  [HTTP caching](/blog/http-caching-headers));
+- turn off expensive features — search suggestions, live counters — with a
+  feature flag.
+
+Decide this in advance. For each dependency on a page, ask: what does the
+page do if this call fails or times out? The answer should rarely be "the
+whole page fails". Give each optional call a short timeout and a fallback.
+
+## Test it
+
+Overload behaviour that has never been exercised doesn't work. Load-test
+past capacity and watch what happens: does throughput hold steady while
+excess traffic is rejected, or does it collapse? Do queues stay bounded? Do
+latencies for accepted requests stay normal? The goal is a flat line —
+served traffic stays at capacity however much more arrives.
+
+## In a design interview
+
+When asked "what happens under a spike?", "we autoscale" is half an answer.
+Autoscaling takes minutes; spikes take seconds. Add: bounded queues and
+concurrency limits on each service, priority-based shedding, client
+backoff, and a list of features that degrade instead of failing. Pair it
+with [health checks](/blog/health-checks-liveness-readiness) that report
+overload, so the load balancer sends traffic elsewhere.

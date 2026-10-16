@@ -84,8 +84,12 @@ steps array: `SequenceDiagram` (messages between actors — HTTP, DNS, TLS) and
 live in `web-visualizers.tsx`, `typescript-visualizers.tsx`,
 `beginner-js-visualizers.tsx`, `ai-visualizers.tsx`, `systems-visualizers.tsx`,
 `linear-algo-visualizers.tsx`, `graph-dp-visualizers.tsx`,
-`platform-visualizers.tsx`, `dp-window-visualizers.tsx` and
-`design-visualizers.tsx` (design patterns / LLD); a file that defines its own `StepPlayer`
+`platform-visualizers.tsx`, `dp-window-visualizers.tsx`,
+`design-visualizers.tsx` (design patterns / LLD), `case-study-visualizers.tsx`
+(system design case studies), `graph-algo-visualizers.tsx` (with a shared
+`GraphFrame` node-and-edge renderer), `geo-graph-visualizers.tsx`,
+`pattern-ts-visualizers.tsx`, `web-js-ai-visualizers.tsx` and
+`attention-visualizer.tsx`; a file that defines its own `StepPlayer`
 render function must be `'use client'`, since functions can't cross from a
 server component to a client one.
 

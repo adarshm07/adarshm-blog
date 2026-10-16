@@ -1,0 +1,135 @@
+---
+title: "The Model Context Protocol (MCP), Explained"
+publishedAt: "2026-10-16"
+summary: "MCP is an open protocol for connecting AI applications to tools and data. How hosts, clients and servers fit together, what the JSON-RPC messages look like, the three things a server can offer — tools, resources and prompts — how to write a small server, and the security questions to ask before installing one."
+tags: "AI Engineering"
+---
+
+[Tool calling](/blog/tool-calling-explained) lets a model ask your code to
+do something — search issues, query a database, read a file. But every
+application wires up its own tools in its own way. Connecting five AI apps
+to five services means twenty-five integrations.
+
+The **Model Context Protocol** (MCP), which Anthropic published as an open
+standard in November 2024, turns that into a plug: a service exposes its
+tools once, as an **MCP server**, and any MCP-compatible application can use
+them. Claude's apps, Claude Code, IDEs and many other agents act as MCP
+hosts.
+
+## The pieces
+
+- **Host**: the AI application the user interacts with — a chat app, an IDE,
+  a coding agent. It runs the model and decides what reaches it.
+- **Client**: a connector inside the host, one per server, that speaks the
+  protocol.
+- **Server**: a program that offers capabilities — a GitHub server, a
+  Postgres server, a file-system server.
+
+Messages are **JSON-RPC 2.0**. The two standard transports are **stdio**, for
+a local server the host launches as a child process, and **Streamable
+HTTP**, for remote servers.
+
+<McpVisualizer />
+
+## What a server can offer
+
+**Tools** — functions the model can call, each with a name, a description and
+a JSON Schema for its input. These become tool definitions for the model,
+exactly as in ordinary tool calling.
+
+**Resources** — data the application can read and put in context: files,
+database rows, documents, addressed by URI. The host or user decides when to
+include them, rather than the model calling them.
+
+**Prompts** — reusable templates the user can pick, like a slash command:
+"summarise this pull request" with the right instructions built in.
+
+Clients can offer features back to servers, too — for example, **sampling**,
+which lets a server ask the host's model for a completion without needing its
+own API key, and **elicitation**, which lets a server ask the user for input.
+
+## The messages
+
+The handshake, then a tool call, as JSON-RPC:
+
+```
+→ { "jsonrpc": "2.0", "id": 1, "method": "initialize",
+    "params": { "protocolVersion": "…", "capabilities": {}, "clientInfo": { "name": "my-host" } } }
+← { "jsonrpc": "2.0", "id": 1, "result": { "capabilities": { "tools": {} }, "serverInfo": { "name": "issues" } } }
+→ { "jsonrpc": "2.0", "method": "notifications/initialized" }
+
+→ { "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+    "params": { "name": "search_issues", "arguments": { "query": "login bug" } } }
+← { "jsonrpc": "2.0", "id": 2, "result": {
+      "content": [{ "type": "text", "text": "#412 Login fails on Safari (open)…" }],
+      "isError": false } }
+```
+
+A tool that fails returns a result with `isError: true` and an explanation,
+so the model can see what went wrong and try something else — the same
+pattern as returning errors from ordinary tool calls.
+
+## A small server
+
+With the official TypeScript SDK, a server with one tool is a few lines:
+
+```typescript
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { z } from 'zod'
+
+const server = new McpServer({ name: 'issues', version: '1.0.0' })
+
+server.tool(
+  'search_issues',
+  'Search open issues by keyword. Returns up to 10 matches with number, title and status.',
+  { query: z.string().describe('Words to search for in issue titles and bodies') },
+  async ({ query }) => {
+    const issues = await searchIssues(query)        // your code
+    return { content: [{ type: 'text', text: issues.map(format).join('\n') }] }
+  },
+)
+
+await server.connect(new StdioServerTransport())
+```
+
+The SDK API changes between versions (newer releases also offer a
+`registerTool` method), so check the current docs. Point a host at the
+command that starts this script, and the tool shows up for the model.
+
+As with any tool, the **description is the interface**. The model chooses
+tools from their names and descriptions alone, so say what the tool does,
+what it returns, and when to use it.
+
+## Security: a server is code you're trusting
+
+MCP makes it easy to give a model real capabilities, which makes the usual
+risks sharper:
+
+- **Install servers like dependencies.** A local stdio server runs with your
+  user's permissions. Use servers from sources you trust, and pin versions.
+- **Least privilege.** Give a server the narrowest credentials that work —
+  a read-only database user, a token scoped to one repository.
+- **Prompt injection through results.** Text a tool returns — an issue body,
+  a web page, an email — goes into the model's context, and it may contain
+  instructions. A model reading attacker-written text while it has access to
+  tools that send email or push code is the classic
+  [prompt injection](/blog/prompt-injection) setup. Keep risky tools behind
+  user confirmation, and be wary of combining untrusted content with powerful
+  tools in one session.
+- **Tool descriptions are prompts too.** A malicious server can put
+  instructions in its descriptions. Review what a server exposes before
+  enabling it.
+- **Remote servers** authenticate users with OAuth — the
+  [authorization code flow with PKCE](/blog/oauth-2-and-pkce) — so a
+  server acts with your permissions, not a shared key.
+
+## When to use MCP
+
+- **You're building a service** that AI apps should be able to use: ship an
+  MCP server, and every compatible host can use it.
+- **You're building an AI application** that should connect to many tools:
+  be an MCP host, and get the ecosystem of existing servers.
+- **You have one app and three internal functions**: plain tool definitions
+  in your own [agent loop](/blog/the-agent-loop) are simpler. MCP pays off
+  when integrations are shared across apps.

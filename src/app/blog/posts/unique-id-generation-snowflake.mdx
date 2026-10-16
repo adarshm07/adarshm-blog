@@ -1,0 +1,115 @@
+---
+title: "Generating Unique IDs at Scale: Auto-Increment, UUIDs and Snowflake"
+publishedAt: "2026-10-16"
+summary: "Why auto-increment stops working once you shard, what UUIDv4 costs you in index performance, and how Snowflake-style IDs and UUIDv7 pack a timestamp, a machine number and a counter into a sortable 64- or 128-bit ID without any coordination."
+tags: "System Design"
+---
+
+Every row needs an ID. With one database, `AUTO_INCREMENT` or a
+`SERIAL` column hands out 1, 2, 3… and you never think about it. Then you
+add a second database shard, or start generating IDs on clients before they
+reach any database, and you need a different answer.
+
+What a good ID scheme usually needs:
+
+- **Unique** across every machine, without asking a central service each
+  time.
+- **Compact**: 64 bits fits in a `BIGINT`; 128 bits doubles the index size.
+- **Roughly time-ordered**, so recent rows cluster together in indexes and
+  "newest first" is a sort by ID.
+- Sometimes **not guessable**, so `/orders/1001` doesn't reveal that
+  `/orders/1000` exists.
+
+## Auto-increment
+
+Simple, compact and ordered — but it needs a single counter. With several
+shards you can give each a different offset (shard 1 gets 1, 4, 7…; shard 2
+gets 2, 5, 8…), but adding a shard later is awkward. IDs also leak business
+volume: sign up twice a day apart and the difference tells you how many
+users joined.
+
+## UUIDv4
+
+128 random bits (122 of them random). Any machine can generate one with no
+coordination, and collisions are not a practical concern. The cost is
+locality: consecutive inserts get IDs scattered across the whole key space,
+so every insert lands on a random page of the B-tree index. Once the index
+is bigger than memory, inserts cause random disk reads, and index pages end
+up half full after splits. Large tables with UUIDv4 primary keys are
+noticeably slower to write.
+
+## Snowflake
+
+Twitter's Snowflake (2010) fits a unique, time-ordered ID into 64 bits by
+splitting them into fields:
+
+```
+| 1 bit | 41 bits: ms since epoch | 10 bits: machine | 12 bits: sequence |
+```
+
+<SnowflakeVisualizer />
+
+Each machine needs a unique machine number. It's assigned once at startup —
+from configuration, a coordination service such as ZooKeeper or etcd, or a
+lease in a database. After that, generation is a few arithmetic operations
+with no network calls.
+
+The trade-offs:
+
+- **Ordering is only approximate across machines.** IDs from two machines in
+  the same millisecond aren't ordered by real time, and machine clocks
+  differ by a few milliseconds. That's fine for "newest first" — it doesn't
+  give you a [causal order](/blog/lamport-and-vector-clocks).
+- **The clock must not go backwards.** NTP corrections can step a clock
+  back; the generator must detect it and refuse or wait.
+- **IDs reveal creation time.** Anyone can decode when a record was
+  created. Usually harmless; occasionally not.
+- **JavaScript numbers**: 64-bit IDs exceed `Number.MAX_SAFE_INTEGER`
+  (2⁵³ − 1), so they get rounded when parsed as JSON numbers. Send them as
+  strings in APIs. (Twitter's API famously added an `id_str` field for this
+  reason.)
+
+Variants change the split. Discord's IDs use a similar layout with their own epoch;
+Instagram generated IDs inside Postgres, with the shard number in place of
+the machine number.
+
+## UUIDv7: the standard version of the same idea
+
+RFC 9562 (2024) defines **UUIDv7**: a 48-bit Unix timestamp in milliseconds,
+followed by random bits (with optional counter bits for ordering within a
+millisecond). It's a normal UUID — any column, library or API that accepts
+UUIDs accepts it — but it's time-ordered, so it keeps B-tree inserts
+clustered at the end of the index like Snowflake does.
+
+If you want UUIDs, use v7 rather than v4 for new primary keys. If you need
+64 bits, use a Snowflake-style scheme.
+
+## Other options
+
+- **Ticket servers**: a dedicated database that only increments a counter,
+  with clients fetching blocks of 1,000 IDs at a time. Flickr ran two, one
+  for odd numbers and one for even.
+- **ULID**: 48-bit timestamp + 80 random bits, encoded as 26 sortable
+  characters. Similar to UUIDv7, and predates it.
+- **Database sequences with caching**: Postgres and others can hand each
+  session a cached range from a sequence, avoiding contention on a single
+  counter.
+
+## Choosing
+
+<Table
+  data={{
+    headers: ['scheme', 'size', 'sortable', 'coordination', 'guessable'],
+    rows: [
+      ['auto-increment', '64-bit', 'yes', 'one counter', 'yes'],
+      ['UUIDv4', '128-bit', 'no', 'none', 'no'],
+      ['UUIDv7 / ULID', '128-bit', 'by time', 'none', 'time only'],
+      ['Snowflake', '64-bit', 'by time', 'machine IDs once', 'time + machine'],
+    ],
+  }}
+/>
+
+In a system design interview, ID generation comes up in nearly every
+problem: [short links](/blog/design-a-url-shortener), chat message IDs,
+post IDs in a [feed](/blog/design-a-news-feed). Name the scheme, say why it
+fits (size, ordering, coordination), and mention the clock caveat.

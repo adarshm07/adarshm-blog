@@ -1,0 +1,107 @@
+---
+title: "How Attention Works, with Numbers You Can Check"
+publishedAt: "2026-10-16"
+summary: "Attention is how a transformer lets each token pull in information from the others. Queries, keys and values; dot products, scaling and softmax; the causal mask; multiple heads — worked through with small vectors so every number on screen can be checked by hand."
+tags: "AI Engineering"
+---
+
+In the sentence "the cat sat because it was tired", what does "it" mean? You
+know it's the cat. A language model has to work that out too, and the
+mechanism it uses is **attention**: each token looks at the tokens before it
+and decides how much of each to mix into its own representation.
+
+Attention is the core of the transformer architecture behind today's
+language models. Here it is with vectors small enough to check by hand.
+
+## Queries, keys and values
+
+After [tokenisation](/blog/tokenization-and-bpe), each token is an
+[embedding](/blog/what-embeddings-actually-are) — a vector. In every
+attention layer, three learned weight matrices turn each embedding into
+three new vectors:
+
+- a **query** — what this token is looking for,
+- a **key** — what this token offers to others looking,
+- a **value** — the information it hands over if chosen.
+
+A token's query is compared with every other token's key. Good matches get
+a high weight, and the token receives a weighted mix of their values.
+
+<AttentionVisualizer />
+
+## The formula
+
+That whole walk-through is one line, applied to all tokens at once as
+matrices:
+
+```
+Attention(Q, K, V) = softmax( Q · Kᵀ / √d  +  mask ) · V
+```
+
+- `Q · Kᵀ` computes every query–key dot product in one matrix multiply: an
+  n × n table of scores for n tokens.
+- `/ √d` keeps the scores in a reasonable range as the vector size d grows.
+  Without it, a few large scores dominate and the softmax becomes almost
+  one-hot, which also makes training unstable.
+- `mask` sets scores for future tokens to −∞, so they get zero weight after
+  the softmax. A model generating text can't look at words it hasn't written
+  yet.
+- `softmax` turns each row into weights that sum to 1.
+- `· V` mixes the value vectors by those weights.
+
+In code, for one sequence:
+
+```python
+import numpy as np
+
+def attention(Q, K, V):
+    n, d = Q.shape
+    scores = Q @ K.T / np.sqrt(d)                          # n × n
+    scores += np.triu(np.full((n, n), -np.inf), k=1)       # causal mask
+    weights = np.exp(scores - scores.max(axis=1, keepdims=True))
+    weights /= weights.sum(axis=1, keepdims=True)           # softmax per row
+    return weights @ V                                      # n × d
+```
+
+## Many heads, many layers
+
+One set of Q, K and V matrices learns one kind of relationship. Real models
+run many **heads** in parallel per layer — 32 is common — each with its own
+smaller projections. Studies of trained models have found heads that track
+the previous token, match brackets and quotes, or link pronouns to nouns.
+Most heads are harder to interpret. The heads' outputs are concatenated and
+projected back to the model's dimension.
+
+Then the result goes through a feed-forward network, and the whole block
+repeats — dozens of times. Early layers tend to capture local, syntactic
+patterns; later layers more abstract ones. Each layer's attention works on
+representations already enriched by the layers below.
+
+## Why it matters in practice
+
+**Cost grows with the square of the context.** The score table is n × n.
+Doubling the context length quadruples that work, which is why long contexts
+are expensive and why attention kernels like FlashAttention (which compute
+attention in tiles without materialising the full table) matter so much.
+
+**Generation reuses keys and values.** When generating token 1,001, the keys
+and values of the first 1,000 tokens haven't changed. Models keep them in a
+[KV cache](/blog/kv-cache-explained) instead of recomputing them — which is
+why long conversations use so much GPU memory.
+
+**Position has to be added.** Attention by itself treats the input as an
+unordered set: shuffle the tokens and each one gets the same weights. Models
+add position information — today usually rotary position embeddings (RoPE),
+which rotate queries and keys by an angle that depends on position, so dot
+products depend on relative distance.
+
+**Attention is not an explanation.** It's tempting to read the weights as
+"what the model was thinking about". They show where information flowed in
+one head of one layer. Values can carry little information, and other heads
+and layers do their own mixing. Use attention maps as hints, not proof.
+
+**Context is a budget.** Everything in the prompt competes for attention.
+Relevant material placed clearly and near the question tends to work better
+than the same material buried in a long context — one reason
+[retrieval](/blog/rag-retrieval-explained) and careful
+[context management](/blog/context-windows-and-caching) improve answers.

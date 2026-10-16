@@ -1,0 +1,116 @@
+---
+title: "Covariance and Contravariance in TypeScript"
+publishedAt: "2026-10-16"
+summary: "If a Dog is an Animal, is a Dog[] an Animal[]? Is a function that handles Dogs a function that handles Animals? Variance answers these questions. What covariant, contravariant and invariant mean, where TypeScript deliberately allows unsafe code, and the in/out annotations that make it explicit."
+tags: "TypeScript"
+---
+
+TypeScript knows that a `Dog` can go wherever an `Animal` is expected,
+because a `Dog` has everything an `Animal` has. The interesting question is
+what happens to types **built from** them:
+
+- Is `Dog[]` assignable to `Animal[]`?
+- Is `Promise<Dog>` a `Promise<Animal>`?
+- Is `(d: Dog) => void` a `(a: Animal) => void`?
+
+The rules for this are called **variance**, and they decide which generic
+assignments compile.
+
+<VarianceVisualizer />
+
+## The three kinds
+
+Write `Dog ≤ Animal` for "Dog is a subtype of Animal". For a generic type
+`F<T>`:
+
+- **Covariant**: `F<Dog> ≤ F<Animal>`. The relationship goes the same way.
+  Things you only **read** from are covariant: `Promise<T>`,
+  `ReadonlyArray<T>`, a function's return type. If you get a Dog out, you
+  certainly got an Animal.
+- **Contravariant**: `F<Animal> ≤ F<Dog>`. The relationship flips. Things you
+  only **write** to are contravariant: function parameters, callbacks,
+  event handlers. Something that can handle any Animal can handle a Dog.
+- **Invariant**: neither direction is allowed. Things you both read and
+  write should be invariant — a mutable box of T can't safely be treated as
+  a box of a wider *or* a narrower type.
+
+A useful way to remember it: **producers are covariant, consumers are
+contravariant.**
+
+## TypeScript works it out from the structure
+
+Because TypeScript is [structural](/blog/structural-typing-in-typescript), it
+usually doesn't need to be told a type's variance. It compares the members:
+
+```typescript
+interface Producer<T> { get: () => T }               // T only as output: covariant
+interface Consumer<T> { accept: (value: T) => void } // T only as input: contravariant
+interface Box<T> { get: () => T; set: (value: T) => void } // both: invariant
+```
+
+(These use property syntax on purpose — methods behave differently, as the
+next section explains.)
+
+Function types follow the rules precisely under `strictFunctionTypes` (on
+with `strict`): return types are covariant, parameters contravariant.
+
+## Where TypeScript is deliberately unsound
+
+**Arrays are covariant.** `Dog[]` is assignable to `Animal[]` even though
+arrays are mutable, and that lets you push an `Animal` into what is really
+a `Dog[]`. A strictly sound language would make mutable arrays invariant.
+TypeScript chose convenience — so much existing JavaScript passes arrays of
+subtypes around — and accepts this hole. Use `readonly Dog[]` in parameters
+you only read: then the covariance is completely safe.
+
+**Method parameters are bivariant.** `strictFunctionTypes` applies to
+function-typed properties, not to methods declared with method syntax:
+
+```typescript
+interface Handler<T> { handle(value: T): void }       // method: bivariant
+interface StrictHandler<T> { handle: (value: T) => void } // property: contravariant
+
+const h: Handler<Animal> = { handle(d: Dog) { d.bark() } }       // compiles
+const s: StrictHandler<Animal> = { handle: (d: Dog) => d.bark() } // error
+```
+
+The exception exists because many built-in types, including `Array<T>`
+itself, declare methods like `push(item: T)`, and making those strict would
+make every array invariant. If you want the strict check in your own types,
+declare callbacks as properties with arrow-function types.
+
+## Variance annotations
+
+TypeScript 4.7 added explicit annotations on type parameters:
+
+```typescript
+interface Producer<out T> { get: () => T }
+interface Consumer<in T> { accept: (value: T) => void }
+interface Box<in out T> { get: () => T; set: (value: T) => void }
+```
+
+They do two things. They **document intent** — and the compiler checks it:
+mark `T` as `out` and then take it as a parameter of a function-typed
+property, and you get error TS2636. (Method parameters are still checked
+bivariantly, so a method `set(value: T)` slips past an `out` annotation.) They
+can also **speed up checking** of deeply recursive generic types, because
+the compiler can compare `Box<Dog>` with `Box<Animal>` by the annotation
+instead of structurally. Use them in library types where variance is part
+of the contract. Most application code never needs them.
+
+## Where this bites in practice
+
+- **Event handlers and callbacks**: a handler typed for a broader event
+  works for a narrower one, not the reverse. That's why a `(e: Event) =>
+  void` listener can be passed where a `(e: MouseEvent) => void` is
+  expected.
+- **State setters**: a `Setter<Animal>` stored as a `Setter<Dog>` is fine; the
+  other way round would let code set a plain Animal where Dogs are expected.
+- **Generic containers in libraries**: if you design `Store<T>` with both
+  `get` and `set`, it should be invariant. Annotate `in out T` so callers
+  can't widen it by accident.
+
+The short version: read-only positions go with the subtype relationship,
+write-only positions go against it, and read-write positions shouldn't move
+at all — except where TypeScript has decided, knowingly, to let arrays and
+methods slide.

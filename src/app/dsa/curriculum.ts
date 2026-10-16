@@ -119,9 +119,19 @@ export const curriculum: CurriculumPhase[] = [
         note: 'Partition once, keep only the side with the answer — the kth smallest element in expected O(n).',
       },
       {
+        slug: 'k-way-merge-with-a-heap',
+        difficulty: 'Intermediate',
+        note: 'A heap holding one candidate per sorted list — the pattern behind external sorting and merging k lists in O(N log k).',
+      },
+      {
         slug: 'graph-traversal-bfs-dfs',
         difficulty: 'Intermediate',
         note: 'BFS and DFS are the entry point to every graph problem: reachability, shortest paths, cycles.',
+      },
+      {
+        slug: 'bipartite-graphs-two-coloring',
+        difficulty: 'Intermediate',
+        note: 'BFS with two alternating colours: split a graph into two sides, or find the odd cycle that makes it impossible.',
       },
       {
         slug: 'longest-increasing-subsequence',
@@ -137,6 +147,16 @@ export const curriculum: CurriculumPhase[] = [
         slug: 'zero-one-knapsack',
         difficulty: 'Advanced',
         note: 'The classic "choose a subset under a budget" DP — a two-dimensional table, then the one-array version that iterates backwards.',
+      },
+      {
+        slug: 'longest-common-subsequence-and-diff',
+        difficulty: 'Advanced',
+        note: 'A two-string DP table, the walk back that recovers the answer, and how the same idea produces the diffs in code review.',
+      },
+      {
+        slug: 'bitmask-dp-traveling-salesman',
+        difficulty: 'Advanced',
+        note: 'When the state must remember a set: encode it as bits, and n ≤ 20 problems become 2ⁿ·n states instead of n! orders.',
       },
     ],
   },
@@ -184,6 +204,16 @@ export const curriculum: CurriculumPhase[] = [
         slug: 'a-star-pathfinding',
         difficulty: 'Advanced',
         note: 'Dijkstra plus a heuristic: the same loop, guided toward the goal, and the conditions that keep it optimal.',
+      },
+      {
+        slug: 'strongly-connected-components',
+        difficulty: 'Advanced',
+        note: 'Two depth-first passes find every group of nodes that can all reach each other — and turn any directed graph into a DAG.',
+      },
+      {
+        slug: 'lowest-common-ancestor-binary-lifting',
+        difficulty: 'Advanced',
+        note: 'Precompute ancestors at powers of two, and any tree query — LCA, k-th ancestor, distance — takes O(log n) jumps.',
       },
     ],
   },

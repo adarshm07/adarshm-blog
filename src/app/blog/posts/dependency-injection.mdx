@@ -1,0 +1,145 @@
+---
+title: "Dependency Injection Without the Framework"
+publishedAt: "2026-10-16"
+summary: "Dependency injection sounds like a framework feature, but it's one idea: a class receives its collaborators instead of creating them. Why that makes code testable and replaceable, the composition root where real implementations are chosen, what DI containers add, and the mistakes that turn it into indirection for its own sake."
+tags: "LLD"
+---
+
+Here's a sign-up function that's hard to test:
+
+```typescript
+class SignupService {
+  async signUp(email: string) {
+    const users = new PostgresUserRepository(createPool(process.env.DATABASE_URL!))
+    const mailer = new SesMailer(new SESClient({ region: 'ap-south-1' }))
+    const user = await users.create({ email, createdAt: new Date() })
+    await mailer.send(email, 'Welcome!')
+    return user
+  }
+}
+```
+
+To run it in a test, you need a database and an email account, and every run
+sends real email. `createdAt` changes each time, so assertions can't check
+it. And moving from SES to another provider means editing this class.
+
+The fix has a long name and a short definition:
+
+> **Dependency injection**: a class receives the things it depends on,
+> instead of creating them itself.
+
+<DependencyInjectionVisualizer />
+
+## Constructor injection
+
+The standard form passes dependencies to the constructor, typed as
+interfaces:
+
+```typescript
+interface UserRepository {
+  create(data: { email: string; createdAt: Date }): Promise<User>
+}
+interface Mailer {
+  send(to: string, subject: string): Promise<void>
+}
+interface Clock {
+  now(): Date
+}
+
+class SignupService {
+  constructor(
+    private users: UserRepository,
+    private mailer: Mailer,
+    private clock: Clock,
+  ) {}
+
+  async signUp(email: string) {
+    const user = await this.users.create({ email, createdAt: this.clock.now() })
+    await this.mailer.send(email, 'Welcome!')
+    return user
+  }
+}
+```
+
+Three things changed:
+
+- **Dependencies are visible.** The constructor lists everything the class
+  needs. Nothing is hidden in a method body or pulled from a global.
+- **The class depends on interfaces it defines the shape of** — the D in
+  [SOLID](/blog/solid-principles). `SignupService` doesn't know Postgres or
+  SES exist.
+- **Time is a dependency too.** `new Date()` and `Math.random()` are hidden
+  inputs. Injecting a `Clock` makes the code deterministic in tests.
+
+## The composition root
+
+Real implementations still have to be chosen somewhere. That happens in one
+place, at startup — the **composition root**:
+
+```typescript
+// main.ts
+const pool = createPool(process.env.DATABASE_URL!)
+const signup = new SignupService(
+  new PostgresUserRepository(pool),
+  new SesMailer(new SESClient({ region: 'ap-south-1' })),
+  { now: () => new Date() },
+)
+startServer({ signup })
+```
+
+And in tests:
+
+```typescript
+test('sends a welcome email', async () => {
+  const sent: string[] = []
+  const signup = new SignupService(
+    new InMemoryUsers(),
+    { send: async (to) => { sent.push(to) } },
+    { now: () => new Date('2026-10-16T09:00:00Z') },
+  )
+  const user = await signup.signUp('asha@example.com')
+  expect(sent).toEqual(['asha@example.com'])
+  expect(user.createdAt.toISOString()).toBe('2026-10-16T09:00:00.000Z')
+})
+```
+
+Because the interfaces are small, a fake is a one-line object literal — no
+mocking library needed.
+
+## DI containers
+
+In a large application, wiring hundreds of classes by hand in `main.ts`
+gets long. A **DI container** automates it: you register implementations,
+and the container builds each object's dependencies, recursively. NestJS,
+Angular, InversifyJS and tsyringe do this in TypeScript, usually with
+decorators. Spring and .NET do it in their ecosystems.
+
+Containers also manage **lifetimes**: one instance for the whole app
+(singleton), one per request (scoped — useful for a database transaction or
+the current user), or a new one each time (transient).
+
+They're a convenience, not the idea itself. Manual wiring keeps the object
+graph visible and type-checked, and stays manageable longer than people
+expect. Reach for a container when the wiring itself becomes the problem.
+
+## Mistakes that make DI worse than nothing
+
+- **Interfaces for everything.** A `StringFormatter` interface with one
+  implementation that will never change adds a file and a jump-to-definition
+  dead end. Inject things that have side effects, cross a process boundary,
+  or vary — databases, HTTP clients, clocks, randomness, configuration.
+- **The service locator.** Passing a container into classes so they can
+  call `container.get('mailer')` hides dependencies again — the constructor
+  no longer says what the class needs.
+- **Constructor bloat.** A constructor with nine dependencies isn't a DI
+  problem. It's a class with too many responsibilities. Split it.
+- **Injecting values that should be arguments.** If something changes on
+  every call (the email address), it's a parameter, not a dependency.
+
+## In an LLD interview
+
+You rarely need to say "dependency injection" out loud. Showing it is
+enough: constructors that take interfaces, a `main` that wires concrete
+classes, and an aside like "in tests I'd pass a fake payment gateway". That
+answers the testability and extensibility parts of the rubric — try it in
+the [LLD practice tool](/tools/lld).

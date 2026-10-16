@@ -1,0 +1,130 @@
+---
+title: "Function Overloads in TypeScript"
+publishedAt: "2026-10-16"
+summary: "One function, several call signatures, so the return type follows the argument type. How TypeScript resolves overloads top to bottom, why the implementation signature is invisible to callers, the union-argument trap, and when a generic or a conditional type is the better tool."
+tags: "TypeScript"
+---
+
+Some functions return different things depending on what you pass in:
+
+```typescript
+parse('2026-10-16')       // one Date
+parse(['2026-10-16', …])  // an array of Dates
+```
+
+With a single union signature, every caller gets the union back:
+
+```typescript
+function parse(input: string | number | string[]): Date | Date[]
+
+const d = parse('2026-10-16')
+d.getFullYear()   // error: Property 'getFullYear' does not exist on type 'Date[]'
+```
+
+You know it's a `Date`; the compiler doesn't. **Overloads** let you list
+each pairing of argument and return type separately.
+
+## Writing overloads
+
+List the signatures callers may use, then write one implementation whose
+signature is compatible with all of them:
+
+```typescript
+function parse(input: string): Date
+function parse(input: number): Date
+function parse(input: string[]): Date[]
+function parse(input: string | number | string[]): Date | Date[] {
+  if (Array.isArray(input)) return input.map((s) => new Date(s))
+  return new Date(input)
+}
+```
+
+The first three lines are the **overload signatures**: they have no body,
+and they're what callers see. The last is the **implementation signature**,
+which callers can't use directly — it's there to type-check the body.
+
+<OverloadsVisualizer />
+
+## The rules
+
+**Order matters.** TypeScript picks the first overload that fits, top to
+bottom. Put specific signatures before general ones. If `(input: unknown):
+unknown` came first, it would match everything and the others would never
+be used.
+
+**The implementation must cover every overload.** Each overload's
+parameters must be assignable to the implementation's, and the
+implementation's return type must be compatible with each overload's. The
+compiler checks this, but it can't check that the body actually returns a
+`Date[]` for arrays — that's on you. Overloads are a promise you make to
+callers.
+
+**Unions don't spread across overloads.** As the last step above shows, a
+`string | number` argument matches neither the `string` overload nor the
+`number` one. If callers will pass unions, add an overload for the union
+itself:
+
+```typescript
+function parse(input: string | number): Date
+```
+
+## Often you don't need overloads
+
+**When only the return type varies with an input type, a generic may do:**
+
+```typescript
+function first<T>(items: T[]): T | undefined {
+  return items[0]
+}
+```
+
+**When the mapping is a rule, a conditional type expresses it once:**
+
+```typescript
+type Parsed<T> = T extends string[] ? Date[] : Date
+
+function parse<T extends string | number | string[]>(input: T): Parsed<T> {
+  return (Array.isArray(input) ? input.map((s) => new Date(s)) : new Date(input)) as Parsed<T>
+}
+```
+
+This also handles unions: `Parsed<string | string[]>` distributes to
+`Date | Date[]`. The cost is a cast in the body, because TypeScript can't
+narrow a generic `T` inside the implementation. See
+[conditional types](/blog/conditional-types-and-infer).
+
+**When options change behaviour, separate functions are clearer.**
+`parseOne` and `parseMany` are easier to read, document and search for than
+one function with three personalities.
+
+Overloads are the right tool when the signatures are genuinely different
+shapes — different numbers of arguments, or unrelated types — and the set
+is small and fixed.
+
+## Overloads you already use
+
+The DOM's type definitions use overloads heavily:
+
+```typescript
+document.createElement('canvas')    // HTMLCanvasElement
+document.createElement('input')     // HTMLInputElement
+```
+
+That's an overload over a mapped type: `createElement<K extends keyof
+HTMLElementTagNameMap>(tagName: K): HTMLElementTagNameMap[K]`, plus a fallback
+returning `HTMLElement` for any other string. `addEventListener` works the
+same way, so the event in a `'keydown'` handler is typed as a
+`KeyboardEvent`.
+
+In classes and interfaces, overloads are written as several method
+signatures:
+
+```typescript
+interface Cache {
+  get(key: string): string | undefined
+  get(key: string, fallback: string): string
+}
+```
+
+Here the second overload promises that passing a fallback means you always
+get a string back.

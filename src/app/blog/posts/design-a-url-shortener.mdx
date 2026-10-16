@@ -1,0 +1,141 @@
+---
+title: "System Design Case Study: A URL Shortener"
+publishedAt: "2026-10-16"
+summary: "The classic first system design question, worked end to end: requirements, the numbers, key generation, the data model, the redirect path, caching, analytics, and what breaks first. With the trade-offs an interviewer will push on."
+tags: "System Design"
+---
+
+A URL shortener turns `https://example.com/blog/2026/10/a-very-long-path?ref=newsletter`
+into `sho.rt/4uSlPp`, and redirects anyone who visits the short link. It's
+the most common first system design question because the product is tiny
+but the design covers most of the basics: read-heavy traffic, unique key
+generation, caching, and keeping analytics off the hot path.
+
+## 1. Requirements
+
+**Functional**
+
+- Create a short link for a long URL; optionally a custom alias.
+- Visiting the short link redirects to the original.
+- Links can expire; owners can see click counts.
+
+**Non-functional**
+
+- Redirects must be fast (tens of milliseconds) and highly available — a
+  broken short link is a broken link everywhere it was shared.
+- Keys must be unique and hard to guess in bulk.
+- Click counts can be a few seconds stale.
+
+**Out of scope**: link previews, abuse detection beyond rate limits, user
+accounts beyond an owner ID. Saying what you're *not* building is part of
+the answer.
+
+## 2. The numbers
+
+Assume 100 million new links a month, 100 reads per write, 500-byte records,
+five years of retention. The
+[back-of-the-envelope post](/blog/back-of-the-envelope-estimation) works
+these through in detail:
+
+<Table
+  data={{
+    headers: ['quantity', 'estimate', 'what it means'],
+    rows: [
+      ['writes', '~40/s', 'one database handles it easily'],
+      ['reads', '~4,000/s avg, ~12,000/s peak', 'cache in front, several app servers'],
+      ['storage', '~3 TB over 5 years', 'fits one primary; replicate for availability'],
+      ['hot set', '~35 GB', 'fits in memory on a cache node'],
+    ],
+  }}
+/>
+
+## 3. API
+
+```
+POST /links            { url, alias?, expiresAt? }  → 201 { key, shortUrl }
+GET  /{key}            → 302 Location: <long url>   (or 404 / 410 if expired)
+GET  /links/{key}/stats → { clicks, byDay: [...] }
+```
+
+## 4. Generating keys
+
+This is where most of the interesting choices are.
+
+**Hash the URL** (e.g. the first 7 characters of a base-62 SHA-256). The same
+URL always gets the same key, which is nice. But different URLs can collide,
+so every insert needs a check-and-retry, and two users shortening the same
+URL share a link — and its stats.
+
+**Random keys.** Generate 7 random base-62 characters (3.5 trillion
+possibilities) and insert with a uniqueness constraint; on the rare
+collision, try again. Simple and unguessable, and it costs nothing extra
+until the table is very full.
+
+**A counter, encoded in base 62.** Unique by construction, and no collision
+checks. A single global counter would be a bottleneck, so each app server
+**leases a block** — say a million IDs — from a coordination service, then
+hands them out locally. The downside: sequential keys are guessable, so
+anyone can enumerate links. Shuffle the bits with a reversible permutation
+before encoding if that matters.
+
+Any of these works. Say which you picked and why. Counter blocks are the most
+common interview answer because they scale without collisions; random keys
+are the simplest to operate.
+
+## 5. Data model
+
+One table, keyed by the short key:
+
+```sql
+CREATE TABLE links (
+  key        VARCHAR(10) PRIMARY KEY,
+  long_url   TEXT NOT NULL,
+  owner_id   BIGINT,
+  created_at TIMESTAMPTZ NOT NULL,
+  expires_at TIMESTAMPTZ
+);
+```
+
+The only hot query is a lookup by primary key. Nothing joins. A relational
+database is fine at this scale; a key-value store (DynamoDB, Cassandra) is
+also a natural fit, and makes sharding by key trivial if it's ever needed.
+
+## 6. The two request paths
+
+<UrlShortenerVisualizer />
+
+**301 or 302?** A 301 (permanent) lets browsers cache the redirect, so
+repeat visits never reach you — fast, but those clicks go uncounted. A 302
+(temporary) brings every click back. Most shorteners choose 302 because
+analytics are part of the product.
+
+## 7. Scaling the read path
+
+- **Cache**: a read-through cache keyed by short key, with a TTL. Popular
+  links are a tiny fraction of all links, so the hit rate is very high. See
+  [caching strategies](/blog/caching-strategies-explained).
+- **Replicas**: cache misses go to read replicas, not the primary.
+- **CDN or edge**: for very hot links, the redirect can be served from the
+  edge with a short cache lifetime.
+- **Negative caching**: cache "not found" too, briefly, so someone hammering
+  random keys can't push every miss through to the database.
+
+## 8. What breaks first, and what you'd do
+
+- **A single viral link** makes one cache key very hot. Replicate hot keys,
+  or keep a small in-process cache on each app server.
+- **Abuse**: people creating millions of links, or links to malware. Add
+  per-owner [rate limits](/blog/rate-limiting-algorithms) on creation, and
+  check URLs against a blocklist asynchronously.
+- **Analytics volume**: 4,000 clicks a second written one row at a time
+  would dominate the database. Publish click events to a log and aggregate
+  them in batches — counts a few seconds behind are fine.
+- **Expiry**: don't delete in the request path. Return 410 for expired keys
+  and clean up with a background job.
+
+## Practise it
+
+Try this exact problem in the
+[system design practice tool](/tools/system-design): write your notes, draw
+the architecture with the diagram editor, and copy both into Claude for a
+review against the same rubric used here.

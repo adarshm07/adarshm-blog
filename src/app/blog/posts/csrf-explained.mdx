@@ -1,0 +1,115 @@
+---
+title: "CSRF: How Another Site Can Act as You"
+publishedAt: "2026-10-16"
+summary: "Cross-site request forgery makes your browser send an authenticated request you never intended — because cookies go along automatically. How the attack works, why it doesn't need to read the response, and the defences that stop it: SameSite cookies, CSRF tokens, Origin checks, and safe GET requests."
+tags: "Web"
+---
+
+Cookies have a useful habit: the browser attaches them to every request to
+their site, no matter which page started the request. That's how you stay
+logged in. It's also the whole basis of **cross-site request forgery**
+(CSRF): another site makes your browser send a request to a site where
+you're logged in, and your cookies make it look like you.
+
+<CsrfVisualizer />
+
+## What makes the attack possible
+
+Three conditions, all common:
+
+1. **The site authenticates with cookies** (or anything else the browser
+   attaches automatically, like HTTP Basic auth).
+2. **The action can be triggered by a request the attacker can construct**
+   — a form post or a link with predictable parameters.
+3. **There's no check that the request came from the site's own pages.**
+
+Notice what the attacker *doesn't* need: they never read your cookie, and
+they never see the response. Same-origin rules stop `evil.example` from
+reading bank.example's responses, but they don't stop it from **sending**
+requests. A form submission, an image tag, or a link is enough to cause a
+side effect.
+
+Classic targets: changing the account email (then resetting the password),
+transferring money, adding an admin, changing a shipping address.
+
+## Defence 1: SameSite cookies
+
+The `SameSite` attribute tells the browser when to send a cookie on
+requests that come from another site:
+
+- **`Strict`**: never on cross-site requests. Even following a link to your
+  bank from an email arrives logged-out.
+- **`Lax`**: sent on top-level navigations using safe methods (clicking a
+  link → GET), but **not** on cross-site POSTs, iframes, images or `fetch`.
+  This blocks the classic form-post attack.
+- **`None`**: always sent (requires `Secure`). Needed for genuine
+  cross-site use, like embedded widgets.
+
+Chrome and Edge treat cookies without a `SameSite` attribute as `Lax`, but
+not every browser does. **Set it explicitly** on session cookies:
+
+```
+Set-Cookie: session=abc; HttpOnly; Secure; SameSite=Lax; Path=/
+```
+
+Caveat: "site" means the registrable domain, so `evil.example.com` and
+`bank.example.com` count as the **same site**. A vulnerable subdomain can
+still forge requests. Hence defence in depth.
+
+## Defence 2: CSRF tokens
+
+The server puts an unpredictable token in each form (or exposes it to its
+own JavaScript) and requires it back on every state-changing request:
+
+```html
+<form method="POST" action="/transfer">
+  <input type="hidden" name="csrf_token" value="b3f1c9…" />
+  …
+</form>
+```
+
+The attacker's page can make the browser *send* a request, but it can't
+*read* the bank's pages, so it can't learn the token. Requests without the
+right token are rejected.
+
+Variants:
+
+- **Synchronizer token**: stored in the server-side session and compared.
+- **Double-submit cookie**: the token is in a cookie *and* in the request
+  body or a header; the server checks they match. Stateless, but sign the
+  token (or bind it to the session), or a cookie set from a sibling
+  subdomain can defeat it.
+- **Custom header for APIs**: require a header like `X-CSRF-Token` on
+  `fetch` requests. Cross-origin pages can't set custom headers without
+  passing a [CORS](/blog/cors-explained) preflight, which your server
+  rejects.
+
+Most frameworks have this built in — Django, Rails, Laravel, Spring
+Security. Turn it on rather than writing your own.
+
+## Defence 3: check where the request came from
+
+Browsers send headers the attacker can't forge from a page:
+
+- **`Origin`** on POST and other non-GET requests: reject if it isn't your
+  own origin.
+- **`Sec-Fetch-Site`** (all modern browsers): `same-origin`, `same-site`,
+  `cross-site` or `none`. Rejecting `cross-site` on state-changing requests
+  is a simple, strong check.
+
+## Defence 4: GET must not change anything
+
+`SameSite=Lax` still sends cookies on top-level GET navigations, and a GET
+can be triggered by an `<img>` tag or a link. If `GET /account/delete` does
+something, no cookie setting will save you. Keep GET (and HEAD) free of side
+effects, as [HTTP semantics](/blog/http-requests-and-responses) intend.
+
+## Do token-based APIs need this?
+
+If the browser sends credentials **automatically**, CSRF applies. An API
+authenticated by an `Authorization: Bearer` header that your JavaScript adds
+by hand isn't vulnerable: the attacker's page can't make the browser add it.
+But that token then lives where scripts can read it, which trades CSRF risk
+for [XSS](/blog/xss-and-content-security-policy) risk. Cookie-based sessions
+with `SameSite`, a CSRF token and an Origin check are a well-understood
+combination.

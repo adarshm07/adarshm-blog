@@ -1,0 +1,112 @@
+---
+title: "Write-Ahead Logging: How Databases Survive a Crash"
+publishedAt: "2026-10-16"
+summary: "A committed transaction must survive a power cut, but writing every changed page to disk on commit would be far too slow. The write-ahead log solves both: append a description of the change, flush it, and replay it after a crash. How it works, checkpoints, fsync, and how the same log powers replication."
+tags: "System Design"
+---
+
+When a database says `COMMIT OK`, it promises the change survives anything —
+a process crash, a kernel panic, a power cut. That's the D in ACID. The
+obvious way to keep it is to write every modified page to its place in the
+data file before replying. It's also far too slow: one transaction can touch
+pages scattered across several files and indexes, which means many random
+writes, each waiting for the disk.
+
+Almost every database solves this the same way, with a **write-ahead log**
+(WAL).
+
+## The rule
+
+> Before a change to a data page reaches disk, the log record describing
+> that change must already be on disk.
+
+And at commit:
+
+> A transaction is committed when its commit record is on disk in the log.
+
+The log is append-only, so writing to it is **sequential**. One `fsync` makes
+everything appended so far durable. The data pages themselves can be written
+later, lazily, in large batches.
+
+<WalVisualizer />
+
+## What's in a log record
+
+Each record has a **log sequence number** (LSN) — its position in the log —
+and enough information to redo the change, and in many designs to undo it
+too:
+
+```
+LSN 881  txn 42  page 12  offset 340  before: 100  after: 70
+LSN 882  txn 42  COMMIT
+```
+
+Every data page also stores the LSN of the last change applied to it. During
+recovery, that lets the database skip records whose effects are already on
+the page, so replaying is safe to repeat — redo is idempotent.
+
+## Recovery
+
+After a crash, the database:
+
+1. Finds the last **checkpoint** — a point where every dirty page up to some
+   LSN had been flushed.
+2. **Redoes** every log record after it, bringing pages up to date — even for
+   transactions that never committed.
+3. **Undoes** the changes of transactions with no commit record.
+
+That three-phase shape (analysis, redo, undo) is the ARIES algorithm from
+IBM research in the early 1990s, and most relational databases follow some
+version of it. Postgres takes a simpler route for undo: it keeps old row
+versions in the table (MVCC), so an uncommitted transaction's changes are
+simply never visible, and redo is enough.
+
+## Checkpoints
+
+Without checkpoints, the log grows forever and recovery replays all of it. A
+checkpoint flushes dirty pages and records "everything up to LSN X is in the
+data files". Log segments older than that can be recycled or archived.
+
+Checkpoints are a trade-off. Frequent checkpoints mean faster recovery but
+more write I/O, because a hot page gets flushed again and again. Infrequent
+ones batch better but leave more log to replay. Postgres' `checkpoint_timeout`
+and `max_wal_size` tune exactly this.
+
+## fsync is the real cost
+
+The log append itself is cheap. The `fsync` that forces it through the
+operating system's cache to stable storage is not — milliseconds on a
+spinning disk, tens to hundreds of microseconds on a good SSD. Databases
+reduce the cost with:
+
+- **Group commit**: many transactions committing at once share one fsync.
+  Throughput rises sharply under concurrency.
+- **Relaxed durability, when acceptable**: Postgres' `synchronous_commit =
+  off` acknowledges before the flush, risking the last few hundred
+  milliseconds of commits on a crash — but never corruption.
+
+One more trap: storage that lies. A disk or virtual disk that acknowledges
+writes still sitting in a volatile cache breaks the whole guarantee.
+Production systems need storage that honours flushes, or has a battery- or
+capacitor-backed cache.
+
+## The log is the database
+
+Once you have an ordered log of every change, several features come almost
+for free:
+
+- **Replication**: ship the log to replicas and have them replay it. Postgres
+  streaming replication and MySQL's binlog work this way. Replication lag is
+  how far behind that replay is — see
+  [read-your-writes](/blog/read-your-writes-and-replication-lag).
+- **Point-in-time recovery**: restore a base backup, then replay archived log
+  up to just before someone ran the bad `DELETE`.
+- **Change data capture**: tools like Debezium read the log and publish every
+  change as an event — the basis of the
+  [outbox pattern](/blog/dual-writes-and-the-outbox-pattern).
+
+The same idea appears outside databases. [LSM-tree](/blog/lsm-trees-and-write-optimized-storage)
+stores keep a WAL in front of their in-memory table. File systems journal
+metadata changes. And Kafka is, at heart, a replicated log that other
+systems read from. "Append the intent, then apply it" is one of the most
+reused ideas in systems.
