@@ -82,7 +82,9 @@ export default async function Blog({
             url: `${baseUrl}/blog/${post.slug}`,
             author: {
               '@type': 'Person',
-              name: 'Adarsh M.',
+              '@id': `${baseUrl}/#person`,
+              name: 'Adarsh M',
+              url: baseUrl,
             },
           }),
         }}

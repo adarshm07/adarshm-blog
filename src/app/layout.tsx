@@ -7,15 +7,21 @@ import { SearchPalette } from './components/search-palette'
 import Footer from './components/footer'
 import { baseUrl } from './sitemap'
 
+const SITE_TITLE = 'Adarsh M — Software Engineer & Blog'
+const SITE_DESCRIPTION =
+  'Adarsh M — full-stack software engineer writing about JavaScript, system design, DSA and AI engineering.'
+
 export const metadata: Metadata = {
   metadataBase: new URL(baseUrl),
   title: {
-    default: 'adarshm.com',
-    template: '%s | adarshm.com',
+    default: SITE_TITLE,
+    template: '%s | Adarsh M',
   },
-  description: 'Adarsh M. — JavaScript developer writing about the web.',
+  description: SITE_DESCRIPTION,
   keywords: [
     'Adarsh M',
+    'Adarsh M software engineer',
+    'adarshm07',
     'software engineer',
     'JavaScript',
     'web development',
@@ -24,33 +30,33 @@ export const metadata: Metadata = {
     'system design',
     'blog',
   ],
-  authors: [{ name: 'Adarsh M.', url: baseUrl }],
-  creator: 'Adarsh M.',
+  authors: [{ name: 'Adarsh M', url: baseUrl }],
+  creator: 'Adarsh M',
   alternates: {
     canonical: './',
   },
   openGraph: {
-    title: 'adarshm.com',
-    description: 'Adarsh M. — JavaScript developer writing about the web.',
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
     url: baseUrl,
-    siteName: 'adarshm.com',
+    siteName: 'Adarsh M',
     locale: 'en_US',
     type: 'website',
     images: [
       {
-        url: `/og?title=${encodeURIComponent('adarshm.com')}`,
+        url: `/og?title=${encodeURIComponent('Adarsh M')}`,
         width: 1200,
         height: 630,
-        alt: 'adarshm.com',
+        alt: SITE_TITLE,
       },
     ],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'adarshm.com',
-    description: 'Adarsh M. — JavaScript developer writing about the web.',
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
     creator: '@adarshm07',
-    images: [`/og?title=${encodeURIComponent('adarshm.com')}`],
+    images: [`/og?title=${encodeURIComponent('Adarsh M')}`],
   },
   robots: {
     index: true,

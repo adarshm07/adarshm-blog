@@ -1,4 +1,3 @@
-import { Suspense } from 'react'
 import Link from 'next/link'
 import { BlogPosts } from '@/app/components/posts'
 import { Profile } from '@/app/components/profile'
@@ -46,18 +45,35 @@ export default function Page() {
             '@graph': [
               {
                 '@type': 'WebSite',
-                name: 'adarshm.com',
+                '@id': `${baseUrl}/#website`,
+                name: 'Adarsh M',
+                alternateName: ['adarshm.com', 'Adarsh M blog'],
                 url: baseUrl,
                 description:
-                  'Adarsh M. — JavaScript developer writing about the web.',
+                  'Adarsh M — full-stack software engineer writing about JavaScript, system design, DSA and AI engineering.',
                 author: { '@id': `${baseUrl}/#person` },
               },
               {
                 '@type': 'Person',
                 '@id': `${baseUrl}/#person`,
-                name: 'Adarsh M.',
+                name: 'Adarsh M',
+                alternateName: ['Adarsh M.', 'adarshm07'],
                 url: baseUrl,
-                jobTitle: 'Software Engineer',
+                mainEntityOfPage: baseUrl,
+                image: `${baseUrl}/apple-icon`,
+                jobTitle: 'Full-Stack Software Engineer',
+                description:
+                  'Full-stack software engineer working with TypeScript, Node.js, React and Next.js.',
+                knowsAbout: [
+                  'JavaScript',
+                  'TypeScript',
+                  'Node.js',
+                  'React',
+                  'Next.js',
+                  'System Design',
+                  'Data Structures and Algorithms',
+                  'AI Engineering',
+                ],
                 sameAs: [
                   'https://github.com/adarshm07',
                   'https://x.com/adarshm07',
@@ -68,9 +84,7 @@ export default function Page() {
           }),
         }}
       />
-      <Suspense fallback={<ProfileSkeleton />}>
-        <Profile />
-      </Suspense>
+      <Profile />
 
       <div className="grid gap-3 sm:grid-cols-3">
         {destinations.map((destination) => (
@@ -131,14 +145,5 @@ export default function Page() {
         </div>
       </div>
     </section>
-  )
-}
-
-function ProfileSkeleton() {
-  return (
-    <div className="animate-pulse space-y-2">
-      <div className="h-6 w-40 rounded bg-neutral-100 dark:bg-neutral-800" />
-      <div className="h-4 w-64 rounded bg-neutral-100 dark:bg-neutral-800" />
-    </div>
   )
 }
