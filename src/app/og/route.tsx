@@ -2,7 +2,7 @@ import { ImageResponse } from 'next/og'
 
 export function GET(request: Request) {
   const url = new URL(request.url)
-  const title = url.searchParams.get('title') || 'adarshm.com'
+  const title = url.searchParams.get('title') || 'Adarsh M'
 
   return new ImageResponse(
     (
@@ -25,7 +25,7 @@ export function GET(request: Request) {
           {title}
         </h2>
         <span tw="text-2xl text-neutral-500">
-          Adarsh M. — Software Engineer
+          Adarsh M — Software Engineer
         </span>
       </div>
     ),

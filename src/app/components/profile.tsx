@@ -1,5 +1,9 @@
-import { getGithubProfile } from '@/app/lib/github'
-
+// Rendered statically (no data fetch) so the name heading is in the initial
+// HTML. Search engines lean on the homepage H1 for name queries, and a
+// heading that streams in after an API call is easy for them to miss.
+const NAME = 'Adarsh M'
+const GITHUB_URL = 'https://github.com/adarshm07'
+const TWITTER_USERNAME = 'adarshm07'
 const LINKEDIN_URL = 'https://www.linkedin.com/in/adarshm07/'
 
 function GithubIcon() {
@@ -26,21 +30,18 @@ function LinkedInIcon() {
   )
 }
 
-export async function Profile() {
-  const profile = await getGithubProfile()
-
-  const name = profile?.name ?? 'Adarsh M'
-  const twitterUsername = profile?.twitter_username ?? 'adarshm07'
-  const githubUrl = profile?.html_url ?? 'https://github.com/adarshm07'
+export function Profile() {
+  const githubUrl = GITHUB_URL
+  const twitterUsername = TWITTER_USERNAME
 
   return (
     <div>
       <div className="min-w-0">
         <h1 className="text-2xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-50">
-          {name}
+          {NAME}
         </h1>
         <p className="mt-1.5 text-sm leading-relaxed text-neutral-500 dark:text-neutral-400">
-          Software engineer based in Kerala, India. I write here as I learn —
+          {NAME} is a full-stack software engineer based in Kerala, India. I write here as I learn —
           data structures & algorithms, system design, and other things I
           pick up along the way.
         </p>
