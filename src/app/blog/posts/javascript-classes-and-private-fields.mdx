@@ -1,0 +1,143 @@
+---
+title: "JavaScript Classes and Private Fields"
+publishedAt: "2026-10-16"
+summary: "What class syntax actually creates, how fields, getters, static members and static blocks work, and how #private fields give real encapsulation that no reflection API can see. Plus the gotchas: brand checks, Proxies, and when a closure is still the simpler choice."
+tags: "JavaScript"
+---
+
+JavaScript's `class` keyword arrived in 2015, and for years it was mostly
+syntax over [prototypes](/blog/javascript-prototypes-explained). Later
+editions added things prototypes alone can't do: class fields, static
+blocks, and truly private members. Here's what a modern class contains, and
+what each part does.
+
+```javascript
+class Counter {
+  #count = 0                    // private instance field
+  static #instances = 0         // private static field
+  step = 1                      // public instance field
+
+  static {                      // static initialisation block
+    console.log('Counter class defined')
+  }
+
+  constructor(step = 1) {
+    this.step = step
+    Counter.#instances++
+  }
+
+  increment() { this.#count += this.step; return this.#count }
+  get value() { return this.#count }
+  static instances() { return Counter.#instances }
+}
+```
+
+<PrivateFieldsVisualizer />
+
+## What `class` creates
+
+A class declaration creates a constructor function (`typeof Counter ===
+'function'`) and a prototype object:
+
+- **Methods and accessors** (`increment`, `get value`) go on
+  `Counter.prototype`, shared by all instances.
+- **Fields** (`step = 1`, `#count = 0`) are created on **each instance**,
+  when it's constructed — before the constructor body runs (or, in a
+  subclass, right after `super()` returns).
+- **Static members** go on the constructor function itself.
+
+Differences from the old function-based style:
+
+- Calling a class without `new` throws a `TypeError`.
+- Class bodies are always in strict mode.
+- Class declarations are hoisted but stay in the
+  [temporal dead zone](/blog/hoisting-and-the-temporal-dead-zone) until the
+  line runs — you can't use a class above its declaration.
+- Methods are non-enumerable, so they don't show up in `for…in`.
+
+## Fields and `this` in callbacks
+
+Because fields are per-instance and initialisers run with `this` set to the
+new instance, an **arrow-function field** captures the instance permanently:
+
+```javascript
+class Button {
+  label = 'Save'
+  handleClick = () => console.log(this.label)   // always this button
+}
+
+const b = new Button()
+document.querySelector('button').addEventListener('click', b.handleClick)
+```
+
+A normal method passed as a callback would lose its
+[`this`](/blog/javascript-this-keyword). The trade-off: arrow fields are
+created per instance (one function each, not one shared on the prototype),
+and subclasses can't call them through `super`.
+
+## Private fields: `#`
+
+A name starting with `#` is private to the class body:
+
+- **Inaccessible outside.** `counter.#count` anywhere outside the class is a
+  **syntax error**, caught when the code is parsed, not at runtime.
+- **Invisible to reflection.** `Object.keys`, `JSON.stringify`, `for…in`,
+  `Object.getOwnPropertyNames` and Proxy traps don't see private fields.
+  (DevTools does show them, for debugging.)
+- **No collisions.** A subclass can declare its own `#count`; the two are
+  unrelated.
+
+Private methods (`#validate() {}`), private getters, and private statics
+work the same way.
+
+This is different from the old conventions:
+
+- `_count` is just a naming hint — anyone can read and write it.
+- A [closure](/blog/closures-and-the-module-pattern) gives real privacy, but
+  you create functions per instance, and methods can't be shared on the
+  prototype.
+- A [WeakMap](/blog/weakmap-and-weakset) keyed by instance was the old way to
+  get private per-instance data — essentially what private fields do
+  natively.
+- TypeScript's `private` keyword is a compile-time check only; the property
+  is an ordinary one at runtime.
+
+## Brand checks with `#field in obj`
+
+Only objects created by the class's constructor have its private fields. So
+`#count in obj` asks "was this created by Counter?" — without throwing:
+
+```javascript
+class Counter {
+  #count = 0
+  static isCounter(obj) { return #count in obj }
+}
+```
+
+That's more reliable than `instanceof`, which follows the prototype chain and
+can be fooled by `Object.setPrototypeOf` or by objects from another realm,
+such as an iframe.
+
+## Gotchas
+
+**Methods called on the wrong object throw.** `Counter.prototype.increment.call({})`
+fails with "Cannot read private member #count from an object whose class did
+not declare it".
+
+**Proxies break private access.** Wrap an instance in a `Proxy`, call a
+method through the proxy, and `this` is the proxy — which has no private
+fields. Any method that touches `#count` throws. Libraries that use proxies
+for reactivity (Vue, MobX) have to work around this, and it's why some
+codebases avoid `#` fields in reactive state.
+
+**Private fields aren't copied.** `{ ...counter }` and `structuredClone`
+copy public data only.
+
+## When to use what
+
+- **Classes** suit things with identity and behaviour: a connection, a
+  parser, a game entity, a domain object with invariants to protect.
+- **Private fields** are for internal state that must stay consistent —
+  the count that only `increment` may change.
+- **Plain objects and functions** remain the right default for data and
+  stateless logic. Not everything needs a class.

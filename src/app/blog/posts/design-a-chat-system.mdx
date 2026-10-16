@@ -1,0 +1,119 @@
+---
+title: "System Design Case Study: A Chat System"
+publishedAt: "2026-10-16"
+summary: "Designing one-to-one and group messaging like WhatsApp or Slack: persistent connections, presence, message ordering with per-conversation sequence numbers, delivery receipts, offline sync, and fan-out for groups. With the trade-offs at each step."
+tags: "System Design"
+---
+
+Chat looks simple: a message goes from one person to another. What makes it
+a good design question is everything around that sentence. The recipient
+may be online, offline, or on three devices. The network drops halfway
+through. Messages must arrive in order, exactly once, and show ticks for
+sent, delivered and read.
+
+## Requirements
+
+**Functional**: one-to-one and group chats (up to, say, 500 members); text
+messages; delivery and read receipts; message history on every device;
+online presence.
+
+**Non-functional**: messages delivered in well under a second when both
+people are online; no message ever lost once the sender sees "sent"; order
+preserved within a conversation; works on flaky mobile networks.
+
+**Scale**: assume 50 million daily users, 40 messages each a day — 2 billion
+messages a day, about 23,000 a second on average and perhaps 70,000 at peak.
+At ~200 bytes a message, that's ~400 GB of new messages a day.
+
+## Persistent connections
+
+Polling for new messages every few seconds would mean millions of empty
+requests and seconds of delay. Instead each app keeps a long-lived
+[WebSocket](/blog/websockets-sse-polling) open to a **gateway** server. One
+gateway can hold hundreds of thousands of mostly idle connections, so a few
+hundred gateways cover the whole user base.
+
+Gateways are stateful — they hold connections — so you need to know which
+gateway a user is on. That's the **presence store**: a fast key-value map
+(Redis, for example) of `user → gateway`, updated on connect and disconnect,
+with a TTL refreshed by heartbeats so crashed gateways don't leave ghosts.
+
+## Sending a message
+
+<ChatSystemVisualizer />
+
+Three details carry most of the design:
+
+1. **Client-generated message IDs.** The client creates an ID before
+   sending. If the connection drops before the ack, it resends with the
+   same ID, and the server recognises the duplicate. This is the
+   [idempotency key](/blog/idempotency-keys) idea applied to chat.
+2. **Store before acknowledging.** The single tick means "durably stored".
+   Everything after that — delivery, push notifications — can be retried
+   from the stored copy.
+3. **Per-conversation sequence numbers.** Timestamps from phones can't be
+   trusted, and even server clocks disagree (see
+   [Lamport clocks](/blog/lamport-and-vector-clocks)). Instead, each
+   conversation has a counter, and every message gets the next number when
+   it's stored. Ordering within a chat is then exact; ordering *across* chats
+   doesn't matter.
+
+## Storage
+
+The access pattern is "the latest N messages of conversation X", plus "everything
+after sequence S" for syncing. A wide-column store such as Cassandra or
+ScyllaDB fits well: partition by `conversation_id`, cluster by `seq`
+descending. Writes are appends, and reads are one partition slice. Very
+active conversations can be split into time buckets so partitions don't
+grow without bound.
+
+## Offline users and multiple devices
+
+If the presence lookup finds no gateway, the message is already safe in
+storage. The service sends a push notification (through APNs or FCM), and
+the app syncs when it next connects.
+
+Syncing is the same mechanism for every case — a new device, a phone that
+was offline, or a reconnect after a tunnel. The device asks for "everything
+in my conversations after the sequence numbers I already have". Because
+sequence numbers have no gaps, the client can also notice a missing message
+and ask for it.
+
+## Groups
+
+For a group of 500, the chat service looks up the members and delivers to
+each online member's gateway — a **fan-out on write** per message. That's
+fine for hundreds of members. For channels with tens of thousands of
+readers, push only a "conversation X has new messages" signal and let
+clients pull, the same trade-off as in a
+[news feed](/blog/design-a-news-feed).
+
+Receipts in groups multiply quickly: 500 members × 500 messages of "read"
+events. Aggregate them — store "read up to seq S" per member rather than a
+receipt per message.
+
+## End-to-end encryption
+
+With E2E encryption (the Signal protocol, used by WhatsApp), the server
+stores and forwards ciphertext it can't read. The architecture above doesn't
+change, but server-side features do: search, link previews and spam
+filtering have to happen on the device. Mention it, and say what it costs.
+
+## What breaks first
+
+- **A gateway crashes** and drops 200,000 connections. They all reconnect at
+  once, to other gateways. Clients must reconnect with
+  [jittered backoff](/blog/retries-backoff-and-jitter), or the thundering
+  herd takes the next gateway down.
+- **Hot conversations**: one huge group generates most of the traffic on its
+  partition. Bucket by time, and rate-limit posting.
+- **Presence churn**: online/offline events for millions of users. Don't
+  broadcast every change to every contact. Fetch presence when a chat is
+  opened, and subscribe only while it's visible.
+
+## Practise it
+
+"Design a chat system" is one of the prompts in the
+[system design practice tool](/tools/system-design). Draw the gateways,
+presence store and message store in the diagram editor, then send the whole
+design to Claude for a review.

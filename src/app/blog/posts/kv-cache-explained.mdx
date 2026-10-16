@@ -1,0 +1,108 @@
+---
+title: "The KV Cache: Why Long Conversations Cost GPU Memory"
+publishedAt: "2026-10-16"
+summary: "LLMs generate one token at a time, and each new token attends to everything before it. The KV cache stores past keys and values so they're computed once — trading compute for memory. How prefill and decode differ, how to calculate the cache size, and the techniques that shrink it: GQA, quantisation, paging and prompt caching."
+tags: "AI Engineering"
+---
+
+A language model writes its answer one token at a time. Each new token is
+produced by running the model over the whole sequence so far — and, through
+[attention](/blog/how-attention-works), each token looks back at every
+earlier token's **key** and **value** vectors.
+
+Those keys and values don't change once computed: token 5's key is the same
+whether you're generating token 6 or token 600. Recomputing them at every
+step would be enormously wasteful. So inference engines store them — the
+**KV cache**.
+
+<KvCacheVisualizer />
+
+## Two phases with different bottlenecks
+
+**Prefill** processes the prompt. All prompt tokens are known up front, so
+their keys and values for every layer are computed in parallel — large
+matrix multiplications that keep the GPU's compute units busy. Prefill time
+is what you feel as **time to first token**, and it grows with prompt
+length.
+
+**Decode** generates the output. Each step handles one new token: compute
+its query, key and value; append the key and value to the cache; attend over
+the entire cache; pick the next token. The arithmetic per step is small, but
+the whole cache — and all the model's weights — must be read from GPU memory
+every step. Decode is limited by **memory bandwidth**, and you feel it as
+**tokens per second**.
+
+That split explains a lot of LLM pricing and performance. Input tokens are
+cheaper than output tokens, because prefill processes them in parallel.
+Batching many users' requests together helps decode throughput, because the
+weights are read once per step for the whole batch.
+
+## How big is it?
+
+Per token, the cache stores one key and one value vector, per layer, per
+key/value head:
+
+```
+bytes per token = 2 (K and V) × layers × kv_heads × head_dim × bytes per number
+```
+
+<Table
+  data={{
+    headers: ['model', 'layers', 'KV heads × dim', 'per token (16-bit)', '8K tokens'],
+    rows: [
+      ['Llama 2 7B', '32', '32 × 128', '512 KB', '4 GB'],
+      ['Llama 3 8B', '32', '8 × 128', '128 KB', '1 GB'],
+    ],
+  }}
+/>
+
+That's **per sequence**. Serving 50 concurrent conversations of 8,000
+tokens with the first model would need 200 GB of cache — more than the
+model weights, and more than one GPU holds. In practice, the KV cache, not
+the model, often limits how many users a GPU can serve and how long their
+contexts can be.
+
+## Making it smaller
+
+**Grouped-query attention (GQA).** Many query heads share one key/value
+head. Llama 3 8B has 32 query heads but only 8 KV heads, so its cache is a
+quarter the size of an equivalent design without sharing, with little loss
+in quality. Multi-query attention is the extreme case: one KV head for all.
+
+**Quantising the cache.** Storing keys and values in 8 bits instead of 16
+halves the memory again, at a small accuracy cost.
+
+**Paged attention.** Reserving memory for each request's maximum length
+wastes most of it. vLLM's PagedAttention allocates the cache in small
+blocks, like virtual-memory pages, so memory tracks actual length and many
+more requests fit at once.
+
+**Sliding windows and compression.** Some models attend only to a recent
+window in some layers, which caps the cache for those layers. Others evict
+or compress older entries. These change model behaviour, so they're design
+choices of the model, not switches you can flip on any model.
+
+## Prompt caching: reusing the prefill
+
+If many requests start with the same long prefix — a system prompt, a
+document, tool definitions — the prefix's keys and values are identical
+every time. **Prompt caching** keeps them between requests, so later calls
+skip most of the prefill. Hosted APIs expose this directly: Anthropic's
+prompt caching, for example, lets you mark a cache breakpoint, and charges
+cache reads at a fraction of the normal input price. See
+[context windows and caching](/blog/context-windows-and-caching) for how to
+structure prompts so the stable part comes first.
+
+## What this means when you build with LLMs
+
+- **Long prompts slow the first token**, not the rest. Streaming the output
+  ([streaming LLM responses](/blog/streaming-llm-responses)) hides decode
+  time, but nothing hides a slow prefill except a shorter or cached prompt.
+- **Long conversations get more expensive per turn**, because each turn
+  re-sends the history. Summarise or trim old turns, and keep the reusable
+  prefix stable so it stays cached.
+- **Output length drives latency.** Each output token is one decode step,
+  so asking for concise output is the most direct speed-up you control.
+- **Self-hosting**: budget GPU memory for weights *plus* the KV cache at your
+  target concurrency and context length. Serving engines like vLLM report
+  how many tokens of cache fit after the weights load.

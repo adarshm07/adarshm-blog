@@ -1,0 +1,118 @@
+---
+title: "JWTs Explained: What's Inside, What They Guarantee, and What They Don't"
+publishedAt: "2026-10-16"
+summary: "A JSON Web Token is a signed, readable bundle of claims. How the header, payload and signature fit together, how verification works without a database lookup, the verification mistakes that have broken real systems, and the hard part: expiry, revocation, and where to store the token."
+tags: "Web"
+---
+
+Log in to many APIs and you get back a string like this:
+
+```
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyXzEyMyIsIm5hbWUiOiJBc2hhIiwicm9sZSI6ImVkaXRvciIsImlhdCI6MTc5MjE0MzAwMCwiZXhwIjoxNzkyMTQzOTAwfQ.07PX_KD64hoemCf042vQegSINh3XsdnY0essl01ITog
+```
+
+That's a **JSON Web Token** (JWT, RFC 7519). You send it back with each
+request, usually as `Authorization: Bearer <token>`, and the server knows
+who you are without looking anything up. Here's how that works — and why
+"without looking anything up" is both the feature and the problem.
+
+<JwtVisualizer />
+
+## The three parts
+
+**Header** — the token type and signing algorithm:
+
+```json
+{ "alg": "HS256", "typ": "JWT" }
+```
+
+**Payload** — the **claims**. Some names are registered by the standard:
+
+- `sub` (subject): who the token is about, usually a user ID
+- `exp` (expiry), `iat` (issued at), `nbf` (not before): Unix timestamps
+- `iss` (issuer) and `aud` (audience): who created it, and who it's for
+- `jti`: a unique token ID
+
+You can add your own (`name`, `role`). Everything here is **readable by
+anyone holding the token** — base64url is an encoding, not encryption.
+Never put secrets or sensitive personal data in a JWT.
+
+**Signature** — computed over `base64url(header) + "." + base64url(payload)`.
+
+## Two ways to sign
+
+- **HS256** (HMAC + SHA-256): one shared secret both signs and verifies.
+  Simple, but every service that verifies tokens can also mint them.
+- **RS256 / ES256** (RSA or ECDSA signatures): the issuer signs with a
+  **private** key, and anyone verifies with the **public** key. Services can
+  verify tokens without being able to create them. Identity providers
+  publish their public keys at a JWKS endpoint (a JSON list of keys), and
+  the `kid` header says which key signed a token, so keys can rotate.
+
+For anything beyond a single service, prefer asymmetric signatures.
+
+## Verifying correctly
+
+Use a maintained library (`jose` in JavaScript), and make it check:
+
+```javascript
+import { jwtVerify, createRemoteJWKSet } from 'jose'
+
+const JWKS = createRemoteJWKSet(new URL('https://auth.example.com/.well-known/jwks.json'))
+
+const { payload } = await jwtVerify(token, JWKS, {
+  algorithms: ['RS256'],              // pin it — never trust the header's alg
+  issuer: 'https://auth.example.com',
+  audience: 'orders-api',
+})                                    // exp and nbf are checked automatically
+```
+
+The mistakes that have broken real systems all skip one of these:
+
+- **`alg: "none"`**: the spec allows unsigned tokens. Libraries that honoured
+  the header accepted forged tokens with no signature at all.
+- **Algorithm confusion**: a server expecting RS256 is sent a token marked
+  HS256, "signed" with the RSA *public* key as the HMAC secret. A library
+  that picks the algorithm from the header verifies it successfully. Pinning
+  the algorithm prevents both.
+- **Not checking `aud`**: a token issued for one service gets replayed
+  against another that trusts the same issuer.
+- **Decoding instead of verifying**: `jwt.decode()` just reads the payload.
+  It's for display, never for authorisation.
+
+## The hard part: you can't take it back
+
+A JWT is valid until it expires. The server doesn't store it, so there's
+nothing to delete when a user logs out, changes their password, or gets
+their account suspended. The standard answer:
+
+- **Short-lived access tokens** — 5 to 15 minutes — limit the damage.
+- **Refresh tokens** — long-lived, stored server-side, and **revocable** —
+  get new access tokens. Logging out deletes the refresh token, and the
+  access token dies within minutes.
+- **Rotate refresh tokens** on every use, and treat reuse of an old one as
+  theft: revoke the whole family.
+- For immediate revocation, keep a deny-list of `jti` values until they
+  expire — which brings back a lookup per request, but only for a small set.
+
+## Where to keep it in the browser
+
+- **`localStorage`**: easy to send in headers, but any script on the page —
+  including injected [XSS](/blog/xss-and-content-security-policy) — can read
+  it and send it elsewhere.
+- **An `HttpOnly` cookie**: unreadable by JavaScript, sent automatically —
+  which brings back [CSRF](/blog/csrf-explained), handled with `SameSite`
+  cookies and CSRF tokens.
+
+For browser apps, a common recommendation is to keep tokens out of
+JavaScript entirely: a small backend (a "backend for frontend") holds the
+tokens and gives the browser an ordinary `HttpOnly` session cookie.
+
+## JWT or a session?
+
+For a single web app with its own backend, a server-side
+[session](/blog/cookies-and-sessions) — a random ID in a cookie, looked up
+in a store — is simpler, and revocation is a delete. JWTs earn their place
+when **several services must verify identity independently**: an API
+gateway, microservices, third-party APIs, or tokens issued by an identity
+provider through [OAuth and OpenID Connect](/blog/oauth-2-and-pkce).

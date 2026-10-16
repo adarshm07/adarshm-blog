@@ -1,0 +1,118 @@
+---
+title: "Bitmask DP: Solving the Travelling Salesman for Small n"
+publishedAt: "2026-10-16"
+summary: "When a DP state has to remember which items have been used, a bitmask can encode the set in one integer. How that turns the travelling salesman problem from n! routes into 2ⁿ·n states, the bit tricks you need, and how to recognise problems where n ≤ 20 is a hint."
+tags: "DSA"
+---
+
+A delivery driver must visit every stop once and return to the depot, as
+cheaply as possible. That's the **travelling salesman problem** (TSP), and
+it's NP-hard: no known algorithm solves it in polynomial time.
+
+Brute force tries every order of the stops: (n − 1)! routes. For 12 stops
+that's 39,916,800; for 20 it's about 1.2 × 10¹⁷. But there's a dynamic
+program that brings 20 stops within reach — and its trick, storing a **set**
+in an integer, applies to many other problems.
+
+## What the state needs to remember
+
+Build the route one city at a time. To decide where to go next, do you need
+the whole order so far? No — only:
+
+- **which cities have been visited** (you can't revisit them), and
+- **which city you're at now** (the next edge starts there).
+
+Two partial routes that visited the same set and ended at the same city are
+interchangeable for the rest of the trip, so keep only the cheaper. That's
+the [DP](/blog/dynamic-programming-intro) insight:
+
+> `dp[set][j]` = the shortest route that starts at city 0, visits exactly
+> the cities in `set`, and ends at city `j`.
+
+## Sets as bitmasks
+
+With n cities, a set is n yes/no answers — n bits. Bit `j` is 1 if city `j`
+is in the set. The set {0, 2, 3} of four cities is `0b1101` = 13. Every set
+is a number from 0 to 2ⁿ − 1, so it can index an array directly.
+
+The operations you need ([bit manipulation](/blog/bit-manipulation-fundamentals)
+covers them in depth):
+
+```javascript
+mask & (1 << j)        // is city j in the set?
+mask | (1 << j)        // add city j
+mask & ~(1 << j)       // remove city j
+(1 << n) - 1           // the full set: every city
+```
+
+<TspBitmaskVisualizer />
+
+## The code
+
+```javascript
+function shortestTour(dist) {
+  const n = dist.length
+  const FULL = (1 << n) - 1
+  const dp = Array.from({ length: 1 << n }, () => new Array(n).fill(Infinity))
+  dp[1][0] = 0                                     // at city 0, visited {0}
+
+  for (let mask = 1; mask <= FULL; mask++) {
+    for (let j = 0; j < n; j++) {
+      if (!(mask & (1 << j)) || dp[mask][j] === Infinity) continue
+      for (let k = 0; k < n; k++) {
+        if (mask & (1 << k)) continue              // already visited
+        const next = mask | (1 << k)
+        dp[next][k] = Math.min(dp[next][k], dp[mask][j] + dist[j][k])
+      }
+    }
+  }
+
+  let best = Infinity
+  for (let j = 1; j < n; j++) best = Math.min(best, dp[FULL][j] + dist[j][0])
+  return best
+}
+
+shortestTour([
+  [0, 10, 15, 20],
+  [10, 0, 35, 25],
+  [15, 35, 0, 30],
+  [20, 25, 30, 0],
+])   // 80
+```
+
+Iterating masks in increasing order is enough: adding a city always produces
+a larger number, so every state is final before it's extended.
+
+**Cost**: 2ⁿ · n states, each tried with n next cities — **O(2ⁿ · n²)** time
+and O(2ⁿ · n) memory. For n = 20 that's about 4 × 10⁸ simple steps and 20
+million table entries: seconds, not centuries. Beyond about 25 cities the
+memory runs out, and real route planners switch to heuristics (nearest
+neighbour, 2-opt, simulated annealing) or industrial solvers.
+
+To recover the route itself, store the previous city for each state, or walk
+back through the table checking which predecessor produced each value.
+
+## Recognising bitmask DP
+
+The signs are:
+
+- **n is small**: constraints like n ≤ 16 or n ≤ 20 are a strong hint, since
+  2²⁰ is about a million.
+- The answer depends on **which items have been used**, not on the order
+  they were used in.
+- A brute force over **permutations** or **subsets** is the obvious idea.
+
+Problems with this shape:
+
+- **Assignment**: n workers, n jobs, a cost for each pair. Assign jobs to
+  workers in order; `dp[mask]` = the cheapest way to give the first
+  popcount(mask) workers exactly the jobs in mask.
+- **Shortest path visiting all nodes**: TSP without returning, often from any
+  start; combine with BFS when edges are unweighted.
+- **Partition into k equal-sum subsets**, **matchsticks to square**.
+- **Smallest sufficient team**: the fewest people covering all required
+  skills, with skills as a bitmask.
+
+A related trick, iterating over all subsets of a mask:
+`for (let s = mask; s > 0; s = (s - 1) & mask)`. Over all masks, that's
+3ⁿ steps in total — the core of "split this set into groups" problems.

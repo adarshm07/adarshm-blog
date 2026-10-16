@@ -1,0 +1,153 @@
+---
+title: "TypeScript Decorators: The Standard Version"
+publishedAt: "2026-10-16"
+summary: "Decorators wrap or annotate classes and their members with a reusable function. How TypeScript 5's standard decorators work — what a method decorator receives and returns, evaluation order, addInitializer, decorator factories — and how they differ from the experimentalDecorators that Angular and NestJS were built on."
+tags: "TypeScript"
+---
+
+A decorator is a function you attach to a class or class member with `@`.
+When the class is defined, the decorator receives that member and can
+replace it, wrap it, or register it somewhere. Logging, timing, caching,
+validation, auto-binding `this`, registering routes — any behaviour you'd
+otherwise copy into many methods can become a decorator.
+
+TypeScript 5.0 implemented the **standard** decorators proposal from TC39.
+They work without any compiler flag and differ from the older
+`experimentalDecorators` many frameworks use.
+
+## A method decorator
+
+<DecoratorsVisualizer />
+
+The fully typed version of `logged`:
+
+```typescript
+function logged<This, Args extends unknown[], Return>(
+  method: (this: This, ...args: Args) => Return,
+  context: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => Return>,
+) {
+  const name = String(context.name)
+  return function (this: This, ...args: Args): Return {
+    console.log(`→ ${name}(${args.map((a) => JSON.stringify(a)).join(', ')})`)
+    const result = method.call(this, ...args)
+    console.log(`← ${name} = ${JSON.stringify(result)}`)
+    return result
+  }
+}
+```
+
+The generics keep the decorated method's types intact: the wrapper takes the
+same arguments and returns the same type, so callers see no difference.
+
+## What a decorator receives
+
+Every decorator gets two arguments:
+
+1. **The value being decorated** — the method, the getter, the class itself,
+   or, for fields, `undefined` (fields don't exist until an instance is
+   constructed).
+2. **A context object** describing it: `kind` (`'method'`, `'getter'`,
+   `'setter'`, `'field'`, `'accessor'` or `'class'`), `name`, whether it's
+   `static` or `private`, `access` functions to read and write it, and
+   `addInitializer`.
+
+What it may return depends on the kind: a replacement method for methods, a
+replacement class for classes, and for fields, a function that transforms
+the field's initial value.
+
+## Decorator factories
+
+To configure a decorator, write a function that returns one:
+
+```typescript
+function retry(attempts: number) {
+  return function <This, Args extends unknown[], Return>(
+    method: (this: This, ...args: Args) => Promise<Return>,
+    _context: ClassMethodDecoratorContext,
+  ) {
+    return async function (this: This, ...args: Args): Promise<Return> {
+      for (let i = 1; ; i++) {
+        try { return await method.call(this, ...args) }
+        catch (err) { if (i >= attempts) throw err }
+      }
+    }
+  }
+}
+
+class PaymentClient {
+  @retry(3)
+  async charge(amount: number) { /* … */ }
+}
+```
+
+## Order of evaluation
+
+With several decorators on one member:
+
+```typescript
+@first() @second()
+method() {}
+```
+
+the decorator **expressions** are evaluated top to bottom (`first()` then
+`second()`), and the decorators are **applied** bottom to top — `second`
+wraps the method first, then `first` wraps the result. Like function
+composition: `first(second(method))`.
+
+## `addInitializer`: running code per instance
+
+Decorators run once, at class definition. To do something for each
+instance, register an initializer. A classic use is binding methods so they
+keep their `this` when passed as callbacks:
+
+```typescript
+function bound<This, T extends (this: This, ...args: any[]) => any>(
+  method: T,
+  context: ClassMethodDecoratorContext<This, T>,
+) {
+  context.addInitializer(function (this: This) {
+    (this as any)[context.name] = method.bind(this)
+  })
+}
+
+class Search {
+  query = ''
+  @bound
+  onInput() { return this.query }
+}
+
+const { onInput } = new Search()
+onInput()   // works — `this` is still the Search instance
+```
+
+## Standard vs. experimental decorators
+
+The older `experimentalDecorators` mode (TypeScript's implementation of an
+earlier proposal) is still what **Angular**, **NestJS**, **TypeORM** and
+**class-validator** use. The two aren't interchangeable:
+
+<Table
+  data={{
+    headers: ['', 'standard (TS 5.0+)', 'experimentalDecorators'],
+    rows: [
+      ['flag needed', 'none', 'experimentalDecorators: true'],
+      ['method decorator gets', '(method, context)', '(target, key, descriptor)'],
+      ['parameter decorators', 'not supported', 'supported (used for DI)'],
+      ['type metadata', 'context.metadata (TS 5.2+)', 'emitDecoratorMetadata'],
+    ],
+  }}
+/>
+
+If you're using a framework that depends on the experimental mode, keep the
+flag on. Parameter decorators — which frameworks use for
+[dependency injection](/blog/dependency-injection) — exist only there. For
+new code without such a framework, use the standard version: it's what
+JavaScript engines will eventually run natively.
+
+## When not to use them
+
+Decorators hide behaviour at the call site. Someone reading `calc.total(1000)`
+can't see that it also logs, retries or caches. Use them for genuinely
+cross-cutting concerns that are well named (`@retry(3)`, `@cached`) and
+consistent across a codebase. For one-off behaviour, a plain wrapper function
+or an explicit call is easier to follow.

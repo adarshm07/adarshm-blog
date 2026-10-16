@@ -1,0 +1,123 @@
+---
+title: "Lowest Common Ancestor with Binary Lifting"
+publishedAt: "2026-10-16"
+summary: "The deepest node that is an ancestor of two given nodes in a tree. The simple walk-up solution, then binary lifting: precompute every node's 1st, 2nd, 4th, 8th… ancestor so any query takes O(log n) jumps. With distances between nodes and the k-th ancestor as bonuses."
+tags: "DSA"
+---
+
+In a tree, the **lowest common ancestor** (LCA) of two nodes is the deepest
+node that has both of them as descendants. In a family tree it's the most
+recent shared ancestor. In a file system, it's the deepest folder containing
+both files. In an org chart, it's the most junior manager both people report
+to.
+
+LCA is also a building block: the distance between two nodes in a tree is
+`depth(u) + depth(v) − 2 · depth(lca(u, v))`.
+
+## The simple way
+
+Bring both nodes to the same depth by walking the deeper one up, then walk
+both up together until they meet:
+
+```javascript
+function lcaSlow(u, v, parent, depth) {
+  while (depth[u] > depth[v]) u = parent[u]
+  while (depth[v] > depth[u]) v = parent[v]
+  while (u !== v) { u = parent[u]; v = parent[v] }
+  return u
+}
+```
+
+That's O(depth) per query — fine for balanced trees, but O(n) for a tree
+shaped like a long chain. With 10⁵ nodes and 10⁵ queries, that's 10¹⁰ steps.
+
+## Binary lifting
+
+Instead of moving one level at a time, jump by powers of two. Precompute,
+for every node, its ancestor 1, 2, 4, 8, … levels up:
+
+```
+up[0][v] = parent of v
+up[k][v] = up[k-1][ up[k-1][v] ]     // 2^k up = 2^(k-1) up, twice
+```
+
+Any distance is a sum of powers of two (its binary representation), so any
+ancestor can be reached in at most log₂ n jumps.
+
+<LcaVisualizer />
+
+## The code
+
+```javascript
+function buildLca(n, children, root = 0) {
+  const LOG = Math.max(1, Math.ceil(Math.log2(n)))
+  const up = Array.from({ length: LOG + 1 }, () => new Array(n).fill(root))
+  const depth = new Array(n).fill(0)
+
+  // BFS from the root to fill parents and depths (no recursion limit).
+  const queue = [root]
+  for (let h = 0; h < queue.length; h++) {
+    const u = queue[h]
+    for (const c of children[u]) {
+      depth[c] = depth[u] + 1
+      up[0][c] = u
+      queue.push(c)
+    }
+  }
+  for (let k = 1; k <= LOG; k++)
+    for (let v = 0; v < n; v++) up[k][v] = up[k - 1][up[k - 1][v]]
+
+  return function lca(u, v) {
+    if (depth[u] < depth[v]) [u, v] = [v, u]
+    // 1. Lift u to v's depth, one set bit of the difference at a time.
+    let diff = depth[u] - depth[v]
+    for (let k = 0; diff > 0; k++, diff >>= 1) if (diff & 1) u = up[k][u]
+    if (u === v) return u
+    // 2. Lift both, largest jumps first, while their ancestors still differ.
+    for (let k = LOG; k >= 0; k--) {
+      if (up[k][u] !== up[k][v]) { u = up[k][u]; v = up[k][v] }
+    }
+    return up[0][u]
+  }
+}
+```
+
+Two details make this work:
+
+- **The root is its own ancestor.** Jumps past the root land on the root, so
+  `up[k][u] !== up[k][v]` is false for any jump that's too big, and we
+  simply don't take it.
+- **Only jump while the ancestors differ.** After the loop, u and v are the
+  children of the LCA on each side, so the answer is their parent. Jumping
+  when the ancestors are *equal* could overshoot the LCA to a higher common
+  ancestor.
+
+Preprocessing is **O(n log n)** time and space; each query is **O(log n)**.
+
+## Free extras
+
+The same table answers other questions:
+
+- **k-th ancestor** of a node: jump by the set bits of k.
+- **Distance** between two nodes: the depth formula above.
+- **Is u an ancestor of v?** Lift v to u's depth and compare. (Or record
+  entry and exit times in a DFS: u is an ancestor of v when u's interval
+  contains v's.)
+- **Path aggregates**: store the minimum or sum along each jump alongside
+  the ancestor, and you can answer "smallest edge weight on the path from u
+  to v" in O(log n).
+
+## Other approaches
+
+- **Euler tour + range minimum**: record nodes in DFS order with their
+  depths; the LCA of u and v is the shallowest node between their first
+  appearances. With a sparse table, queries are O(1) after O(n log n)
+  preprocessing. See [segment trees](/blog/segment-trees-range-queries) for
+  range-minimum queries.
+- **Tarjan's offline LCA**: answers a batch of queries known in advance in
+  near-linear time using [union-find](/blog/union-find-disjoint-set).
+- **Binary search trees**: no table needed. Walk down from the root; the
+  first node whose value lies between the two targets is the LCA.
+
+Binary lifting is the usual choice: it's short, handles online queries, and
+the table is useful for more than LCA.

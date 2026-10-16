@@ -1,0 +1,140 @@
+---
+title: "JavaScript Symbols, and the Well-Known Ones That Customise the Language"
+publishedAt: "2026-10-16"
+summary: "Symbols are unique values that make collision-free property keys. How Symbol() differs from Symbol.for(), why symbol keys are skipped by Object.keys and JSON, and how well-known symbols like Symbol.iterator and Symbol.toPrimitive let your objects plug into for…of, spread, and type conversion."
+tags: "JavaScript"
+---
+
+JavaScript has seven primitive types, and `symbol` is the one most people
+never use directly. Yet every `for…of` loop, every spread, and every
+template literal that converts an object to a string goes through one. A
+symbol is simple:
+
+> A symbol is a value that is guaranteed to be unique.
+
+```javascript
+const a = Symbol('id')
+const b = Symbol('id')
+a === b            // false — the 'id' is only a description
+a.description      // 'id'
+```
+
+<SymbolsVisualizer />
+
+## Collision-free property keys
+
+The main use of symbols is as property keys that can't clash with anything
+else. Say a library wants to tag objects it has processed:
+
+```javascript
+const processed = Symbol('processed')
+
+function track(obj) {
+  obj[processed] = true    // can't overwrite the object's own 'processed' key
+}
+```
+
+A string key `'processed'` might already exist on the object, or be added
+later by its owner. A symbol key can't collide: only code holding this exact
+symbol can read or write that property.
+
+Symbol keys are also skipped by most of the ways code looks at an object:
+
+- `Object.keys`, `Object.entries`, `for…in`
+- `JSON.stringify`
+- (but **not** `Object.assign` or spread `{...obj}`, which copy own
+  enumerable symbol properties)
+
+They aren't private, though. `Object.getOwnPropertySymbols(obj)` and
+`Reflect.ownKeys(obj)` list them. For real privacy, use
+[private class fields](/blog/javascript-classes-and-private-fields).
+
+## `Symbol.for`: shared symbols
+
+`Symbol()` creates a new symbol every time. `Symbol.for(key)` looks up a
+global registry and returns the **same** symbol for the same string — even
+across modules, iframes and workers:
+
+```javascript
+Symbol.for('app.id') === Symbol.for('app.id')   // true
+Symbol.keyFor(Symbol.for('app.id'))              // 'app.id'
+```
+
+Use it when separately loaded code needs to agree on a key — for example,
+two copies of the same library on one page. React tags every element it
+creates with a `Symbol.for(…)` value in its `$$typeof` field. Separate copies
+of React can recognise each other's elements, and JSON from a server — which
+can't contain symbols — can't pose as one.
+
+## Well-known symbols: hooks into the language
+
+The language defines symbols as extension points. Put a method under one
+and built-in operations call it.
+
+**`Symbol.iterator`** makes an object iterable — usable with `for…of`,
+spread, destructuring, `Array.from`, and `new Map(…)`:
+
+```javascript
+const range = {
+  from: 1,
+  to: 4,
+  *[Symbol.iterator]() {
+    for (let i = this.from; i <= this.to; i++) yield i
+  },
+}
+
+[...range]           // [1, 2, 3, 4]
+for (const n of range) console.log(n)
+```
+
+A generator method is the shortest way to write one — see
+[generators and iterators](/blog/javascript-generators-and-iterators).
+`Symbol.asyncIterator` does the same for `for await…of`.
+
+**`Symbol.toPrimitive`** controls how an object converts to a primitive, and
+receives a hint: `'number'`, `'string'` or `'default'`:
+
+```javascript
+const price = {
+  amount: 1250,
+  currency: 'INR',
+  [Symbol.toPrimitive](hint) {
+    return hint === 'number' ? this.amount : `${this.amount} ${this.currency}`
+  },
+}
+
++price          // 1250
+`${price}`      // '1250 INR'
+price + ''      // '1250 INR'  (hint is 'default')
+```
+
+That's the hook behind much of [type coercion](/blog/javascript-type-coercion).
+
+**`Symbol.toStringTag`** sets the label in `Object.prototype.toString`:
+
+```javascript
+class Temperature {
+  get [Symbol.toStringTag]() { return 'Temperature' }
+}
+String(new Temperature())   // '[object Temperature]'
+```
+
+Others include `Symbol.hasInstance` (customises `instanceof`),
+`Symbol.species` (which constructor derived arrays use), and
+`Symbol.dispose` / `Symbol.asyncDispose`, used by the `using` declarations
+from the explicit resource management proposal (supported by TypeScript 5.2+
+and recent JavaScript engines) to clean up resources when a block ends.
+
+## Practical uses
+
+- **Metadata on objects you don't own**, without risking name clashes or
+  leaking into JSON.
+- **Making your own collections iterable** — trees, ranges, paginated API
+  results.
+- **Unique constants** where strings could collide or be forged:
+  `const LOADING = Symbol('loading')` can't be confused with a real value
+  that happens to be the string `'loading'`.
+
+One limitation: symbols can't be implicitly converted to strings —
+`` `${Symbol('x')}` `` throws a `TypeError`. Use `.description` or
+`String(sym)` explicitly.

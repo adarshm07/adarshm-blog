@@ -1,0 +1,134 @@
+---
+title: "Strongly Connected Components: Kosaraju's Algorithm"
+publishedAt: "2026-10-16"
+summary: "In a directed graph, which groups of nodes can all reach each other? How two depth-first searches — one on the graph, one on its reverse — find every strongly connected component in linear time, why the finish order is the trick, and where SCCs show up: dependency cycles, 2-SAT, and condensing a graph into a DAG."
+tags: "DSA"
+---
+
+In an undirected graph, "connected" is simple: if A reaches B, then B
+reaches A. Directed graphs are different. A one-way street from A to B
+says nothing about getting back.
+
+A **strongly connected component** (SCC) is a maximal group of nodes in
+which every node can reach every other node. Every directed graph splits
+into SCCs, and they answer practical questions:
+
+- Which modules in a codebase import each other in a cycle?
+- Which web pages form a tightly linked cluster?
+- In a [topological sort](/blog/topological-sort), which tasks block each
+  other so no order exists?
+
+## The idea
+
+If you collapse each SCC into a single node, the result is always a
+**DAG** — any cycle between components would merge them into one. Kosaraju's
+algorithm uses that structure with two passes of
+[depth-first search](/blog/graph-traversal-bfs-dfs):
+
+1. **DFS the graph and record each node when it finishes** (after all its
+   descendants are done).
+2. **Reverse every edge.**
+3. **DFS the reversed graph, taking start nodes in reverse finish order.**
+   Each DFS tree in this pass is exactly one SCC.
+
+<SccVisualizer />
+
+## Why it works
+
+The node that finishes last in pass 1 belongs to a **source** component: no
+edges come into that component from other components. (If one did, the DFS
+would have entered through it from elsewhere, and something in that other
+component would finish later.)
+
+Reversing the edges turns that source component into a **sink**: once
+you're in it, every edge leads to nodes in the same component or to
+components already found. So a DFS started there can't leak out. It visits
+exactly its own SCC. Removing that component and repeating in reverse finish
+order peels off the SCCs one at a time.
+
+## The code
+
+```javascript
+function stronglyConnectedComponents(nodes, edges) {
+  const adj = new Map(nodes.map((n) => [n, []]))
+  const rev = new Map(nodes.map((n) => [n, []]))
+  for (const [a, b] of edges) {
+    adj.get(a).push(b)
+    rev.get(b).push(a)
+  }
+
+  // Pass 1: record finish order.
+  const seen = new Set()
+  const order = []
+  function visit(u) {
+    seen.add(u)
+    for (const v of adj.get(u)) if (!seen.has(v)) visit(v)
+    order.push(u)
+  }
+  for (const n of nodes) if (!seen.has(n)) visit(n)
+
+  // Pass 2: DFS on the reversed graph, latest finisher first.
+  const component = new Map()
+  const groups = []
+  function collect(u, id) {
+    component.set(u, id)
+    groups[id].push(u)
+    for (const v of rev.get(u)) if (!component.has(v)) collect(v, id)
+  }
+  for (const u of order.reverse()) {
+    if (!component.has(u)) {
+      groups.push([])
+      collect(u, groups.length - 1)
+    }
+  }
+  return groups
+}
+
+stronglyConnectedComponents(
+  ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'],
+  [['A','B'], ['B','C'], ['C','A'], ['B','D'], ['D','E'],
+   ['E','F'], ['F','D'], ['G','F'], ['G','H'], ['H','G']],
+)
+// [['G', 'H'], ['A', 'C', 'B'], ['D', 'F', 'E']]
+```
+
+Both passes visit every node and edge once: **O(V + E)** time and space.
+
+For large graphs, the recursion can overflow the call stack
+([recursion and the call stack](/blog/recursion-and-the-call-stack) explains
+why). Production code uses an explicit stack instead.
+
+## Tarjan's algorithm
+
+**Tarjan's algorithm** finds SCCs in a single DFS. Each node gets a
+discovery index and a "low-link": the smallest index reachable from it
+through the DFS subtree plus one back edge. When a node's low-link equals
+its own index, it's the root of an SCC, and the nodes above it on a stack
+form the component. It's the same O(V + E), avoids building the reversed
+graph, and is what most libraries implement. Kosaraju is easier to explain
+and to get right on a whiteboard.
+
+## Where SCCs are used
+
+- **Cycle detection with detail.** A topological sort tells you a cycle
+  exists; SCCs tell you exactly which nodes are in each one. Build tools
+  and module bundlers use this to report circular imports.
+- **Condensation.** Collapse each SCC into a node and you get a DAG on which
+  [DP](/blog/dynamic-programming-intro) and topological ordering work again.
+  "Longest path in a graph with cycles, where a cycle's nodes can all be
+  collected" is solved this way.
+- **2-SAT.** A boolean formula of two-literal clauses is satisfiable exactly
+  when no variable sits in the same SCC as its negation in the implication
+  graph — a linear-time solution to a problem that's NP-hard with three
+  literals per clause.
+- **Graph analysis**: the "bow-tie" structure of the web (a giant core SCC,
+  plus pages that only link in or only link out) came from SCC analysis.
+
+## Practice
+
+- **Critical connections** (bridges) uses the same low-link idea as Tarjan's
+  algorithm, on undirected graphs.
+- **Course schedule** variants: find the courses in each cycle.
+- **Number of SCCs**, then the number of edges you'd need to add to make the
+  whole graph strongly connected (it depends on the counts of source and
+  sink components in the condensation).

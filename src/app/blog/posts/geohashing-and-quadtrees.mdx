@@ -1,0 +1,149 @@
+---
+title: "Geohashing and Quadtrees: Finding What's Nearby"
+publishedAt: "2026-10-16"
+summary: "How 'drivers near me' and 'restaurants within 2 km' work at scale. Geohashes turn a latitude and longitude into a string whose prefixes are map cells, quadtrees split space where the data is dense, and both turn a 2-D search into a few 1-D lookups."
+tags: "System Design"
+---
+
+"Show restaurants within 2 km" sounds like a filter:
+
+```sql
+SELECT * FROM places
+WHERE lat BETWEEN 12.95 AND 12.99 AND lon BETWEEN 77.57 AND 77.61;
+```
+
+An index on `lat` finds everything in a band of latitude that circles the
+entire planet; an index on `lon` finds a band from pole to pole. The
+database must intersect two huge sets. A B-tree orders data in one
+dimension, and location is two. Spatial indexes fix this by mapping 2-D
+space onto something 1-D indexes handle well.
+
+## Geohash: a location as a string
+
+A geohash repeatedly halves the world, alternating between longitude and
+latitude, and records which half the point is in as one bit. Every five
+bits become one base-32 character.
+
+<GeohashVisualizer />
+
+The key property is that **a shared prefix means a shared cell**. Every
+point whose geohash starts with `tdr1` is inside the same rectangle, and each
+extra character makes the rectangle 32 times smaller:
+
+<Table
+  data={{
+    headers: ['length', 'cell size (at the equator)', 'good for'],
+    rows: [
+      ['4', '~39 km × 19 km', 'a city'],
+      ['5', '~4.9 km × 4.9 km', 'a neighbourhood'],
+      ['6', '~1.2 km × 0.6 km', '"near me"'],
+      ['7', '~153 m × 152 m', 'a street'],
+    ],
+  }}
+/>
+
+Here's the encoder:
+
+```javascript
+const BASE32 = '0123456789bcdefghjkmnpqrstuvwxyz'
+
+function geohash(lat, lon, length = 6) {
+  let lonRange = [-180, 180], latRange = [-90, 90]
+  let bits = 0, bitCount = 0, hash = '', evenBit = true
+
+  while (hash.length < length) {
+    const range = evenBit ? lonRange : latRange
+    const value = evenBit ? lon : lat
+    const mid = (range[0] + range[1]) / 2
+    bits <<= 1
+    if (value >= mid) { bits |= 1; range[0] = mid } else { range[1] = mid }
+    evenBit = !evenBit
+    if (++bitCount === 5) { hash += BASE32[bits]; bits = 0; bitCount = 0 }
+  }
+  return hash
+}
+
+geohash(12.9716, 77.5946)   // 'tdr1v9'
+```
+
+## Searching with geohashes
+
+Store each place's geohash in an ordinary indexed column. To find places
+near a point:
+
+1. Compute the point's geohash at a precision whose cell is about the
+   search radius (length 6 for ~1 km).
+2. Query that cell **and its eight neighbours** with prefix matches —
+   `WHERE geohash LIKE 'tdr1v9%'` is a range scan on a normal B-tree index.
+3. Compute the exact distance for the candidates and drop those outside the
+   radius.
+
+Why the neighbours? Two points a few metres apart can sit on opposite sides
+of a cell boundary and share no prefix at all. Checking the 3 × 3 block
+covers every point within one cell width. Neighbour cells are computed with
+a small lookup table or by decoding and re-encoding offset points.
+
+Two more caveats: cells get narrower towards the poles, because lines of
+longitude converge; and the order cells are visited in (a Z-order curve)
+sometimes jumps, so "adjacent string" doesn't always mean "adjacent cell".
+
+Redis' `GEOSEARCH` uses this idea, with a 52-bit integer geohash in a
+sorted set.
+
+## Quadtrees: split where the data is
+
+A fixed grid has a problem: a cell in central Mumbai might hold 20,000
+restaurants while one in the ocean holds none. A **quadtree** adapts to
+density instead:
+
+- Start with one square covering everything.
+- When a square holds more than *k* points (say 100), split it into four
+  quadrants and move its points down.
+- Repeat. Dense cities end up as deep, small cells; empty areas stay as
+  large ones.
+
+```
+          [world]
+        /   |   |   \
+     NW    NE   SW    SE
+          / | | \
+        ...  (only dense quadrants keep splitting)
+```
+
+To answer "within 2 km", walk down from the root and visit only the nodes
+whose square intersects the search circle. The tree stays shallow — about
+log₄(n / k) levels — so a search touches a handful of nodes.
+
+Quadtrees usually live in memory in a dedicated location service, rebuilt or
+updated incrementally. That suits data that's read far more than it changes,
+such as business listings.
+
+## Which one?
+
+- **Geohash** works with any database that has a string index, shards
+  naturally by prefix, and is easy to cache by cell. Cells are fixed-size, so
+  very dense areas need extra handling.
+- **Quadtrees** adapt to density and answer k-nearest queries well, but
+  they're an in-memory structure you have to build and maintain.
+- **Google's S2** and **Uber's H3** are production-grade versions of the
+  same ideas: S2 maps the sphere onto a cube and uses a Hilbert curve, which
+  preserves locality better than geohash's Z-order. H3 uses hexagons, whose
+  neighbours are all the same distance away.
+- **PostGIS** (R-tree indexes through GiST) is the answer when you already
+  run Postgres and need real geometry: polygons, routes, intersections.
+
+## Moving objects
+
+Drivers in a ride-hailing app move every few seconds. Rewriting a tree or a
+database row on every move is wasteful. The usual design keeps current
+locations in memory — Redis keyed by geohash cell, or an in-memory grid per
+city — and updates them in place. Durable storage gets a sampled history for
+analytics.
+
+"Find nearby drivers" then becomes: compute the rider's cell, read that cell
+and its neighbours, and rank the candidates by estimated arrival time, not
+straight-line distance.
+
+Try the ride-hailing prompt in the
+[system design practice tool](/tools/system-design) to put this together
+with the rest of the system.

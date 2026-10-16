@@ -1,0 +1,141 @@
+---
+title: "Property Descriptors, Object.freeze and Read-Only Data"
+publishedAt: "2026-10-16"
+summary: "Every JavaScript property has hidden flags — writable, enumerable, configurable — plus optional getters and setters. How Object.defineProperty sets them, why freeze is shallow, how freeze, seal and preventExtensions differ, and when TypeScript's readonly is the better tool."
+tags: "JavaScript"
+---
+
+A property looks like a name and a value. Underneath, each one also has
+flags that decide whether it can be changed, whether it shows up when you
+list an object's keys, and whether it can be deleted or redefined. Those
+flags are the property's **descriptor**:
+
+```javascript
+Object.getOwnPropertyDescriptor({ port: 5432 }, 'port')
+// { value: 5432, writable: true, enumerable: true, configurable: true }
+```
+
+Most code never touches them. But they explain how built-ins behave, how
+`Object.freeze` works, and why some assignments fail silently.
+
+<DescriptorsVisualizer />
+
+## The three flags
+
+- **writable** — can the value be changed by assignment?
+- **enumerable** — does the property appear in `Object.keys`, `for…in`,
+  spread, and `JSON.stringify`?
+- **configurable** — can the property be deleted, or its flags changed?
+  Once false, it's permanent: you can't set it back to true.
+
+Properties created by assignment or an object literal get `true` for all
+three. Properties created with `Object.defineProperty` default to `false`
+for any flag you don't specify — a common surprise:
+
+```javascript
+const config = {}
+Object.defineProperty(config, 'apiUrl', { value: 'https://api.example.com' })
+
+Object.getOwnPropertyDescriptor(config, 'apiUrl')
+// { value: 'https://api.example.com', writable: false, enumerable: false, configurable: false }
+```
+
+## Accessor properties
+
+Instead of `value` and `writable`, a property can have `get` and `set`
+functions — an **accessor**. Reading runs the getter; assigning runs the
+setter:
+
+```javascript
+const thermostat = {
+  _celsius: 21,
+  get celsius() { return this._celsius },
+  set celsius(v) {
+    if (typeof v !== 'number') throw new TypeError('celsius must be a number')
+    this._celsius = v
+  },
+}
+
+thermostat.celsius = 'warm'   // TypeError: celsius must be a number
+```
+
+Class `get` and `set` members create accessors on the prototype. Frameworks
+have used them for reactivity: Vue 2 rewrote each data property as an
+accessor so that reads and writes could be tracked. (Vue 3 switched to
+[Proxies](/blog/javascript-proxy-and-reflect), which can also see new
+properties.)
+
+## Strict mode turns silent failures into errors
+
+Assigning to a non-writable property **fails silently** in sloppy-mode
+scripts. In strict mode — every ES module and class body is strict — it
+throws:
+
+```
+TypeError: Cannot assign to read only property 'apiUrl' of object '#<Object>'
+```
+
+The same applies to adding properties to a non-extensible object and
+deleting non-configurable ones. If you've ever seen an assignment "not
+work" with no error, a descriptor in sloppy mode is a likely cause.
+
+## Locking whole objects
+
+Three built-ins apply restrictions to every property at once:
+
+<Table
+  data={{
+    headers: ['', 'add properties', 'delete properties', 'change values'],
+    rows: [
+      ['Object.preventExtensions', 'no', 'yes', 'yes'],
+      ['Object.seal', 'no', 'no', 'yes'],
+      ['Object.freeze', 'no', 'no', 'no'],
+    ],
+  }}
+/>
+
+`Object.freeze` makes every data property non-writable and
+non-configurable, and the object non-extensible. `Object.isFrozen`,
+`isSealed` and `isExtensible` check the state.
+
+**All three are shallow.** A frozen object's nested objects are untouched:
+
+```javascript
+const settings = Object.freeze({ port: 5432, db: { host: 'a' } })
+settings.db.host = 'b'      // works — settings.db isn't frozen
+```
+
+A deep freeze has to recurse:
+
+```javascript
+function deepFreeze(obj) {
+  for (const value of Object.values(obj)) {
+    if (value && typeof value === 'object' && !Object.isFrozen(value)) deepFreeze(value)
+  }
+  return Object.freeze(obj)
+}
+```
+
+## Freeze or `readonly`?
+
+TypeScript's `readonly` modifier, `Readonly<T>` and `as const` catch writes
+at compile time, at zero runtime cost:
+
+```typescript
+const settings = { port: 5432, db: { host: 'a' } } as const
+settings.db.host = 'b'   // error: Cannot assign to 'host' because it is a read-only property
+```
+
+They disappear after compilation, though, so they don't protect against
+plain JavaScript callers or data from outside. A reasonable split:
+
+- Use `readonly` and `as const` throughout your own TypeScript code.
+- Use `Object.freeze` at real boundaries: constants exported from a library,
+  configuration objects shared across modules, and values you hand to
+  untrusted code.
+- For state that changes over time, prefer creating new objects to mutating
+  old ones — see [immutability and structural sharing](/blog/immutability-and-structural-sharing).
+
+Freezing also makes intent clear in tests: if some code is quietly mutating
+a shared fixture, freezing the fixture turns that bug into an immediate
+`TypeError` in strict mode.

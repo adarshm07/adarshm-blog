@@ -1,0 +1,109 @@
+---
+title: "OAuth 2.0 and PKCE: 'Sign in with…' Step by Step"
+publishedAt: "2026-10-16"
+summary: "How an app gets permission to act on your behalf at another service without ever seeing your password. The authorization code flow, why PKCE protects the code in transit, what state, scopes, access and refresh tokens are for, and how OpenID Connect adds login on top."
+tags: "Web"
+---
+
+When an app says "Connect your Google Calendar", it needs to read your
+calendar. The old way was to ask for your Google password — which gives the
+app everything, forever, until you change it. **OAuth 2.0** replaces that
+with a token: limited to what you approved, short-lived, and revocable,
+issued without the app ever seeing your password.
+
+## The roles
+
+- **Resource owner**: you.
+- **Client**: the app that wants access.
+- **Authorization server**: where you log in and approve
+  (`accounts.google.com`, for example).
+- **Resource server**: the API holding your data (the Calendar API).
+
+## The authorization code flow, with PKCE
+
+<OAuthPkceVisualizer />
+
+## The pieces, and what each one stops
+
+**Redirects through the browser.** You log in on the provider's own page,
+in your browser. The app never handles your credentials, and the provider
+can show you exactly what's being requested.
+
+**Scopes.** `scope=calendar.read` asks for read access to calendars and
+nothing else. The consent screen shows it, and the resulting token is
+limited to it. Ask for the narrowest scopes that work.
+
+**`state`.** A random value the app generates, stores, and checks when the
+redirect comes back. Without it, an attacker can complete a flow with *their*
+authorization code and get it into your session — a login CSRF.
+
+**The authorization code.** It's short-lived (often a minute or less) and
+single-use. It travels through the browser, so it might leak, which is why
+it isn't the token itself. The app exchanges it for tokens in a
+back-channel request.
+
+**PKCE** (Proof Key for Code Exchange, RFC 7636, pronounced "pixie"). Before
+the flow starts, the app creates a random `code_verifier` and sends only its
+SHA-256 hash, the `code_challenge`. To redeem the code it must present the
+verifier. Someone who intercepted the code — another app on a phone that
+registered the same redirect URL, or a leaked log — doesn't have the
+verifier, so the code is worthless to them.
+
+```javascript
+// base64url(bytes): standard base64 with + → -, / → _, and no = padding
+const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)))
+const challenge = base64url(new Uint8Array(
+  await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))
+))
+// /authorize?…&code_challenge=${challenge}&code_challenge_method=S256
+// /token     …&code_verifier=${verifier}
+```
+
+PKCE was designed for mobile and single-page apps, which can't keep a client
+secret: anything shipped in an app can be extracted. It's now recommended
+for every client, including servers that also have a secret. The OAuth 2.1
+draft makes it mandatory.
+
+## Tokens
+
+- **Access token**: sent to the API as `Authorization: Bearer …`. Short-lived
+  — minutes to an hour. Often a [JWT](/blog/jwt-explained), but it doesn't
+  have to be; to the client it's an opaque string.
+- **Refresh token**: used to get new access tokens without involving you
+  again. Long-lived, so store it carefully (server-side if possible), and
+  expect it to be **rotated**: each use returns a new one and invalidates
+  the old.
+
+Revoking the app's access in your account settings kills its refresh token;
+the access token expires soon after.
+
+## Flows to avoid
+
+- **Implicit flow**: returned the access token directly in the redirect URL,
+  where it could leak through history and referrers. Deprecated — use the
+  code flow with PKCE.
+- **Resource owner password flow**: the app collects your password and
+  exchanges it for a token, defeating the purpose. Deprecated.
+- **Client credentials** is fine, but it's for machine-to-machine access
+  with no user involved — a backend service calling another API as itself.
+
+## OAuth is authorization; OpenID Connect adds login
+
+OAuth answers "may this app access my calendar?". It doesn't say who you
+are: an access token is for the API, not for the app to read your identity
+from.
+
+**OpenID Connect** (OIDC) is a layer on top. Add `scope=openid` and the token
+response also includes an **ID token**, a JWT meant for the client, with
+claims like `sub` (a stable user ID), `email` and `name`. The client verifies
+it — signature, `iss`, `aud` equal to its own client ID, `exp`, and a `nonce`
+it sent in the request. "Sign in with Google" is OIDC.
+
+## In practice
+
+Don't implement the protocol by hand. Use your provider's SDK or a certified
+library (`openid-client` in Node, Auth.js for Next.js), register exact
+redirect URLs (no wildcards), request minimal scopes, and keep tokens off
+the browser where you can — a backend-for-frontend that holds tokens and
+gives the browser an `HttpOnly` [session cookie](/blog/cookies-and-sessions)
+is the most robust shape for web apps.

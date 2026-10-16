@@ -147,6 +147,44 @@ import {
   StateMachineVisualizer,
   StrategyVisualizer,
 } from '@/app/components/design-visualizers'
+import { GeohashVisualizer } from '@/app/components/geo-graph-visualizers'
+import {
+  ChatSystemVisualizer,
+  ConnectionPoolVisualizer,
+  LoadSheddingVisualizer,
+  NewsFeedVisualizer,
+  NotificationSystemVisualizer,
+  ReadYourWritesVisualizer,
+  SnowflakeVisualizer,
+  UrlShortenerVisualizer,
+  WalVisualizer,
+} from '@/app/components/case-study-visualizers'
+import {
+  BipartiteVisualizer,
+  KWayMergeVisualizer,
+  LcaVisualizer,
+  LcsVisualizer,
+  SccVisualizer,
+} from '@/app/components/graph-algo-visualizers'
+import {
+  DependencyInjectionVisualizer,
+  FactoryBuilderVisualizer,
+  OverloadsVisualizer,
+  TspBitmaskVisualizer,
+  VarianceVisualizer,
+} from '@/app/components/pattern-ts-visualizers'
+import { AttentionVisualizer } from '@/app/components/attention-visualizer'
+import {
+  CsrfVisualizer,
+  DecoratorsVisualizer,
+  DescriptorsVisualizer,
+  JwtVisualizer,
+  KvCacheVisualizer,
+  McpVisualizer,
+  OAuthPkceVisualizer,
+  PrivateFieldsVisualizer,
+  SymbolsVisualizer,
+} from '@/app/components/web-js-ai-visualizers'
 import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
@@ -407,6 +445,36 @@ const components = {
   SagaVisualizer,
   EstimationVisualizer,
   HybridSearchVisualizer,
+  UrlShortenerVisualizer,
+  ChatSystemVisualizer,
+  NewsFeedVisualizer,
+  NotificationSystemVisualizer,
+  GeohashVisualizer,
+  SnowflakeVisualizer,
+  WalVisualizer,
+  ReadYourWritesVisualizer,
+  ConnectionPoolVisualizer,
+  LoadSheddingVisualizer,
+  SccVisualizer,
+  BipartiteVisualizer,
+  LcsVisualizer,
+  LcaVisualizer,
+  TspBitmaskVisualizer,
+  KWayMergeVisualizer,
+  FactoryBuilderVisualizer,
+  DependencyInjectionVisualizer,
+  OverloadsVisualizer,
+  VarianceVisualizer,
+  PrivateFieldsVisualizer,
+  SymbolsVisualizer,
+  DescriptorsVisualizer,
+  DecoratorsVisualizer,
+  JwtVisualizer,
+  OAuthPkceVisualizer,
+  CsrfVisualizer,
+  AttentionVisualizer,
+  KvCacheVisualizer,
+  McpVisualizer,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {

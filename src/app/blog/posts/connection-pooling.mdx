@@ -1,0 +1,104 @@
+---
+title: "Connection Pooling: Why Your App Shouldn't Open a Connection per Request"
+publishedAt: "2026-10-16"
+summary: "Opening a database connection costs round trips, TLS and authentication, and every open connection costs the database memory. How a pool reuses a few connections across many requests, how to size it, what happens when it's exhausted, and why serverless and many replicas need an external pooler like PgBouncer."
+tags: "System Design"
+---
+
+A typical request handler talks to the database. The naive version opens a
+connection, runs a query, and closes it:
+
+```javascript
+async function handler(req) {
+  const client = new Client(config)
+  await client.connect()       // TCP + TLS + auth: several round trips
+  const result = await client.query('SELECT …', [req.id])
+  await client.end()
+  return result
+}
+```
+
+`connect()` is the expensive part: a TCP handshake, a TLS handshake, then
+authentication and session setup. Depending on the network, that's 20 to 50
+ms before the query even starts — often longer than the query itself. And on
+the database side, each connection has a cost too. Postgres runs a separate
+operating-system process for each one, using several megabytes of memory.
+
+## A pool reuses connections
+
+A **connection pool** opens a few connections and lends them out. A request
+borrows one, runs its queries, and gives it back, already open and
+authenticated for the next request.
+
+<ConnectionPoolVisualizer />
+
+Two numbers define a pool:
+
+- **max** — the most connections it will open. Requests beyond that wait.
+- **acquire timeout** — how long a request will wait for a connection before
+  failing.
+
+## Sizing: smaller than you think
+
+It's tempting to set `max: 100` "to be safe". But a database can only do
+so much at once: it has a fixed number of CPU cores, and many concurrent
+queries mostly compete for the same locks, buffers and disks. Past a point,
+more concurrent queries make each one slower, and total throughput falls.
+
+A widely cited starting point (from the HikariCP project) is:
+
+```
+connections ≈ (CPU cores × 2) + effective spindle count
+```
+
+For a database server with 8 cores and SSDs, that suggests around 17–20
+connections in total — across **all** your app servers. Measure from there:
+raise the limit while throughput rises, stop when latency climbs.
+
+Remember to multiply. Ten app instances, each with a pool of 20, is 200
+connections. Autoscale to 50 instances and it's 1,000 — more than Postgres'
+default `max_connections` of 100, and far past what the database handles
+well.
+
+## When the pool is exhausted
+
+If all connections are busy, new requests queue inside the pool. That's the
+point of the limit: it turns overload into waiting in your app, rather than
+contention inside the database. But the queue needs bounds:
+
+- Set an **acquire timeout** shorter than the request's own timeout, and fail
+  fast — see [load shedding](/blog/load-shedding-and-graceful-degradation).
+- **Hold connections briefly.** Never keep one during an HTTP call to another
+  service, a sleep, or user think-time. A transaction that waits on a slow
+  external API holds a connection the whole time.
+- **Always release.** Use `finally`, or the pool's helper (`pool.query(...)`
+  borrows and releases for you). A code path that leaks a connection
+  eventually drains the pool, and then everything times out.
+
+## External poolers
+
+An in-process pool works per app instance. It doesn't help when there are
+many instances — or when each instance is short-lived, as in serverless
+functions, where every cold start opens new connections.
+
+An **external pooler** sits between the apps and the database and multiplexes
+many client connections onto a few real ones. For Postgres, the usual
+choices are **PgBouncer**, the poolers built into managed services, and proxies
+such as RDS Proxy. Their **transaction pooling** mode assigns a server
+connection only for the duration of a transaction, so thousands of client
+connections can share a few dozen database connections.
+
+The catch is session state. In transaction mode, the next transaction may
+run on a different server connection, so anything tied to the session
+breaks: `SET` variables, advisory locks, `LISTEN`, and (in older PgBouncer
+versions) prepared statements. Use transaction-scoped `SET LOCAL`, or session
+mode for the few clients that need it.
+
+## The same idea everywhere
+
+Pooling applies to anything expensive to open and safe to reuse: HTTP
+clients keep TCP and TLS connections alive between requests (HTTP keep-alive,
+and connection reuse in [HTTP/2](/blog/http2-vs-http3)), Redis clients reuse
+connections, and thread pools reuse threads. The design questions are the
+same each time: how many, how long to wait, and what happens when they run
+out.

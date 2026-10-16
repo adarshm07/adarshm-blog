@@ -1,0 +1,116 @@
+---
+title: "System Design Case Study: A Notification System"
+publishedAt: "2026-10-16"
+summary: "One service that sends push, email and SMS for every other team: an API by notification type, user preferences and quiet hours, deduplication, per-channel queues, retries with a dead-letter queue, provider failover, and delivery tracking."
+tags: "System Design"
+---
+
+Every product sends notifications: "Your order has shipped", "Someone
+replied", password resets, weekly digests. Left alone, each team calls an
+email or push provider directly, and users get duplicates, messages at 3 a.m.,
+and marketing they unsubscribed from. A shared notification service fixes
+that by owning the rules in one place.
+
+## Requirements
+
+**Functional**
+
+- Other services request notifications by **type** and **recipient**
+  ("order_shipped" to user 7), not by channel.
+- Channels: push (iOS and Android), email, SMS, in-app.
+- Users control preferences per type and channel; quiet hours; unsubscribe.
+- Templates with localisation.
+- Delivery status per notification.
+
+**Non-functional**: transactional messages (password reset, 2FA codes) within
+seconds; no duplicates; one slow provider must not delay the others; survive
+provider outages.
+
+**Scale**: say 50 million notifications a day, with bursts — a marketing
+campaign might enqueue 10 million at once.
+
+## The API
+
+```
+POST /notifications
+{
+  "type": "order_shipped",
+  "userId": 7,
+  "data": { "orderId": "ord-55", "eta": "Oct 18" },
+  "idempotencyKey": "ord-55:shipped"
+}
+→ 202 Accepted
+```
+
+Callers describe *what happened*. The service decides whether, how and when
+to tell the user. That keeps channel logic, preferences and templates out of
+every other team's code.
+
+## The flow
+
+<NotificationSystemVisualizer />
+
+## The pieces
+
+**Deduplication.** Callers retry, and events are delivered at least once, so
+the same request will arrive twice. Store each `idempotencyKey` with a TTL
+and drop repeats — the [idempotency key](/blog/idempotency-keys) pattern.
+
+**Preferences and rules.** Before anything is queued, check:
+
+- the user's preferences for this type and channel;
+- quiet hours in the user's time zone (and delay rather than drop);
+- rate limits — no more than N pushes an hour, whatever the source;
+- priority — a 2FA code ignores quiet hours, and a digest never does.
+
+**Per-channel queues and workers.** Push, email and SMS each get their own
+queue and worker pool. Channels have very different speeds and failure
+modes, and a backlog in one shouldn't block the others. Transactional and
+bulk traffic get separate queues as well, so a 10-million-message campaign
+can't delay a password reset.
+
+**Templates.** Rendering — localisation, user names, links — happens in the
+worker, from versioned templates. Callers send data, not finished text.
+
+**Retries and the dead-letter queue.** Providers return errors and time out.
+Retry with [exponential backoff and jitter](/blog/retries-backoff-and-jitter),
+but tell retryable errors (503, timeouts) apart from permanent ones (invalid
+address, unregistered device token). After a fixed number of attempts, move
+the job to a **dead-letter queue** for inspection instead of retrying
+forever.
+
+**Provider failover.** For critical channels, configure two providers. A
+[circuit breaker](/blog/circuit-breaker-pattern) per provider routes traffic
+to the backup when the primary's error rate spikes.
+
+**Delivery tracking.** Record each attempt. Providers report bounces,
+deliveries and opens through [webhooks](/blog/webhooks-explained), which
+update the record. Hard bounces and invalid tokens feed back into user data,
+so you stop sending to dead addresses.
+
+## Data model
+
+```
+notifications(id, user_id, type, idempotency_key, data, created_at)
+deliveries(notification_id, channel, provider, status, attempts, last_error, updated_at)
+preferences(user_id, type, channel, enabled)
+device_tokens(user_id, platform, token, last_seen)
+```
+
+## What breaks first
+
+- **Campaign bursts** flood the queues. Rate-limit enqueueing for bulk
+  sends, and respect each provider's own rate limits.
+- **Stale device tokens**: pushes to uninstalled apps fail silently or with
+  specific errors. Prune tokens on those errors.
+- **Exactly once is impossible end to end.** A provider can accept a message
+  and time out before replying, so a retry sends it twice. Dedupe at the
+  provider where possible (many accept an idempotency key), and accept rare
+  duplicates for non-critical types.
+
+## Practise it
+
+"Notification system" is one of the prompts in the
+[system design practice tool](/tools/system-design). Draw the per-channel
+queues and the dead-letter queue, mark them async, and have Claude review
+the design.
