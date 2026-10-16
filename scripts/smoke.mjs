@@ -15,6 +15,8 @@ import { chromium } from 'playwright'
 const BASE_URL = (process.env.BASE_URL ?? 'http://localhost:3000').replace(/\/$/, '')
 const CONCURRENCY = Number(process.env.CONCURRENCY ?? 4)
 const SERVER_WAIT_MS = 60_000
+// Pages deliberately kept out of the sitemap (noindex) that still need testing.
+const EXTRA_PATHS = ['/dsa/progress']
 
 async function waitForServer() {
   const deadline = Date.now() + SERVER_WAIT_MS
@@ -36,7 +38,7 @@ function pathsFromSitemap(xml) {
     const url = new URL(m[1])
     return url.pathname + url.search
   })
-  return [...new Set(paths)]
+  return [...new Set([...paths, ...EXTRA_PATHS])]
 }
 
 async function checkPage(context, path) {
