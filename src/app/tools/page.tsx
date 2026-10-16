@@ -20,8 +20,8 @@ const TOOLS = [
     href: '/tools/system-design',
     name: 'System design practice',
     description:
-      'Answer a real design prompt, then have Claude grade it against a six-part rubric — scores, gaps, and the questions an interviewer would ask next.',
-    note: 'Needs your own API key',
+      'Answer a real design prompt and draw the architecture, then have Claude grade it against a six-part rubric — scores, gaps, and the questions an interviewer would ask next.',
+    note: 'Claude optional',
   },
   {
     href: '/tools/lld',

@@ -104,7 +104,7 @@ utilities. Keep that suffix on any new `.prose` rule.
 | `/about` | `src/app/about/page.tsx` | Bio, personal stack, and how the site is built |
 | `/learn` | `src/app/learn/page.tsx` | Hub listing the guides |
 | `/learn/web`, `/learn/javascript`, `/learn/ai` | `src/app/learn/{web,javascript,ai}/page.tsx` | One-page animated guides. Content lives in `learn/guides/*.tsx` as `Guide` data; `learn/guide.tsx` renders it and checks every chapter's `post` slug at build time |
-| `/tools` | `src/app/tools/` | System design practice (BYOK Claude), LLD practice (class-diagram editor; copy-to-claude.ai or BYOK review), capacity calculator, regex backtracking checker |
+| `/tools` | `src/app/tools/` | System design practice (architecture-diagram editor; copy-to-claude.ai or BYOK grading), LLD practice (class-diagram editor; copy-to-claude.ai or BYOK review), capacity calculator, regex backtracking checker |
 | `/dsa` | `src/app/dsa/page.tsx` | Ordered learning path from `curriculum.ts` |
 | `/dsa/patterns` | `src/app/dsa/patterns/` | Practice questions grouped by pattern, authored as MDX |
 | `/dsa/progress` | `src/app/dsa/progress/page.tsx` | Dashboard over both progress tracks |
@@ -151,7 +151,13 @@ for PNG export) live in `src/app/lib/class-diagram.ts`; the prompt is built
 once in `lib/lld-prompt.ts` and shared by the "Copy & open Claude" path and
 the in-page streaming review. The tool is loaded with `ssr: false`
 (`lld-practice-loader.tsx`) so it can read drafts from localStorage while
-initialising state. `MODELS` in `byok.ts` drives both tools' model picker;
+initialising state. `/tools/system-design` follows the same shape: an
+architecture diagram (`lib/architecture-diagram.ts`, editor in
+`architecture-diagram-editor.tsx`), the prompt in `lib/system-design-prompt.ts`
+(JSON scorecard for the in-page grader, Markdown for claude.ai), per-problem
+drafts, and an `ssr: false` loader. Both tools share `CopyToClaude`
+(`components/tools/copy-to-claude.tsx`) and `lib/clipboard-export.ts` for the
+copy-prompt / open-claude.ai / copy-or-download-PNG buttons. `MODELS` in `byok.ts` drives both tools' model picker;
 `supportsServerFallbacks()` gates the `fallbacks: "default"` beta param.
 
 ### Pagination

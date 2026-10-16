@@ -130,11 +130,11 @@ export function ClassDiagramEditor({
         </span>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-neutral-200 dark:border-neutral-700">
+      <div className="overflow-x-auto rounded-xl border border-neutral-200 dark:border-neutral-700">
         <svg
           ref={localSvg}
           viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`}
-          className="block w-full bg-neutral-50 dark:bg-neutral-950 select-none"
+          className="block w-full min-w-[600px] bg-neutral-50 dark:bg-neutral-950 select-none"
           role="img"
           aria-label="Class diagram"
           onPointerDown={() => setSelected(null)}

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiKeyField } from '@/app/components/tools/api-key-field'
 import { ClassDiagramEditor } from '@/app/components/tools/class-diagram-editor'
+import { CopyToClaude } from '@/app/components/tools/copy-to-claude'
 import { createClient, DEFAULT_MODEL, describeError, supportsServerFallbacks } from '@/app/lib/byok'
 import { EMPTY_DIAGRAM, diagramToSvg, diagramToText, isDiagram, type Diagram } from '@/app/lib/class-diagram'
 import { LLD_PROBLEMS, type LldProblem } from '@/app/lib/lld-problems'
@@ -51,35 +52,6 @@ function initialProblem(): LldProblem {
   }
 }
 
-async function copyText(text: string) {
-  try {
-    await navigator.clipboard.writeText(text)
-    return true
-  } catch {
-    return false // insecure context, permission denied, or no clipboard API
-  }
-}
-
-/** Renders the exported SVG to a 2× PNG blob. */
-function svgToPng(svg: string): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.onload = () => {
-      const scale = 2
-      const canvas = document.createElement('canvas')
-      canvas.width = img.width * scale
-      canvas.height = img.height * scale
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return reject(new Error('Canvas not available'))
-      ctx.scale(scale, scale)
-      ctx.drawImage(img, 0, 0)
-      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('Export failed'))), 'image/png')
-    }
-    img.onerror = () => reject(new Error('Could not render the diagram'))
-    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
-  })
-}
-
 /** Minimal, safe Markdown-ish rendering of the review: text nodes only, never HTML. */
 function ReviewText({ text }: { text: string }) {
   return (
@@ -115,8 +87,6 @@ export function LldPractice() {
   const [review, setReview] = useState('')
   const [status, setStatus] = useState<'idle' | 'thinking' | 'streaming' | 'done'>('idle')
   const [error, setError] = useState('')
-  const [flash, setFlash] = useState('')
-  const [manualCopy, setManualCopy] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   const draft = drafts[problem.slug] ?? emptyDraft()
@@ -147,11 +117,6 @@ export function LldPractice() {
     setError('')
   }
 
-  function showFlash(message: string) {
-    setFlash(message)
-    window.setTimeout(() => setFlash(''), 2500)
-  }
-
   const answer = {
     notes: draft.notes,
     code: draft.code,
@@ -159,44 +124,6 @@ export function LldPractice() {
     diagramText: diagramToText(draft.diagram),
   }
   const isEmpty = !draft.notes.trim() && !draft.code.trim() && draft.diagram.classes.length === 0
-
-  async function copyPrompt(openClaude: boolean) {
-    const prompt = buildLldPastePrompt(problem, answer)
-    // Start the clipboard write while this page still has focus (browsers can
-    // refuse it once a new tab takes focus), then open Claude within the same
-    // click so popup blockers allow it.
-    const copied = copyText(prompt)
-    if (openClaude) window.open('https://claude.ai/new', '_blank', 'noopener,noreferrer')
-    if (await copied) {
-      setManualCopy(null)
-      showFlash(openClaude ? 'Copied — paste it into the new Claude chat' : 'Copied to clipboard')
-    } else {
-      setManualCopy(prompt)
-    }
-  }
-
-  async function exportPng(mode: 'copy' | 'download') {
-    try {
-      const blob = await svgToPng(diagramToSvg(draft.diagram))
-      if (mode === 'copy' && typeof ClipboardItem !== 'undefined') {
-        try {
-          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
-          return showFlash('Diagram image copied — paste it into Claude alongside the prompt')
-        } catch {
-          // fall through to a download
-        }
-      }
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${problem.slug}-class-diagram.png`
-      a.click()
-      URL.revokeObjectURL(url)
-      showFlash(mode === 'copy' ? 'Image copy not supported here — downloaded instead' : 'Diagram downloaded')
-    } catch (err) {
-      setError((err as Error).message)
-    }
-  }
 
   async function runReview() {
     if (!apiKey) return setError('Add your API key in the panel above — or use “Copy & open Claude” instead.')
@@ -363,65 +290,12 @@ export function LldPractice() {
           </p>
         </div>
 
-        <div>
-          <div className="mb-1.5 text-[11px] font-medium uppercase tracking-widest text-neutral-400 dark:text-neutral-500">
-            Option 1 · in Claude, free with your Claude account
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => copyPrompt(true)}
-              disabled={isEmpty}
-              className="rounded-md bg-green-600 dark:bg-green-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-700 dark:hover:bg-green-600 disabled:opacity-50 transition-colors"
-            >
-              Copy &amp; open Claude
-            </button>
-            <button
-              type="button"
-              onClick={() => copyPrompt(false)}
-              disabled={isEmpty}
-              className="rounded-md border border-neutral-200 dark:border-neutral-700 px-3 py-1.5 text-sm text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-neutral-50 disabled:opacity-50 transition-colors"
-            >
-              Copy prompt
-            </button>
-            <button
-              type="button"
-              onClick={() => exportPng('copy')}
-              disabled={draft.diagram.classes.length === 0}
-              className="rounded-md border border-neutral-200 dark:border-neutral-700 px-3 py-1.5 text-sm text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-neutral-50 disabled:opacity-50 transition-colors"
-            >
-              Copy diagram image
-            </button>
-            <button
-              type="button"
-              onClick={() => exportPng('download')}
-              disabled={draft.diagram.classes.length === 0}
-              className="rounded-md px-2 py-1.5 text-xs text-neutral-400 dark:text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-200 disabled:opacity-50 transition-colors"
-            >
-              Download PNG
-            </button>
-          </div>
-          <p className="mt-1.5 text-[11px] leading-relaxed text-neutral-400 dark:text-neutral-500">
-            The prompt already contains the diagram as text, which Claude reads more reliably than a picture. The image
-            is optional.
-          </p>
-          {flash ? <p className="mt-1.5 text-xs text-green-700 dark:text-green-400">{flash}</p> : null}
-          {manualCopy !== null ? (
-            <div className="mt-2">
-              <p className="mb-1 text-xs text-amber-700 dark:text-amber-400">
-                Couldn&apos;t copy automatically — select all of this and copy it:
-              </p>
-              <textarea
-                readOnly
-                value={manualCopy}
-                rows={6}
-                onFocus={(e) => e.currentTarget.select()}
-                aria-label="Prompt to copy"
-                className="w-full rounded-md border border-neutral-200 dark:border-neutral-700 bg-transparent p-2 font-mono text-[10px] text-neutral-600 dark:text-neutral-300"
-              />
-            </div>
-          ) : null}
-        </div>
+        <CopyToClaude
+          getPrompt={() => buildLldPastePrompt(problem, answer)}
+          getSvg={draft.diagram.classes.length > 0 ? () => diagramToSvg(draft.diagram) : null}
+          filename={`${problem.slug}-class-diagram.png`}
+          disabled={isEmpty}
+        />
 
         <div>
           <div className="mb-1.5 text-[11px] font-medium uppercase tracking-widest text-neutral-400 dark:text-neutral-500">
