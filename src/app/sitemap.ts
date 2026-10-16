@@ -13,7 +13,6 @@ export default async function sitemap() {
 
   const questions = getPatternQuestions().map((question) => ({
     url: `${baseUrl}/dsa/patterns/${question.slug}`,
-    lastModified: new Date().toISOString().split('T')[0],
     changeFrequency: 'monthly' as const,
     priority: 0.7,
   }))
@@ -33,10 +32,13 @@ export default async function sitemap() {
     '/tools/regex',
     '/dsa',
     '/dsa/patterns',
-    '/dsa/progress',
+    // /dsa/progress is left out on purpose: it renders from the visitor's
+    // localStorage, so crawlers see an empty page. It is also noindex.
   ].map((route) => ({
+    // No lastModified: stamping the build date on pages that didn't change
+    // teaches Google to ignore lastmod for the whole sitemap. Blog posts keep
+    // their real publishedAt date above.
     url: `${baseUrl}${route}`,
-    lastModified: new Date().toISOString().split('T')[0],
     changeFrequency: 'weekly' as const,
     priority: route === '' ? 1 : 0.9,
   }))

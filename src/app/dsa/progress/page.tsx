@@ -15,6 +15,8 @@ export const metadata = {
   description:
     'Track how far you are through the DSA learning path and the pattern-wise practice set. Progress is stored in your browser.',
   alternates: { canonical: '/dsa/progress' },
+  // Personal, browser-stored dashboard: nothing for a search engine to index.
+  robots: { index: false, follow: true },
   openGraph: {
     title: 'DSA Progress',
     description:
