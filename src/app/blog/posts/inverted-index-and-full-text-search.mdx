@@ -1,0 +1,106 @@
+---
+title: "Inverted Indexes: How Full-Text Search Works"
+publishedAt: "2026-10-17"
+summary: "Why LIKE '%term%' doesn't scale, and what search engines do instead. Tokenising and normalising text, postings lists with positions, fast AND, OR and phrase queries, ranking with BM25, and how Lucene-style engines keep the index updated with immutable segments."
+tags: "System Design"
+---
+
+Searching a table for a word with `WHERE body LIKE '%stampede%'` reads every
+row: a [B-tree index](/blog/database-indexing-explained) can't help with a
+pattern that starts with a wildcard. It also doesn't find "stampedes",
+ignores relevance, and gets slower with every row you add.
+
+Search engines — Elasticsearch, OpenSearch, Solr (all built on Lucene),
+Postgres full-text search, Meilisearch, Typesense — use the same core
+structure instead: an **inverted index**.
+
+## Inverting the data
+
+A normal table maps a document to its words. An inverted index maps each
+**word to the documents** that contain it:
+
+<InvertedIndexVisualizer />
+
+Each term's list of documents is a **postings list**, sorted by document ID.
+Storing the positions of each occurrence as well allows phrase and
+proximity queries.
+
+## Analysis: from text to terms
+
+Before indexing, text goes through an **analyser**:
+
+1. **Tokenise**: split into terms. Easy for English with spaces; harder for
+   Chinese or Japanese, or for code identifiers like `getUserById`.
+2. **Normalise**: lowercase, strip accents (café → cafe).
+3. **Stem or lemmatise** (optional): "stampedes", "stampeding" → "stamped".
+   Improves recall, sometimes at precision's cost.
+4. **Stop words** (optional): drop "the", "a", "of". Less common now — they
+   matter for phrases like "to be or not to be".
+
+The same analyser must run on queries, so "Stampedes" in a query matches
+"stampede" in a document. Most search bugs ("why doesn't X find Y?") are
+analyser mismatches.
+
+## Answering queries
+
+- **AND** (`cache stampede`): intersect the postings lists. Both are sorted,
+  so it's a linear merge — and with **skip pointers**, the longer list can
+  be jumped through rather than scanned. Start with the rarest term: its
+  list is shortest.
+- **OR**: union the lists.
+- **Phrase** (`"cache stampede"`): intersect, then check positions are
+  adjacent.
+- **Prefix** (`stamp*`): terms are kept in a sorted dictionary (Lucene uses a
+  compact finite-state transducer), so all terms starting with "stamp" are
+  one range. Typo tolerance uses the same dictionary with
+  [edit distance](/blog/edit-distance-levenshtein) automata.
+
+## Ranking
+
+Matching gives a set; users want the best results first. **BM25** is the
+standard scoring function (Lucene's default). Per query term, it rewards:
+
+- **rarity** of the term across the collection (inverse document frequency);
+- **frequency** in this document, with diminishing returns;
+- **shorter documents**, slightly — a term in a title-length document says
+  more than the same term once in a book.
+
+On top of that, real search adds field boosts (a match in the title counts
+more than in the body), recency, popularity, and increasingly a second
+stage: [hybrid search](/blog/hybrid-search-and-rank-fusion) with vectors,
+and [rerankers](/blog/reranking-with-cross-encoders).
+
+## Keeping the index updated
+
+Postings lists are sorted and compressed (delta-encoding document IDs, then
+packing the small numbers into few bits). Inserting into the middle of
+compressed lists is expensive. Lucene's answer resembles an
+[LSM tree](/blog/lsm-trees-and-write-optimized-storage):
+
+- New documents are buffered in memory, then written as a new, immutable
+  **segment** — a small index of its own.
+- A search queries every segment and merges the results.
+- Background **merges** combine small segments into larger ones.
+- Deletes are marks in a bitmap; the documents disappear when their segment
+  is merged. An update is a delete plus an add.
+
+This is why Elasticsearch is "near real-time": a new document becomes
+searchable when its segment is opened, after the refresh interval (one
+second by default), not instantly.
+
+## Scaling out
+
+An index too big for one machine is split into **shards** by document. A
+query goes to every shard; each returns its top results, and a coordinator
+merges them — a [k-way merge](/blog/k-way-merge-with-a-heap) by score.
+Replicas of each shard handle read load and failover.
+
+## When you need a search engine
+
+- **A few thousand rows, simple matching**: Postgres full-text search
+  (`tsvector` with a GIN index) or SQLite's FTS5 — no extra system to run.
+- **Typo tolerance, facets, relevance tuning, large scale**: a dedicated
+  engine, fed from your database by change-data-capture or the
+  [outbox pattern](/blog/dual-writes-and-the-outbox-pattern). Treat it as a
+  derived index that can be rebuilt from the source of truth, never as the
+  primary store.

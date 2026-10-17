@@ -1,0 +1,129 @@
+---
+title: "Runtime Validation with Zod: Types That Survive the Network"
+publishedAt: "2026-10-17"
+summary: "TypeScript types disappear at runtime, so data from requests, APIs, storage and environment variables is unchecked until you check it. How a Zod schema validates that data, produces the TypeScript type, reports precise errors, and transforms input — and where in an app to put the checks."
+tags: "TypeScript"
+---
+
+This code type-checks perfectly:
+
+```typescript
+type Order = { id: string; items: { sku: string; qty: number }[] }
+
+const order = (await req.json()) as Order
+const total = order.items.reduce((sum, i) => sum + i.qty, 0)
+```
+
+And it crashes when a client sends `{"id": 42}`, because `items` is
+undefined. The `as Order` didn't check anything. It told the compiler to
+trust you. TypeScript's types are
+[erased at compile time](/blog/typescript-types-at-compile-time), so at
+runtime there's nothing left to check with.
+
+Every value that crosses a boundary into your program is like this: request
+bodies, API responses, `localStorage`, environment variables, files, messages
+from a queue, and [LLM output](/blog/structured-outputs-from-llms).
+**Runtime validation** checks such data once, at the edge, so the rest of the
+code can trust its types.
+
+## A schema is a type you can run
+
+[Zod](https://zod.dev) is the most widely used library for this in
+TypeScript. You describe the shape once, as a value:
+
+<ZodVisualizer />
+
+The output shown is real: these are the messages Zod 4 produces for that
+input.
+
+## parse or safeParse
+
+- `Order.parse(data)` returns typed data or throws a `ZodError`. Good when
+  invalid data is a bug — your own config, say.
+- `Order.safeParse(data)` returns `{ success: true, data }` or
+  `{ success: false, error }`. Good when invalid input is expected — user
+  input and requests.
+
+A request handler typically looks like this:
+
+```typescript
+app.post('/orders', async (req, res) => {
+  const result = Order.safeParse(req.body)
+  if (!result.success) {
+    return res.status(400).json({ errors: z.flattenError(result.error).fieldErrors })
+  }
+  const order = result.data          // typed as Order from here on
+  await createOrder(order)
+  res.status(201).end()
+})
+```
+
+`z.prettifyError(error)` gives a readable multi-line summary for logs.
+
+## More than types
+
+Schemas can express rules the type system can't:
+
+```typescript
+const Signup = z
+  .object({
+    email: z.email(),
+    password: z.string().min(12),
+    confirm: z.string(),
+    age: z.coerce.number().int().min(13),   // "42" from a form → 42
+  })
+  .refine((d) => d.password === d.confirm, {
+    message: 'Passwords do not match',
+    path: ['confirm'],
+  })
+```
+
+- **Constraints**: lengths, ranges, formats (`z.email()`, `z.uuid()`,
+  `z.url()`), regexes.
+- **Coercion**: `z.coerce.number()` turns `"42"` into `42` — handy for query
+  strings and form data, where everything arrives as a string.
+- **Defaults and transforms**: `.default(10)`, `.transform((s) => s.trim())`.
+- **Cross-field rules**: `.refine()` with a path, so the error lands on the
+  right field.
+- **Unions**: `z.discriminatedUnion('type', [...])` validates
+  [discriminated unions](/blog/discriminated-unions-in-typescript) and
+  narrows them correctly.
+
+By default, an object schema **strips unknown keys**. A client can't slip an
+`isAdmin: true` through to your database. Use `z.strictObject` to reject
+unknown keys instead.
+
+## Where to validate
+
+Validate **at the boundaries, once**:
+
+- **Incoming requests** — in each handler, or in middleware.
+- **Responses from APIs you don't control** — they change without telling
+  you, and a validation error that names the field is easier to debug than a
+  crash three functions later.
+- **Environment variables at startup**: fail fast with a clear message
+  instead of a mysterious `undefined` in production.
+
+```typescript
+const Env = z.object({
+  DATABASE_URL: z.url(),
+  PORT: z.coerce.number().default(3000),
+  NODE_ENV: z.enum(['development', 'test', 'production']),
+})
+export const env = Env.parse(process.env)
+```
+
+- **Stored data** you read back (`localStorage`, cached JSON), because its
+  shape may come from an older version of your app.
+
+Inside the boundary, don't re-validate. Pass the typed values around and
+let TypeScript do its job.
+
+## Schemas as a shared contract
+
+The same schema can validate a form on the client and the request on the
+server, generate JSON Schema (`z.toJSONSchema()`) for documentation or
+[tool definitions](/blog/tool-calling-explained), and drive
+[structured outputs](/blog/structured-outputs-from-llms) from an LLM.
+Alternatives such as Valibot (smaller bundles) and ArkType take the same
+approach. Pick one and use it at every edge where data enters.

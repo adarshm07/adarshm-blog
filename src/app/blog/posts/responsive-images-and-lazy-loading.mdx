@@ -1,0 +1,114 @@
+---
+title: "Responsive Images: srcset, sizes, Modern Formats and Lazy Loading"
+publishedAt: "2026-10-17"
+summary: "Images are usually the heaviest part of a page. How srcset and sizes let the browser download the right resolution for each screen, when to use <picture> for formats and art direction, how width and height prevent layout shift, and why the hero image should never be lazy-loaded."
+tags: "Web"
+---
+
+On most websites, images are a large share of the bytes downloaded. The
+same 1600-pixel hero image sent to a desktop monitor and to a small phone
+wastes data, battery and time on the phone — and on a high-density phone
+screen, a small image looks blurry. Responsive images let the browser pick
+the right file for each device.
+
+## srcset and sizes
+
+Instead of one `src`, offer several widths and describe how big the image
+will be shown:
+
+<ResponsiveImagesVisualizer />
+
+The browser combines three things: the candidate widths from `srcset`, the
+display width from `sizes`, and the device's pixel ratio. It then picks a
+suitable file — usually the smallest that's sharp enough. The exact choice
+is left to the browser, which may also consider the network or a cached
+higher-resolution copy.
+
+Getting `sizes` right matters. It's a list of media conditions and widths,
+read left to right, and the first match wins:
+
+```html
+sizes="(max-width: 600px) 100vw,
+       (max-width: 1200px) 50vw,
+       600px"
+```
+
+Leave `sizes` out and the browser assumes `100vw`, picking a full-viewport
+image even for a thumbnail in a sidebar. If your layout uses fixed widths,
+`sizes` can simply be that width.
+
+For fixed-size images, like an avatar always shown at 64 CSS pixels, use
+density descriptors instead:
+
+```html
+<img src="avatar-64.jpg" srcset="avatar-64.jpg 1x, avatar-128.jpg 2x, avatar-192.jpg 3x" alt="Asha">
+```
+
+## Modern formats with `<picture>`
+
+**WebP** and **AVIF** typically produce much smaller files than JPEG at
+similar quality, and both are supported by current versions of all major
+browsers. `<picture>` lets you offer them with a fallback:
+
+```html
+<picture>
+  <source type="image/avif" srcset="hero-800.avif 800w, hero-1600.avif 1600w" sizes="(max-width: 600px) 100vw, 600px">
+  <source type="image/webp" srcset="hero-800.webp 800w, hero-1600.webp 1600w" sizes="(max-width: 600px) 100vw, 600px">
+  <img src="hero-800.jpg" srcset="hero-800.jpg 800w, hero-1600.jpg 1600w" sizes="(max-width: 600px) 100vw, 600px"
+       width="1600" height="900" alt="A mountain lake at sunrise">
+</picture>
+```
+
+The browser uses the first `<source>` whose type it supports. The `<img>`
+inside is required: it's what actually renders, and it carries `alt`,
+`width`, `height` and `loading`.
+
+`<picture>` also handles **art direction** — a different crop, not just a
+different size — with `media` conditions: a tight portrait crop on phones, a
+wide landscape on desktops.
+
+## Prevent layout shift
+
+Always set `width` and `height` (the intrinsic size, in pixels). Modern
+browsers use them to compute the aspect ratio before the image loads, so
+the space is reserved and text below doesn't jump when it arrives. With CSS
+like `img { max-width: 100%; height: auto; }`, the image still scales
+responsively. Missing dimensions are a common cause of poor
+[Cumulative Layout Shift](/blog/core-web-vitals).
+
+## Lazy loading — and when not to
+
+`loading="lazy"` tells the browser to fetch an image only as it nears the
+viewport. For long pages with many images below the fold, that saves a lot
+of bandwidth.
+
+But **never lazy-load the image that is your Largest Contentful Paint** —
+usually the hero at the top. The browser would wait for layout to know it's
+visible before fetching it. For the LCP image, do the opposite:
+
+```html
+<img src="hero-1200.jpg" srcset="…" sizes="…" fetchpriority="high" alt="…">
+```
+
+`fetchpriority="high"` moves it ahead of other images in the download
+queue.
+
+## Let a tool do it
+
+Generating four widths in three formats for every image by hand doesn't
+scale. Image CDNs (Cloudinary, imgix, Cloudflare Images) and framework
+components do it on request. In Next.js, `next/image` generates `srcset`,
+serves WebP or AVIF where supported, requires dimensions, and lazy-loads by
+default — with a `priority` prop (`preload` in newer versions) for the LCP
+image.
+
+## Checklist
+
+- `srcset` with real widths, and a `sizes` that matches your layout.
+- AVIF or WebP, with a fallback.
+- `width` and `height` on every image.
+- `loading="lazy"` below the fold; `fetchpriority="high"` for the hero.
+- Meaningful `alt` text, or `alt=""` for decoration — see
+  [accessibility fundamentals](/blog/web-accessibility-fundamentals).
+- Compress: a quality setting around 75–80 is usually indistinguishable from
+  100 at a fraction of the size.

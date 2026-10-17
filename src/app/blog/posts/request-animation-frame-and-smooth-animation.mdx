@@ -1,0 +1,126 @@
+---
+title: "requestAnimationFrame and Smooth JavaScript Animation"
+publishedAt: "2026-10-17"
+summary: "Why setInterval animations stutter, how requestAnimationFrame syncs your code with the display's refresh, why movement should depend on elapsed time rather than frame count, what to animate so the browser can skip layout, and when CSS or the Web Animations API is the better tool."
+tags: "JavaScript"
+---
+
+A screen refreshes at a fixed rate — 60 times a second on many displays, 90,
+120 or 144 on others. Smooth animation means updating exactly once per
+refresh, finishing your work before the browser paints. Miss that window
+and the frame is late: the user sees a stutter, called **jank**.
+
+`requestAnimationFrame` (rAF) exists to hit that window:
+
+```javascript
+function frame(timestamp) {
+  // update positions, then let the browser paint
+  requestAnimationFrame(frame)
+}
+requestAnimationFrame(frame)
+```
+
+The browser calls your function once before each paint, and passes the
+current time.
+
+<AnimationFrameVisualizer />
+
+## Why not setInterval?
+
+`setInterval(update, 16)` runs on a timer that knows nothing about the
+display:
+
+- 16 ms isn't 16.67 ms, so the timer slowly drifts against the refresh
+  rate. Some frames get two updates and others none.
+- Timers are delayed by anything else on the
+  [event loop](/blog/javascript-event-loop), so callbacks bunch up.
+- On a 120 Hz screen, you're updating at half the possible rate.
+- It keeps firing in background tabs (throttled), wasting battery.
+
+`requestAnimationFrame` matches the display's actual rate, runs right before
+paint, and pauses in hidden tabs.
+
+## Move by time, not by frame
+
+The most common bug in hand-written animation is moving a fixed amount each
+frame:
+
+```javascript
+x += 5   // 300 px/s at 60 Hz… 600 px/s at 120 Hz
+```
+
+Use the timestamp instead. Compute how much time has passed since the last
+frame, and move by speed × time:
+
+```javascript
+let last = performance.now()
+
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.1)   // seconds, clamped
+  last = now
+  x += SPEED * dt
+  box.style.transform = `translateX(${x}px)`
+  requestAnimationFrame(frame)
+}
+```
+
+The clamp matters: after a tab has been hidden, the first `dt` can be
+seconds long, and objects would jump across the screen. For physics
+simulations, a fixed timestep (run the simulation in steps of, say, 1/120
+second, as many as fit into the elapsed time) keeps the results stable.
+
+For animations with a fixed duration, compute progress from the start time
+and apply an easing function:
+
+```javascript
+function animate(el, from, to, duration) {
+  const start = performance.now()
+  const ease = (t) => 1 - Math.pow(1 - t, 3)   // ease-out cubic
+  requestAnimationFrame(function step(now) {
+    const t = Math.min((now - start) / duration, 1)
+    el.style.transform = `translateX(${from + (to - from) * ease(t)}px)`
+    if (t < 1) requestAnimationFrame(step)
+  })
+}
+```
+
+## Keep each frame cheap
+
+At 60 Hz you have about 16.7 ms per frame, and the browser needs part of
+that for its own work. Your callback should take a few milliseconds at most.
+
+**Animate `transform` and `opacity`.** Changing `left`, `top`, `width` or
+`margin` makes the browser recalculate layout and repaint every frame.
+`transform` and `opacity` can be handled by the compositor, often on the GPU,
+skipping both. See [the rendering pipeline](/blog/rendering-pipeline-reflow-repaint).
+
+**Don't read layout after writing it.** Reading `offsetWidth` or
+`getBoundingClientRect()` after changing styles forces the browser to
+compute layout immediately, in the middle of your frame. Do all reads first,
+then all writes.
+
+**Move heavy work elsewhere.** Long calculations belong in a
+[Web Worker](/blog/web-workers-off-the-main-thread), with only the results
+applied in rAF.
+
+**Coalesce input.** `scroll` and `pointermove` can fire more often than
+frames. Store the latest value in the event handler, and apply it once in a
+rAF callback.
+
+## Often you don't need JavaScript
+
+- **CSS transitions and animations** cover most UI motion — hovers, menus,
+  toasts — and the browser can run them on the compositor even when the main
+  thread is busy.
+- **The Web Animations API** (`element.animate(keyframes, options)`) gives
+  CSS-animation performance with JavaScript control: play, pause, reverse,
+  and a `finished` promise.
+- **View Transitions** animate between two states of the page, including
+  across navigations.
+
+Use `requestAnimationFrame` when every frame needs computed values: canvas
+drawing, games, physics, following a pointer, or syncing with audio.
+
+Whatever you use, respect `prefers-reduced-motion`. Some people get motion
+sickness from large animations; tone them down or remove them when that
+setting is on.
