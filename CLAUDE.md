@@ -88,8 +88,8 @@ live in `web-visualizers.tsx`, `typescript-visualizers.tsx`,
 `design-visualizers.tsx` (design patterns / LLD), `case-study-visualizers.tsx`
 (system design case studies), `graph-algo-visualizers.tsx` (with a shared
 `GraphFrame` node-and-edge renderer), `geo-graph-visualizers.tsx`,
-`pattern-ts-visualizers.tsx`, `web-js-ai-visualizers.tsx` and
-`attention-visualizer.tsx`; a file that defines its own `StepPlayer`
+`pattern-ts-visualizers.tsx`, `web-js-ai-visualizers.tsx`,
+`mixed-topic-visualizers.tsx` and `attention-visualizer.tsx`; a file that defines its own `StepPlayer`
 render function must be `'use client'`, since functions can't cross from a
 server component to a client one.
 

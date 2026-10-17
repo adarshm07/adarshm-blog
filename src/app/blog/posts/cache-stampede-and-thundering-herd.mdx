@@ -1,0 +1,116 @@
+---
+title: "Cache Stampedes: When One Expired Key Takes Down the Database"
+publishedAt: "2026-10-17"
+summary: "A hot cache key expires, thousands of requests miss at once, and all of them run the same expensive query. How cache stampedes happen, and the fixes: request coalescing, a rebuild lock, serving stale data while revalidating, probabilistic early expiration, and TTL jitter."
+tags: "System Design"
+---
+
+Caching works so well that systems quietly come to depend on it. A database
+sized for a 1% miss rate is fine — until the miss rate briefly becomes 100%.
+For a hot key, that happens every time it expires.
+
+<CacheStampedeVisualizer />
+
+That's a **cache stampede** (also called dog-piling, or a thundering herd on
+the cache). It's worst when three things combine: a key read very often, an
+expensive recomputation, and an expiry that lets every reader miss at once.
+The query that took 2 seconds alone takes 30 seconds when 4,000 copies run
+together — so the window grows, and more requests pile in.
+
+## Fix 1: coalesce requests in a process
+
+Within one server, concurrent misses for the same key should share a single
+computation. Keep a map of in-flight promises:
+
+```typescript
+const inFlight = new Map<string, Promise<unknown>>()
+
+async function getOrCompute<T>(key: string, compute: () => Promise<T>, ttlSeconds: number): Promise<T> {
+  const cached = await cache.get(key)
+  if (cached !== null) return JSON.parse(cached) as T
+
+  let pending = inFlight.get(key) as Promise<T> | undefined
+  if (!pending) {
+    pending = compute()
+      .then(async (value) => {
+        await cache.set(key, JSON.stringify(value), { EX: ttlSeconds })
+        return value
+      })
+      .finally(() => inFlight.delete(key))
+    inFlight.set(key, pending)
+  }
+  return pending
+}
+```
+
+This is "single flight" (Go's `singleflight` package is the well-known
+version). It turns thousands of misses per server into one query per server.
+With 50 servers, that's still 50 queries — usually fine, sometimes not.
+
+## Fix 2: a distributed rebuild lock
+
+Across servers, let one request take a short lock and recompute:
+
+```
+SET lock:homepage:feed <token> NX PX 10000    -- only one caller succeeds
+```
+
+- The winner recomputes, writes the cache, and deletes the lock (checking
+  the token, so it doesn't delete someone else's).
+- Everyone else either **serves the stale value** if one is kept, or waits
+  briefly and re-reads the cache.
+
+The lock needs a timeout, so a crashed winner doesn't block rebuilds
+forever. Since it only prevents duplicate work, an occasional double rebuild
+is harmless — this isn't a case that needs the care of
+[distributed locks with fencing](/blog/distributed-locks-and-fencing).
+
+## Fix 3: serve stale while revalidating
+
+The cleanest fix is to never make users wait for a rebuild. Store the value
+with two times: a **soft** expiry and a later **hard** expiry. After the
+soft expiry, serve the old value and trigger one background refresh; only
+after the hard expiry do you block. HTTP has the same idea built in:
+`Cache-Control: max-age=60, stale-while-revalidate=300`
+(see [HTTP caching headers](/blog/http-caching-headers)).
+
+## Fix 4: refresh early, probabilistically
+
+Rather than everyone refreshing at the expiry moment, let each read decide
+to refresh **early** with a probability that rises as expiry approaches.
+The "XFetch" approach (from a 2015 paper on optimal probabilistic cache
+stampede prevention) refreshes when:
+
+```
+now − delta × beta × ln(random()) ≥ expiry
+```
+
+where `delta` is how long the recomputation takes and `beta` (≈ 1) tunes
+how eager it is. `ln(random())` is negative, so that term pushes "now"
+forward by a random amount. Usually one request refreshes the value a
+little before it expires, and nobody ever sees a miss. No locks needed.
+
+## Fix 5: don't expire many keys together
+
+If you warm 10,000 keys at deploy time, all with a one-hour TTL, they all
+expire in the same second an hour later. Add **jitter** — a TTL of 3600 ±
+10% — so expiries spread out. The same principle as
+[jittered retries](/blog/retries-backoff-and-jitter).
+
+## Also worth having
+
+- **Negative caching**: cache "not found" briefly, or a flood of requests for
+  a missing key passes straight through to the database.
+- **Database protection**: a [load-shedding](/blog/load-shedding-and-graceful-degradation)
+  limit and connection pool caps, so a stampede degrades rather than kills.
+- **Cold starts**: a new cache node, or a flushed cache, is a stampede on
+  every key at once. Warm critical keys before taking traffic, and add
+  capacity gradually.
+
+## Which to use
+
+For most hot keys: **request coalescing** in each process, plus
+**stale-while-revalidate** or **probabilistic early refresh**, plus **TTL
+jitter**. Add a distributed lock when even one rebuild per server is too
+many. The goal is the same in every case: an expensive value should be
+computed once per expiry, not once per reader.

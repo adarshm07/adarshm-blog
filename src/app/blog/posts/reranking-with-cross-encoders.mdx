@@ -1,0 +1,99 @@
+---
+title: "Rerankers: The Cheapest Big Win in RAG"
+publishedAt: "2026-10-17"
+summary: "Embedding search is fast because documents are encoded without seeing the query — and that's exactly why it ranks imprecisely. How cross-encoder rerankers read the query and each candidate together, why they're used as a second stage over a shortlist, what they cost, and how to tell whether one helps."
+tags: "AI Engineering"
+---
+
+A typical [RAG](/blog/rag-retrieval-explained) pipeline retrieves the top
+few chunks by [embedding](/blog/what-embeddings-actually-are) similarity and
+puts them in the prompt. When answers are wrong, the cause is very often
+that the right chunk was retrieved but ranked 8th — just outside the cut —
+while a plausible-looking but irrelevant chunk took its place.
+
+Rerankers fix that ordering.
+
+## Two kinds of model
+
+**Bi-encoders** (embedding models) encode the query and each document
+**separately** into vectors, and compare them with cosine similarity.
+Because documents are encoded without the query, you can do it once, ahead
+of time, and search millions of vectors in milliseconds. The cost: the
+whole meaning of a document is squeezed into one vector, prepared before
+anyone knew what would be asked.
+
+**Cross-encoders** take the query and one document **together** as a single
+input, and output a relevance score. Every word in the query can attend to
+every word in the document, through the [attention](/blog/how-attention-works)
+layers. That's far more precise — it can tell "refunds after 30 days" from
+"30-day free trial" — but nothing can be precomputed. Every
+(query, document) pair is a full model call.
+
+<RerankerVisualizer />
+
+## The two-stage pattern
+
+The combination gets both speed and precision:
+
+1. **Retrieve wide**: get 50–100 candidates with embeddings,
+   [BM25, or both](/blog/hybrid-search-and-rank-fusion). Optimise this
+   stage for **recall** — the right answer just needs to be somewhere in the
+   list.
+2. **Rerank**: score each candidate with a cross-encoder against the query.
+   This stage provides **precision** at the top.
+3. **Keep the top few** (3–10) for the prompt.
+
+```typescript
+const candidates = await hybridSearch(query, { limit: 50 })
+const scores = await reranker.score(query, candidates.map((c) => c.text))
+const context = candidates
+  .map((c, i) => ({ ...c, score: scores[i] }))
+  .sort((a, b) => b.score - a.score)
+  .slice(0, 5)
+```
+
+Since the reranker now decides what reaches the model, you can often send
+**fewer** chunks than before — a shorter, more relevant context, which helps
+both cost and answer quality.
+
+## Options
+
+- **Hosted reranking APIs**: Cohere Rerank, Voyage AI, Jina and others
+  offer an endpoint that takes a query and a list of documents and returns
+  scores.
+- **Open models** you can self-host: the BGE reranker family, mixedbread's
+  rerankers, and small MS MARCO cross-encoders (via the
+  sentence-transformers library) are common starting points.
+- **An LLM as a reranker**: ask a model to score or order candidates. It's
+  flexible, and can follow instructions like "prefer official policy
+  documents", but slower and more expensive per candidate. It often works
+  best on a short list, after a cheaper reranker.
+
+## Cost and latency
+
+Reranking 50 candidates adds latency — from tens of milliseconds for a small
+model on a GPU to a few hundred for a hosted API or a large model. To keep
+it in check:
+
+- Rerank a shortlist, never the corpus.
+- Truncate candidates to the model's maximum input length (often 512
+  tokens) — chunk sizes and reranker limits should match.
+- Batch pairs in one call.
+- Cache scores for repeated queries.
+
+## Does it help? Measure
+
+Rerankers usually help, but not always, and not by the same amount for every
+domain. Build a small [eval set](/blog/evals-for-llm-apps): real queries, with
+the chunk that answers each one marked. Then compare, with and without the
+reranker:
+
+- **Recall@50** of the first stage — if the right chunk isn't in the
+  candidates, no reranker can rescue it.
+- **Hit rate or MRR at the cut-off** you actually use (top 5) — this is
+  what the reranker should improve.
+- End-to-end answer quality and latency.
+
+If first-stage recall is low, fix retrieval first: better chunking, hybrid
+search, query rewriting. If recall is high but the right chunk is ranked too
+low, a reranker is the cheapest big improvement available.

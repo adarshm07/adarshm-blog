@@ -1,0 +1,155 @@
+---
+title: "LLD Case Study: Designing a Parking Lot"
+publishedAt: "2026-10-17"
+summary: "The most common low-level design interview question, worked end to end: clarifying requirements, finding the entities, choosing composition over inheritance, putting spot allocation and pricing behind strategies, handling concurrent arrivals, and the code for the core flow."
+tags: "LLD"
+---
+
+"Design a parking lot" is asked in low-level design interviews more than any
+other problem. It's small enough to finish in 45 minutes, and it tests most
+of what interviewers look for: identifying entities, assigning
+responsibilities, choosing relationships, and leaving the right things easy
+to change.
+
+## 1. Clarify the requirements
+
+Ask before designing. A reasonable scope:
+
+- Several **levels**, each with spots of three sizes: small (motorcycle),
+  medium (car), large (bus/truck).
+- A vehicle fits in a spot of its size **or larger**.
+- On entry, assign a spot and issue a **ticket**; on exit, charge a **fee**
+  by time parked, then free the spot.
+- Show free spots per level and size.
+- Pricing rules will change (hourly, weekend flat rate, first hour free).
+
+Out of scope, said out loud: reservations, payment processing details,
+license plate recognition, multiple lots.
+
+## 2. Find the entities
+
+Underline the nouns: lot, level, spot, vehicle, ticket, gate, fee. Then
+decide what each is responsible for:
+
+<Table
+  data={{
+    headers: ['class', 'responsibility'],
+    rows: [
+      ['ParkingLot', 'entry point: park(vehicle) → Ticket, leave(ticket) → fee'],
+      ['Level', 'owns its spots; reports availability'],
+      ['ParkingSpot', 'size and state (FREE / OCCUPIED); atomic reserve/release'],
+      ['Vehicle', 'plate and size'],
+      ['Ticket', 'vehicle, spot, entry time, status'],
+      ['SpotAllocator', 'interface: choose a spot for a vehicle'],
+      ['PricingPolicy', 'interface: compute the fee for a ticket'],
+    ],
+  }}
+/>
+
+## 3. Choose relationships deliberately
+
+- `ParkingLot` **composes** `Level`s, which compose `ParkingSpot`s: spots
+  don't exist without their level.
+- **Vehicle types**: a `Car extends Vehicle` hierarchy is the reflex, but the
+  only thing that differs is size. A `size` field — an enum — is simpler, and
+  adding an electric car later doesn't need a subclass. This is
+  [composition over inheritance](/blog/composition-over-inheritance) in
+  practice. (If vehicle types later behave differently — EVs needing charging
+  spots — revisit.)
+- `SpotAllocator` and `PricingPolicy` are **interfaces**: the two things the
+  requirements say will vary. That's the [Strategy pattern](/blog/strategy-pattern).
+
+## 4. The core flow
+
+<ParkingLotVisualizer />
+
+```typescript
+enum Size { SMALL = 0, MEDIUM = 1, LARGE = 2 }
+
+class ParkingSpot {
+  private occupied = false
+  constructor(readonly id: string, readonly size: Size) {}
+  fits(v: Vehicle) { return this.size >= v.size }
+  tryReserve(): boolean {            // must be atomic — see below
+    if (this.occupied) return false
+    this.occupied = true
+    return true
+  }
+  release() { this.occupied = false }
+}
+
+interface SpotAllocator {
+  candidates(levels: Level[], v: Vehicle): Iterable<ParkingSpot>
+}
+
+interface PricingPolicy {
+  fee(ticket: Ticket, exit: Date): number
+}
+
+class ParkingLot {
+  private active = new Map<string, Ticket>()
+  constructor(
+    private levels: Level[],
+    private allocator: SpotAllocator,
+    private pricing: PricingPolicy,
+  ) {}
+
+  park(v: Vehicle, now = new Date()): Ticket {
+    for (const spot of this.allocator.candidates(this.levels, v)) {
+      if (spot.fits(v) && spot.tryReserve()) {
+        const ticket = new Ticket(crypto.randomUUID(), v, spot, now)
+        this.active.set(ticket.id, ticket)
+        return ticket
+      }
+    }
+    throw new LotFullError(v.size)
+  }
+
+  leave(ticketId: string, now = new Date()): number {
+    const ticket = this.active.get(ticketId)
+    if (!ticket) throw new UnknownTicketError(ticketId)
+    const fee = this.pricing.fee(ticket, now)
+    ticket.spot.release()
+    this.active.delete(ticketId)
+    return fee
+  }
+}
+```
+
+Notice what `ParkingLot` doesn't know: which spot is "best", or how fees are
+computed. Both come in through the constructor — plain
+[dependency injection](/blog/dependency-injection) — so tests can pass a
+fixed allocator and a fake clock.
+
+## 5. Concurrency
+
+Two cars arriving at two gates can pick the same free spot. The check
+("is it free?") and the update ("mark it occupied") must be one atomic step:
+
+- **In memory, multi-threaded** (Java, Go): compare-and-set on an atomic
+  flag, or a lock per level.
+- **With a database**: a conditional update —
+  `UPDATE spots SET occupied = true WHERE id = ? AND occupied = false` — and
+  check that one row changed. If not, try the next candidate.
+
+The allocator's candidates are just suggestions. `tryReserve` is the source
+of truth. Mentioning this race unprompted is one of the clearest signals of
+a strong answer.
+
+## 6. Extensions to discuss
+
+- **New pricing**: weekend flat rate, first hour free, a cap per day —
+  each a new `PricingPolicy`, or a decorator around an existing one.
+- **EV charging spots**: a capability on the spot, and an allocator that
+  prefers them for EVs.
+- **Availability display**: keep per-level counters updated on reserve and
+  release, or publish events that a display board
+  [observes](/blog/observer-pattern).
+- **Lost ticket**: look up by plate, charge a maximum fee.
+
+## Practise it
+
+This is the first problem in the [LLD practice tool](/tools/lld). Write your
+notes, draw the class diagram — `ParkingLot` composing `Level`s, the
+strategies as interfaces — and get it reviewed by Claude against the same
+rubric used here.

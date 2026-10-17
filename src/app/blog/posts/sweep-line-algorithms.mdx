@@ -1,0 +1,96 @@
+---
+title: "Sweep Line: Solving Overlap Problems by Sorting Events"
+publishedAt: "2026-10-17"
+summary: "Turn every interval into a start event and an end event, sort them, and walk through with a running count. How the sweep-line technique answers 'how many meeting rooms?', 'when was the system busiest?' and the skyline problem in O(n log n), and the tie-breaking rule that decides correctness."
+tags: "DSA"
+---
+
+Many problems ask about overlaps: how many meetings run at the same time,
+the peak number of concurrent users, which time ranges are covered. Comparing
+every pair of intervals is O(n²). The **sweep line** technique does it in
+O(n log n) with one idea:
+
+> Imagine a vertical line moving left to right across time. Only the moments
+> where something starts or ends matter — process those, in order.
+
+## Meeting rooms
+
+Given meeting times, find the minimum number of rooms needed. That's the
+maximum number of meetings in progress at any moment.
+
+<SweepLineVisualizer />
+
+```javascript
+function minMeetingRooms(meetings) {
+  const events = []
+  for (const [start, end] of meetings) events.push([start, +1], [end, -1])
+  events.sort((a, b) => a[0] - b[0] || a[1] - b[1])   // ends before starts on ties
+
+  let rooms = 0, maxRooms = 0
+  for (const [, delta] of events) {
+    rooms += delta
+    maxRooms = Math.max(maxRooms, rooms)
+  }
+  return maxRooms
+}
+
+minMeetingRooms([[9, 10.5], [9.5, 11], [10, 10.5], [10.5, 12], [11, 12.5]])  // 3
+```
+
+## The tie-breaking rule
+
+When an end and a start happen at the same time, which comes first decides
+the meaning of the problem:
+
+- **End first** (as above): a meeting ending at 10:30 frees its room for
+  one starting at 10:30. Intervals are half-open, `[start, end)`.
+- **Start first**: they count as overlapping. Use this when intervals are
+  closed, `[start, end]` — for example, when both endpoints are days a hotel
+  room is occupied.
+
+Sorting by `(time, delta)` puts −1 before +1, so ends come first. Getting
+this wrong is the most common bug in sweep-line solutions — the answer is
+off by one exactly when intervals touch.
+
+## The heap version
+
+An equivalent solution sorts meetings by start time and keeps a
+[min-heap](/blog/heaps-and-priority-queues) of end times for the rooms in
+use. For each meeting, if the earliest-ending room is free by its start,
+reuse it (pop); then push the meeting's end. The heap's size at the end is
+the answer. It's also O(n log n), and it tells you *which* room each meeting
+gets, which the counter version doesn't.
+
+## The same pattern elsewhere
+
+- **Peak concurrency in logs**: each request is `[startTime, endTime)`;
+  sweep to find the busiest moment and how many were in flight — useful for
+  [capacity planning](/blog/back-of-the-envelope-estimation).
+- **Merging and covering intervals**: sweep with a counter; a range is
+  covered while the counter is above zero. See
+  [merge intervals](/blog/merge-intervals-and-greedy-scheduling).
+- **Range updates**: adding +1 at a start and −1 after an end, then taking
+  a running sum, is the [difference array](/blog/prefix-sums-and-difference-arrays)
+  trick — a sweep line over an array.
+- **The skyline problem**: buildings are intervals with heights. Sweep over
+  the left and right edges, keeping the active heights in a max-heap (or a
+  sorted multiset). Whenever the maximum height changes, emit a key point.
+- **Rectangle overlap and area of union**: sweep a vertical line across the
+  x coordinates, and keep the covered length along y in a
+  [segment tree](/blog/segment-trees-range-queries). That's how layout and
+  GIS systems compute overlapping regions.
+- **Closest pair of points, line-segment intersections**: classic
+  computational geometry problems with sweep-line solutions.
+
+## Recognising it
+
+Reach for a sweep line when:
+
+- the input is a set of **intervals** (or shapes with left and right
+  edges), and
+- the question is about **how many overlap at once**, **the maximum or
+  minimum of some quantity over time**, or **which parts are covered**.
+
+The recipe is always the same: turn intervals into events, sort the events
+(deciding ties carefully), and walk through them maintaining a small piece of
+state — a counter, a heap, or a tree.

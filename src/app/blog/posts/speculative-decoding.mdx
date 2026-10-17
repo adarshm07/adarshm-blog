@@ -1,0 +1,96 @@
+---
+title: "Speculative Decoding: Faster LLM Output Without Changing It"
+publishedAt: "2026-10-17"
+summary: "Large models generate one token per forward pass, and each pass is bottlenecked on memory, not maths. Speculative decoding lets a small draft model guess several tokens that the large model then checks in a single pass — producing the same output distribution, two to three times faster."
+tags: "AI Engineering"
+---
+
+Ask a large language model a question and the answer streams out one token
+at a time. Each token needs a full forward pass through the model, and with
+billions of parameters, that pass mostly consists of **reading the weights
+from GPU memory**. The arithmetic units spend much of the time waiting. As
+the [KV cache post](/blog/kv-cache-explained) explains, decoding is
+memory-bound.
+
+There's a useful consequence: checking several tokens in one pass costs
+about the same as generating one. The weights are read once either way.
+**Speculative decoding** uses that to produce several tokens per
+large-model pass.
+
+<SpeculativeDecodingVisualizer />
+
+## The algorithm
+
+1. A small, fast **draft model** generates *k* tokens (say 4) the usual way,
+   one at a time. Cheap, because the model is small.
+2. The large **target model** runs **one** forward pass over the context plus
+   all *k* drafted tokens. That gives its own predictions at every drafted
+   position simultaneously.
+3. Go through the drafted tokens in order and **accept** each one the target
+   model agrees with. At the first disagreement, take the target model's
+   token instead and discard the rest of the draft.
+4. Repeat from the new position.
+
+Every round produces at least one token (the target model's own, at the
+first mismatch). When the draft is fully accepted, the same pass also gives
+the target model's next token as a bonus — *k* + 1 tokens for one
+expensive pass.
+
+## Why the output doesn't change
+
+With greedy decoding, "agrees" just means the target model's top token
+matches the draft, so the output is identical to running the target model
+alone.
+
+With sampling at a [temperature](/blog/temperature-and-sampling), the check
+is a **rejection sampling** rule. A drafted token is accepted with
+probability min(1, p_target / p_draft); when rejected, a replacement is
+sampled from the leftover probability mass. Mathematically, the tokens that
+come out follow **exactly** the target model's distribution. It's not an
+approximation — speed changes, quality doesn't. (The original papers, from
+Google and DeepMind in 2022–23, prove this.)
+
+## How much faster?
+
+It depends on the **acceptance rate** — how often the draft model guesses
+what the big model would have said:
+
+- **Predictable text** accepts long runs: code with boilerplate, JSON, text
+  that repeats or quotes the prompt, formal language.
+- **Open-ended creative text** accepts less.
+
+Reported speed-ups are commonly around 2–3× for typical workloads. If
+drafts are rarely accepted, it can even be slower — you pay for the draft
+and the verification without the benefit — which is why serving systems
+tune *k* and the draft model per workload.
+
+## Variants
+
+- **A separate draft model**: a small model from the same family, sharing
+  the tokenizer (for example, a 1B model drafting for a 70B one).
+- **Self-speculation**: extra prediction heads on the target model itself
+  guess several future tokens (Medusa, EAGLE). No second model to deploy.
+- **Prompt lookup / n-gram drafting**: guess the next tokens by finding the
+  current text in the prompt and copying what followed. Free, and very
+  effective for editing, summarising or answering questions about a given
+  document, where outputs quote the input.
+- **Multi-token prediction**: models trained to predict several tokens at
+  once, which can then serve as their own drafts.
+
+Inference engines such as vLLM, TensorRT-LLM and llama.cpp support
+speculative decoding, and hosted providers use similar techniques behind
+their APIs.
+
+## What it means for you
+
+If you call a hosted model, speculative decoding is invisible — it's one of
+the reasons output speeds keep improving without models changing. It does
+explain some patterns you might notice: responses that quote or transform
+the input (refactoring code, reformatting JSON) often stream faster than
+free-form writing of the same length.
+
+If you serve models yourself, it's one of the highest-leverage
+optimisations for **latency** — tokens per second for a single user — at the
+cost of some extra memory and compute for the draft. For maximum
+**throughput** across many concurrent users, larger batches already keep the
+GPU busy, so the gain is smaller.

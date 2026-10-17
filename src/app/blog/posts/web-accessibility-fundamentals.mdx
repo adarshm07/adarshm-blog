@@ -1,0 +1,127 @@
+---
+title: "Web Accessibility Fundamentals for Developers"
+publishedAt: "2026-10-17"
+summary: "How screen readers, keyboards and other assistive technology see a page through the accessibility tree — and the handful of habits that cover most of it: semantic HTML, names for every control, keyboard and focus, enough contrast, and ARIA only when HTML runs out."
+tags: "Web"
+---
+
+Some of your users can't see the screen, can't use a mouse, can't hear audio,
+or are using a phone in bright sunlight with one thumb. Accessibility means
+the page still works for them. Most of it isn't extra work — it's using HTML
+the way it was designed.
+
+## The accessibility tree
+
+Browsers build a second tree alongside the DOM: the **accessibility tree**.
+For every meaningful element, it records:
+
+- a **role** — button, link, heading, textbox, checkbox, list…
+- a **name** — what to call it: "Save draft", "Email"
+- **state** — checked, expanded, disabled, invalid
+- whether it's **focusable**
+
+Screen readers, voice control and switch devices read this tree, not the
+pixels. If your custom control looks like a button but the tree says
+"generic, no name", those users get nothing.
+
+<AccessibilityVisualizer />
+
+You can inspect the tree directly: Chrome and Firefox DevTools both have an
+Accessibility panel.
+
+## 1. Use the right element
+
+Native elements come with role, name, keyboard behaviour and states built
+in:
+
+<Table
+  data={{
+    headers: ['for…', 'use', 'not'],
+    rows: [
+      ['an action', '<button>', '<div onclick>'],
+      ['going somewhere', '<a href>', '<span onclick="location=…">'],
+      ['page structure', '<header> <nav> <main> <footer>', 'nested <div>s'],
+      ['headings', '<h1>–<h6>, in order', 'bold text'],
+      ['lists', '<ul> / <ol> + <li>', 'divs with bullets'],
+      ['data', '<table> with <th>', 'a CSS grid of divs'],
+    ],
+  }}
+/>
+
+Screen-reader users navigate by headings and landmarks the way sighted users
+scan a page. A sensible heading outline and a single `<main>` make a long
+page navigable in seconds.
+
+## 2. Give everything a name
+
+- **Images**: `alt` describes what the image conveys. Decorative images get
+  `alt=""`, so they're skipped. An icon inside a button with text needs no
+  alt of its own.
+- **Icon-only buttons**: they need a name, from visually hidden text or
+  `aria-label="Close"`.
+- **Form fields**: a `<label for>` tied to every input. A placeholder is not
+  a label — it vanishes when you type, and is often low-contrast.
+- **Links**: "Read more" ten times on a page is useless out of context. Make
+  the link text say where it goes.
+
+## 3. Everything works from the keyboard
+
+Put the mouse away and press Tab through the page:
+
+- Can you reach every interactive element, in a sensible order?
+- Can you **see** where focus is? Never remove the focus outline without
+  replacing it — `:focus-visible` shows it for keyboard users only.
+- Do Enter and Space activate things? (Free with `<button>`.)
+- Does a modal **trap focus** inside it while open, close on Escape, and
+  return focus to the button that opened it? The native `<dialog>` element
+  with `showModal()` handles most of this.
+- Is there a "Skip to content" link, so keyboard users don't tab through the
+  whole navigation on every page?
+
+Avoid positive `tabindex` values: they override the natural order and are
+almost impossible to maintain. `tabindex="0"` (focusable in order) and `-1`
+(focusable from script only) are the useful ones.
+
+## 4. Enough contrast, not only colour
+
+- Body text needs a contrast ratio of at least **4.5:1** against its
+  background (WCAG AA), and large text 3:1. Light grey on white usually
+  fails. DevTools shows the ratio in the colour picker.
+- Don't use colour alone to carry meaning. A red border on an invalid field
+  needs a text error message too, tied to the input with
+  `aria-describedby`.
+- Respect user settings: text should survive 200% zoom without breaking the
+  layout, and animations should calm down under `prefers-reduced-motion`.
+
+## 5. ARIA: the last resort
+
+ARIA attributes (`role`, `aria-*`) change what the accessibility tree says.
+They don't add behaviour: `role="button"` doesn't make a div focusable or
+respond to Enter. The first rule of ARIA is **don't use ARIA if a native
+element does the job**.
+
+Where it's genuinely needed:
+
+- **State on custom widgets**: `aria-expanded` on a menu button,
+  `aria-selected` on tabs, `aria-current="page"` on the active nav link.
+- **Live regions**: `aria-live="polite"` on a container makes screen readers
+  announce updates — "3 results found", "Saved" — without moving focus.
+- **Relationships**: `aria-describedby` for hints and errors,
+  `aria-controls` for what a button opens.
+
+For complex widgets (tabs, comboboxes, tree views), follow the WAI-ARIA
+Authoring Practices patterns. They specify the roles, states and exact
+keyboard behaviour users expect.
+
+## Testing
+
+- **Keyboard**: tab through every new feature. Five minutes catches a lot.
+- **Automated checks**: axe DevTools or Lighthouse find missing names, low
+  contrast, and invalid ARIA — roughly a third of real issues.
+- **A screen reader**: VoiceOver (macOS, iOS), NVDA (Windows, free) or
+  TalkBack (Android). Listen to a page once; it changes how you write HTML.
+
+Accessibility also overlaps with everything else you care about: semantic
+HTML helps search engines, labels help autofill, and keyboard support helps
+power users. The [DOM](/blog/the-dom-explained) you write is the interface
+for all of them.

@@ -185,6 +185,18 @@ import {
   PrivateFieldsVisualizer,
   SymbolsVisualizer,
 } from '@/app/components/web-js-ai-visualizers'
+import {
+  AccessibilityVisualizer,
+  AnimationFrameVisualizer,
+  CacheStampedeVisualizer,
+  InvertedIndexVisualizer,
+  ParkingLotVisualizer,
+  RerankerVisualizer,
+  ResponsiveImagesVisualizer,
+  SpeculativeDecodingVisualizer,
+  SweepLineVisualizer,
+  ZodVisualizer,
+} from '@/app/components/mixed-topic-visualizers'
 import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
@@ -475,6 +487,16 @@ const components = {
   AttentionVisualizer,
   KvCacheVisualizer,
   McpVisualizer,
+  AccessibilityVisualizer,
+  ResponsiveImagesVisualizer,
+  AnimationFrameVisualizer,
+  ZodVisualizer,
+  RerankerVisualizer,
+  SpeculativeDecodingVisualizer,
+  ParkingLotVisualizer,
+  SweepLineVisualizer,
+  InvertedIndexVisualizer,
+  CacheStampedeVisualizer,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {
