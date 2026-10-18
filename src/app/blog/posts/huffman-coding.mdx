@@ -1,0 +1,108 @@
+---
+title: "Huffman Coding: Compression with a Greedy Algorithm"
+publishedAt: "2026-10-18"
+summary: "Give frequent symbols short codes and rare ones long codes. How Huffman's algorithm builds an optimal prefix code by repeatedly merging the two least frequent symbols with a min-heap, why no code is a prefix of another, and where Huffman coding still runs today — inside gzip, PNG and JPEG."
+tags: "DSA"
+---
+
+ASCII spends 8 bits on every character, whether it's "e" (very common in
+English) or "z" (rare). Morse code had the better idea a century earlier:
+"E" is a single dot, "Q" is dash-dash-dot-dash. Common symbols get short codes.
+
+**Huffman coding** (David Huffman, 1952) turns that idea into an algorithm
+that finds the **best possible** such code for a given set of frequencies.
+
+## Prefix codes
+
+Variable-length codes have a problem: where does one code end and the next
+begin? If "a" were `0` and "b" were `01`, then `01` could be "b", or "a"
+followed by the start of something else.
+
+Huffman codes are **prefix codes**: no code is the start of another. Then
+decoding is unambiguous — read bits until they match a code, output that
+symbol, start again. Prefix codes are exactly the codes you can draw as a
+binary tree with symbols at the leaves: left is 0, right is 1, and a code is
+the path from the root.
+
+## Building the tree
+
+The rule is greedy: **repeatedly join the two least frequent nodes**. Rare
+symbols get merged first, so they end up deepest, with the longest codes.
+
+<HuffmanVisualizer />
+
+```javascript
+function huffmanCodes(text) {
+  const freq = new Map()
+  for (const ch of text) freq.set(ch, (freq.get(ch) ?? 0) + 1)
+
+  // A min-heap would make each step O(log k); sorting keeps the code short.
+  let nodes = [...freq].map(([ch, n]) => ({ ch, n }))
+  while (nodes.length > 1) {
+    nodes.sort((a, b) => a.n - b.n || (a.ch < b.ch ? -1 : 1))
+    const [left, right] = nodes.splice(0, 2)
+    nodes.push({ ch: left.ch + right.ch, n: left.n + right.n, left, right })
+  }
+
+  const codes = {}
+  ;(function walk(node, path) {
+    if (!node.left) { codes[node.ch] = path || '0'; return }
+    walk(node.left, path + '0')
+    walk(node.right, path + '1')
+  })(nodes[0], '')
+  return codes
+}
+
+huffmanCodes('abracadabra')
+// { a: '0', r: '10', b: '110', c: '1110', d: '1111' }
+```
+
+With k distinct symbols and a [min-heap](/blog/heaps-and-priority-queues),
+building the tree takes **O(k log k)**.
+
+"abracadabra" encodes in **23 bits**, against 33 with a fixed 3-bit code (and
+88 in 8-bit ASCII). The `|| '0'` handles the edge case of a single distinct
+symbol, which would otherwise get an empty code.
+
+## Why greedy is optimal here
+
+The cost of a code is the sum of frequency × code length. Two facts make the
+greedy choice safe:
+
+1. In some optimal tree, the two **least frequent** symbols are siblings at
+   the deepest level. (Swapping a rarer symbol deeper never increases the
+   cost.)
+2. Merging those two into one node with their combined frequency leaves a
+   smaller problem of exactly the same form.
+
+Induction does the rest. Huffman is the classic example of a greedy
+algorithm with a proof, alongside [minimum spanning trees](/blog/minimum-spanning-trees)
+and interval scheduling.
+
+## Optimal — within its rules
+
+Huffman is optimal among codes that assign a **whole number of bits** to
+each symbol, independently. Two limits follow:
+
+- A symbol with probability 0.9 deserves about 0.15 bits, but must get at
+  least 1. **Arithmetic coding** and **ANS** (asymmetric numeral systems)
+  avoid the whole-bit rule and get closer to the theoretical limit, Shannon
+  entropy. Zstandard uses ANS-based entropy coding.
+- It ignores **context**: in English, "u" after "q" is nearly certain. Real
+  compressors first remove repetition (LZ77 replaces repeats with
+  back-references), then entropy-code what's left.
+
+## Where it runs today
+
+- **DEFLATE** — inside gzip, zip and PNG — is LZ77 followed by Huffman coding.
+  Every gzipped web response you receive
+  ([HTTP compression](/blog/http-compression-gzip-brotli)) is decoded with
+  Huffman tables.
+- **JPEG** Huffman-codes its quantised coefficients.
+- **HTTP/2's HPACK** header compression uses a fixed Huffman code for header
+  strings, tuned to typical header text.
+- **Brotli** combines LZ77 with Huffman coding and context modelling.
+
+The decoder needs the code table too. Formats either send it in a compact
+form (DEFLATE sends code lengths only — "canonical" Huffman codes can be
+rebuilt from lengths alone) or agree on a fixed table in advance (HPACK).

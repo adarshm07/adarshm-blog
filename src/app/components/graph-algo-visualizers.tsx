@@ -4,8 +4,8 @@ import { StepNote, StepPlayer } from '@/app/components/step-player'
 
 // ── A small graph renderer shared by the visualizers below ─────────────────
 
-type GNode = { id: string; x: number; y: number }
-type Tone = 'amber' | 'sky' | 'green' | 'violet' | 'rose' | 'muted'
+export type GNode = { id: string; x: number; y: number }
+export type Tone = 'amber' | 'sky' | 'green' | 'violet' | 'rose' | 'muted'
 
 const NODE_TONE: Record<Tone, string> = {
   amber: 'fill-amber-500/25 stroke-amber-500',
@@ -18,7 +18,7 @@ const NODE_TONE: Record<Tone, string> = {
 
 const R = 13
 
-function GraphFrame({
+export function GraphFrame({
   nodes,
   edges,
   directed = false,
@@ -27,6 +27,7 @@ function GraphFrame({
   tone = () => 'muted',
   edgeTone,
   label,
+  edgeLabel,
 }: {
   nodes: GNode[]
   edges: [string, string][]
@@ -36,6 +37,7 @@ function GraphFrame({
   tone?: (id: string) => Tone
   edgeTone?: (a: string, b: string) => 'hot' | 'bad' | 'dim' | undefined
   label?: (id: string) => string | undefined
+  edgeLabel?: (a: string, b: string) => string | undefined
 }) {
   const byId = new Map(nodes.map((n) => [n.id, n]))
   return (
@@ -52,9 +54,10 @@ function GraphFrame({
         const ux = (q.x - p.x) / len
         const uy = (q.y - p.y) / len
         const t = edgeTone?.(a, b)
+        const text = edgeLabel?.(a, b)
         return (
+          <g key={`${a}-${b}`}>
           <line
-            key={`${a}-${b}`}
             x1={p.x + ux * R}
             y1={p.y + uy * R}
             x2={q.x - ux * (R + (directed ? 2 : 0))}
@@ -70,6 +73,20 @@ function GraphFrame({
                   : 'stroke-neutral-300 dark:stroke-neutral-600'
             }
           />
+          {text ? (
+            <text
+              x={(p.x + q.x) / 2 - uy * 9}
+              y={(p.y + q.y) / 2 + ux * 9 + 3}
+              textAnchor="middle"
+              className={[
+                'font-mono text-[9px]',
+                t === 'hot' ? 'fill-amber-600 dark:fill-amber-400' : 'fill-neutral-500 dark:fill-neutral-400',
+              ].join(' ')}
+            >
+              {text}
+            </text>
+          ) : null}
+          </g>
         )
       })}
       {nodes.map((n) => (

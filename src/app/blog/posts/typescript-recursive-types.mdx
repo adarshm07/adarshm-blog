@@ -1,0 +1,133 @@
+---
+title: "Recursive Types in TypeScript"
+publishedAt: "2026-10-18"
+summary: "Types that refer to themselves describe trees, JSON, nested configs and linked lists. How recursive type aliases and interfaces work, building DeepPartial and DeepReadonly, generating every dotted path through an object with template literals, and the compiler limits you'll hit."
+tags: "TypeScript"
+---
+
+Some data is shaped like itself all the way down. A folder contains files
+and folders. A comment has replies, which are comments. A JSON value is a
+primitive, or an array of JSON values, or an object of JSON values. Types for
+such data refer to themselves:
+
+```typescript
+type TreeNode<T> = {
+  value: T
+  children: TreeNode<T>[]
+}
+```
+
+TypeScript has supported recursive type aliases like this since version 3.7,
+and recursive conditional types since 4.1. Together they cover a surprising
+amount of everyday typing.
+
+<RecursiveTypesVisualizer />
+
+## JSON
+
+```typescript
+type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | Json[]
+  | { [key: string]: Json }
+```
+
+A function that accepts `Json` rejects anything `JSON.stringify` can't
+represent faithfully — functions, `undefined`, `Date` objects (they'd become
+strings) — at compile time. Use it for values you store in `localStorage`,
+send between workers, or put in a cache.
+
+## Recursive mapped types
+
+Built-in utilities like `Partial` and `Readonly` only affect the top level.
+Recursive versions go all the way down:
+
+```typescript
+type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K]
+}
+
+type DeepReadonly<T> = {
+  readonly [K in keyof T]: T[K] extends object ? DeepReadonly<T[K]> : T[K]
+}
+
+type Config = { db: { host: string; port: number }; cache: { ttl: number } }
+
+const overrides: DeepPartial<Config> = { db: { port: 5433 } }
+```
+
+`DeepPartial` fits config overrides and test fixtures; `DeepReadonly`
+documents state that must never be mutated (compare with
+[Object.freeze](/blog/property-descriptors-and-object-freeze), which enforces
+the same thing at runtime, one level at a time).
+
+One caveat: `T[K] extends object` is also true for arrays, functions and
+`Date`. Production versions add branches for those, for example
+`T[K] extends (infer U)[] ? DeepPartial<U>[] : …`. Libraries such as
+type-fest provide well-tested versions.
+
+## Every path through an object
+
+Combined with [template literal types](/blog/template-literal-types),
+recursion can produce every dotted path through a nested type:
+
+```typescript
+type Paths<T> = T extends object
+  ? { [K in keyof T & string]: K | `${K}.${Paths<T[K]>}` }[keyof T & string]
+  : never
+
+type ConfigPath = Paths<Config>
+// "db" | "cache" | "db.host" | "db.port" | "cache.ttl"
+
+function get(path: ConfigPath) { … }
+get('db.port')   // ok
+get('db.pot')    // error TS2820: … Did you mean '"db.port"'?
+```
+
+This is how form libraries type `register('address.city')`, and how typed
+i18n libraries check translation keys. A typo becomes a compile error, with a
+suggestion.
+
+## Recursive conditional types
+
+Conditional types can call themselves too, for example to unwrap nested
+arrays:
+
+```typescript
+type Flatten<T> = T extends readonly (infer U)[] ? Flatten<U> : T
+
+type A = Flatten<number[][][]>   // number
+```
+
+Or to build tuples by counting with an accumulator:
+
+```typescript
+type Repeat<S, N extends number, Acc extends unknown[] = []> =
+  Acc['length'] extends N ? Acc : Repeat<S, N, [...Acc, S]>
+
+type Three = Repeat<'a', 3>   // ['a', 'a', 'a']
+```
+
+The `Acc` parameter makes it **tail-recursive**: the recursive call is the
+whole result of the branch. TypeScript evaluates tail-recursive conditional
+types more efficiently and allows them to go much deeper.
+
+## Limits
+
+The compiler protects itself from infinite types:
+
+- Very deep instantiation stops with **TS2589**, "Type instantiation is
+  excessively deep and possibly infinite". `Repeat<'a', 1000>` hits it.
+- Types like `Paths<T>` on a large or self-referencing type (a tree type, a
+  big API schema) can make the editor slow, or produce unions too large to
+  be useful. Add a depth limit — a counter parameter that stops at, say, 5
+  levels.
+- Recursive types that never reach a base case are errors, or resolve to
+  `any`.
+
+Use recursion where the data really is recursive, and keep clever
+type-level programs small. Most of the value comes from the simple ones:
+`Json`, `TreeNode<T>`, `DeepPartial<T>`.

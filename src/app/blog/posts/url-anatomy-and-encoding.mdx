@@ -1,0 +1,118 @@
+---
+title: "URLs: Anatomy, Encoding, and the URL API"
+publishedAt: "2026-10-18"
+summary: "What each part of a URL means, which part the server never sees, how percent-encoding works (and why + sometimes means a space), when to use encodeURIComponent versus encodeURI, and why the URL and URLSearchParams classes beat string concatenation — including for security."
+tags: "Web"
+---
+
+URLs look simple enough to build with string concatenation. That works until
+a value contains a space, an ampersand, a non-English character, or a whole
+other URL. Then you get broken links, lost parameters, and occasionally a
+security hole.
+
+## The parts
+
+```
+https://user:pw@shop.example.com:8443/search/caf%C3%A9?q=red+shoes&size=10#reviews
+```
+
+Reading left to right:
+
+- **Scheme**: the protocol — `https`, `mailto`, `file`.
+- **Userinfo**: a username and password. Rare today, and browsers warn about
+  it, because `https://bank.com@evil.example` goes to evil.example.
+- **Host** and **port**: where to connect. The port defaults to 443 for
+  https, 80 for http.
+- **Path**: which resource on that server.
+- **Query**: parameters, usually `key=value` pairs joined by `&`.
+- **Fragment** (`#…`): a position within the page. **It's never sent to the
+  server** — the browser keeps it. Single-page apps once used it for routing,
+  and some OAuth flows put tokens there for that reason.
+
+Scheme, host and port together are the **origin**, the unit of the browser's
+security model — see [CORS](/blog/cors-explained).
+
+<UrlVisualizer />
+
+## Percent-encoding
+
+Only a small set of characters can appear in a URL literally. Everything
+else — spaces, most punctuation inside values, non-ASCII characters — is
+written as `%` followed by the byte's hex value, after encoding the text as
+UTF-8:
+
+- space → `%20`
+- `&` → `%26`
+- `é` → two UTF-8 bytes → `%C3%A9`
+- `/` inside a value → `%2F`
+
+Reserved characters such as `/ ? # & =` have structural meaning, so they must
+be encoded when they appear **inside** a value and left alone when they're
+structure.
+
+**`+` means a space — only in query strings.** HTML forms encode spaces as `+`
+(the `application/x-www-form-urlencoded` format), and `URLSearchParams`
+follows that convention. In a path, `+` is a literal plus sign. This mismatch
+causes real bugs: a search for "C++" can arrive as "C  " unless the `+` signs
+are encoded as `%2B`.
+
+## The right tool for each job
+
+```javascript
+// Encoding one value, for a path segment or query value:
+encodeURIComponent('a b&c=d/é?')    // 'a%20b%26c%3Dd%2F%C3%A9%3F'
+
+// Building a query string:
+new URLSearchParams({ q: 'red shoes & socks', page: '2' }).toString()
+// 'q=red+shoes+%26+socks&page=2'
+
+// Parsing:
+const url = new URL('https://shop.example.com/search?q=red+shoes')
+url.searchParams.get('q')           // 'red shoes'
+url.searchParams.set('page', '3')   // encodes for you
+url.toString()
+```
+
+**`encodeURI`** is for encoding a whole URL that's already structured. It
+deliberately leaves `& = / ? #` alone, so it's wrong for values: a value
+containing `&` would split into two parameters.
+
+**Relative URLs** resolve against a base, the same way a browser resolves
+links:
+
+```javascript
+new URL('../img/logo.png', 'https://example.com/blog/post/').href
+// 'https://example.com/blog/img/logo.png'
+```
+
+`new URL('/relative')` without a base throws a `TypeError`. Use
+`URL.canParse(input)` to check a string without try/catch.
+
+## Normalisation
+
+The URL parser also normalises: `HTTPS://EXAMPLE.com:443/a/./b/../c` becomes
+`https://example.com/a/c` (lowercase scheme and host, default port removed,
+dot segments resolved). Internationalised domain names are converted to
+punycode: `münchen.de` becomes `xn--mnchen-3ya.de`. Compare URLs after
+normalising, never as raw strings — crawlers and caches depend on it (see
+[designing a web crawler](/blog/design-a-web-crawler)).
+
+## Security
+
+**Encode values, always.** Concatenating an unencoded URL into a query
+parameter breaks it — as the last step above shows, `&b=2` escapes and
+becomes a parameter of its own. Attackers use the same trick deliberately to
+add parameters.
+
+**Validate redirects.** A `?next=` parameter that the server redirects to is
+an **open redirect** if it accepts any URL: attackers send links that start on
+your trusted domain and land on a phishing page. Parse the value with `new
+URL(next, yourOrigin)` and check that its `origin` is yours.
+
+**Check the scheme.** A user-supplied link with the `javascript:` scheme runs
+code when clicked. Allow only `https:` (and perhaps `http:` and `mailto:`)
+when rendering user-provided links — part of preventing
+[XSS](/blog/xss-and-content-security-policy).
+
+The short version: let `URL` and `URLSearchParams` do the parsing and
+encoding. Hand-built URL strings are where these bugs come from.

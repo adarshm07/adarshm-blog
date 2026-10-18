@@ -55,6 +55,9 @@ html {
 .prose h2:not(.not-prose *),
 .prose h3:not(.not-prose *) {
   scroll-margin-top: 2rem;
+  /* Headings that are one long identifier (noFallthroughCasesInSwitch) must
+     still wrap at phone width. */
+  overflow-wrap: anywhere;
 }
 
 /* ── Prose ───────────────────────────────────────────────── */

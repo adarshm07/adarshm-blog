@@ -1,0 +1,106 @@
+---
+title: "System Design Case Study: A Ride-Hailing Service"
+publishedAt: "2026-10-18"
+summary: "How an app like Uber or Ola matches riders with drivers: a high-write location service indexed by geo cell, matching ranked by ETA rather than distance, a trip state machine, live tracking over WebSockets, and the consistency questions behind 'two riders, one driver'."
+tags: "System Design"
+---
+
+A ride-hailing app looks like a map with cars on it. Behind it, two hard
+problems meet: knowing where hundreds of thousands of moving drivers are,
+right now, and assigning each ride request to the right driver — exactly
+once — within seconds.
+
+## Requirements
+
+**Functional**: riders request a ride from a pickup point; nearby drivers get
+offers and accept; both see each other's live position; trips progress to
+completion; fares are calculated and charged.
+
+**Non-functional**: a match within a few seconds; location updates visible
+within a second or two; no driver assigned to two trips; the trip record must
+never be lost.
+
+**Numbers**: say 500,000 drivers online at peak, each sending a location
+every 4 seconds — **125,000 location writes a second**. Ride requests are
+far fewer: perhaps 1,000 a second at peak. The design is dominated by the
+location stream.
+
+## The flow
+
+<RideHailingVisualizer />
+
+## The location service
+
+125,000 updates a second, each replacing the last, needs a different store
+from the trip records:
+
+- **Keep current positions in memory**, indexed by geo cell — a
+  [geohash or H3 cell](/blog/geohashing-and-quadtrees) — for "drivers in
+  these cells" queries. Redis with geo commands, or a dedicated in-memory
+  service sharded by city or region.
+- **Only the latest position matters** for matching. Losing a few updates is
+  harmless: the next arrives in 4 seconds. So this store can favour speed
+  over durability.
+- **History** — for analytics, disputes and ETA models — goes to a log and
+  cheap storage, asynchronously.
+
+Shard by geography: a city's drivers and riders live on the same shard, and
+cross-shard queries are rare.
+
+## Matching
+
+Finding candidates is a geo query over the rider's cell and its neighbours.
+Choosing among them is the interesting part:
+
+- **Rank by ETA, not distance.** Rivers, one-way streets and traffic make
+  straight-line distance misleading. A routing service estimates arrival
+  times over the road network.
+- **Consider more than the nearest driver.** Driver ratings, vehicle type,
+  and — at scale — a global view: matching a batch of nearby requests at
+  once can beat greedy one-by-one assignment.
+
+## Exactly one trip per driver
+
+Two dispatchers might offer the same driver to two riders at the same
+moment. The assignment must be atomic:
+
+- Mark the driver as **reserved** with a conditional update — "set reserved
+  for trip X only if currently available" — in the store that owns driver
+  state. The loser of the race moves to its next candidate.
+- Give the offer a timeout. If the driver doesn't respond in 15 seconds, the
+  reservation is released and the next driver is tried.
+
+This is the same "check and set in one step" as reserving a spot in the
+[parking lot design](/blog/design-a-parking-lot-lld), just distributed.
+
+## Trips as a state machine
+
+A trip moves through `REQUESTED → ACCEPTED → DRIVER_ARRIVED → IN_PROGRESS →
+COMPLETED`, or to `CANCELLED` from the early states. Model it explicitly
+([state machines](/blog/state-pattern-and-state-machines)), store it in a
+durable database, and validate every transition. Make the transition requests
+[idempotent](/blog/idempotency-keys): a driver's phone retrying "start trip"
+on a bad connection mustn't start it twice.
+
+## Live tracking
+
+During a trip, the rider sees the car move. The driver's location updates
+are fanned out to the rider over a [WebSocket](/blog/websockets-sse-polling),
+via the same gateway pattern as a [chat system](/blog/design-a-chat-system).
+Clients smooth the movement between updates, so the car glides instead of
+jumping.
+
+## After the trip
+
+Fare calculation (distance, time, surge multiplier), payment, receipts and
+ratings all happen after `COMPLETED`, asynchronously, through a queue. A slow
+payment provider must never block the next ride. If charging fails, retry
+with backoff, and run the overall flow as a [saga](/blog/sagas-and-two-phase-commit)
+with compensations where needed.
+
+## Practise it
+
+"Ride hailing" is one of the prompts in the
+[system design practice tool](/tools/system-design). Draw the location
+service separately from the trip service — they have very different write
+patterns — and have Claude review the design.

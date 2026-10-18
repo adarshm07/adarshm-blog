@@ -1,0 +1,130 @@
+---
+title: "tsconfig Flags Worth Turning On Beyond strict"
+publishedAt: "2026-10-18"
+summary: "strict: true is the baseline, but several useful checks live outside it. What noUncheckedIndexedAccess, exactOptionalPropertyTypes, noImplicitOverride, noImplicitReturns and noFallthroughCasesInSwitch catch — with the real compiler errors — and how to adopt them in an existing codebase."
+tags: "TypeScript"
+---
+
+`"strict": true` turns on a family of checks — `strictNullChecks`,
+`noImplicitAny`, `strictFunctionTypes`, `useUnknownInCatchVariables` and
+others — and every new project should start with it. But some of the most
+useful checks aren't in `strict`. Each one turns a class of runtime bug into
+a compile error.
+
+<TsconfigFlagsVisualizer />
+
+## noUncheckedIndexedAccess
+
+The flag with the biggest payoff. By default, TypeScript assumes indexing
+always finds something:
+
+```typescript
+const prices: Record<string, number> = { apple: 40 }
+prices['mango'].toFixed(2)   // compiles — then TypeError at runtime
+```
+
+With the flag on, `prices['mango']` has type `number | undefined`, and you get
+error TS2532, "Object is possibly 'undefined'." The same applies to arrays:
+`list[5]` is `T | undefined`.
+
+It's noisy at first, especially with arrays. Idioms that help:
+
+```typescript
+for (const item of list) { … }          // for…of never gives undefined
+const first = list.at(0)                // explicitly T | undefined
+const price = prices[key] ?? 0          // decide what missing means
+```
+
+## exactOptionalPropertyTypes
+
+`timeout?: number` normally means "missing, or a number, or explicitly
+`undefined`". Those aren't the same at runtime: `{ timeout: undefined }` has
+the key (so `'timeout' in opts` is true, and spreading it over defaults
+replaces a default with `undefined`), while `{}` doesn't.
+
+With this flag, optional means only "may be missing". Assigning `undefined`
+explicitly fails with TS2375, unless you write `timeout?: number | undefined`.
+
+It's strict, and some libraries' types don't cope with it. It's most
+valuable in code that merges options objects.
+
+## noImplicitOverride
+
+```typescript
+class Child extends Base {
+  greet() { return 'hello' }     // TS4114: needs the 'override' modifier
+}
+```
+
+Requiring `override` makes intent explicit. The real benefit comes later: if
+someone renames `Base.greet`, every `override greet()` stops compiling,
+instead of silently becoming an unrelated method that is never called.
+
+## noImplicitReturns
+
+```typescript
+function label(x: number) {   // TS7030: Not all code paths return a value
+  if (x > 0) return 'positive'
+}
+```
+
+Catches the forgotten `else` branch that returns `undefined`.
+
+## noFallthroughCasesInSwitch
+
+```typescript
+switch (shape.kind) {
+  case 'circle': log('circle')   // TS7029: Fallthrough case in switch
+  case 'square': return 1
+}
+```
+
+Falling through by accident is a classic bug. With this flag, a non-empty
+`case` must end with `break`, `return` or `throw`.
+
+## noUnusedLocals and noUnusedParameters
+
+These flag unused variables and parameters. Useful, but they fail the build
+over work-in-progress code. Many teams leave them off in `tsconfig` and let
+ESLint report unused code as warnings instead. (Prefix a deliberately unused
+parameter with `_` to silence it.)
+
+## A recommended set
+
+```json
+{
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true
+  }
+}
+```
+
+The last three are about builds rather than bugs. `verbatimModuleSyntax` and
+`isolatedModules` keep each file compilable on its own, which is what esbuild,
+SWC and Babel need. `skipLibCheck` skips type-checking `.d.ts` files in
+`node_modules`, which saves time and avoids errors in code you don't control.
+
+## Adopting them in an existing codebase
+
+Turning on `noUncheckedIndexedAccess` in a large project can produce
+hundreds of errors at once. Ways to make it manageable:
+
+- **One flag at a time**, merged separately.
+- **Fix with intent**, not with `!`. A non-null assertion (`list[0]!`)
+  silences the error without making the code safer. Use it only where you
+  can see why the value exists.
+- **Use a stricter config for new code**: a separate `tsconfig` for a new
+  package or directory, extended from the base one.
+
+Each flag moves a category of bug from production to your editor. The
+[compile-time types post](/blog/typescript-types-at-compile-time) explains
+the limit: these checks only cover what TypeScript can see, so data from
+outside still needs [runtime validation](/blog/runtime-validation-with-zod).

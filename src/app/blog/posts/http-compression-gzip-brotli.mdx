@@ -1,0 +1,106 @@
+---
+title: "HTTP Compression: gzip, Brotli and zstd"
+publishedAt: "2026-10-18"
+summary: "Text responses shrink by 5–20× when compressed, and browsers ask for it on every request. How Accept-Encoding and Content-Encoding negotiate a format, how gzip, Brotli and zstd compare, static versus on-the-fly compression, what not to compress, and the one security caveat."
+tags: "Web"
+---
+
+HTML, CSS, JavaScript and JSON are wordy. The same tag names, property names
+and keys repeat thousands of times. Compression exploits that, and for text
+the savings are dramatic. A JSON list of 200 users, as measured with Node's
+`zlib`:
+
+<Table
+  data={{
+    headers: ['encoding', 'bytes', 'vs. original'],
+    rows: [
+      ['none', '17,671', '—'],
+      ['gzip (default level 6)', '1,875', '~9× smaller'],
+      ['gzip (level 9)', '1,721', '~10× smaller'],
+      ['Brotli (quality 11)', '847', '~21× smaller'],
+    ],
+  }}
+/>
+
+Fewer bytes means faster loads, especially on mobile networks, and lower
+bandwidth bills.
+
+## How the browser and server agree
+
+<CompressionVisualizer />
+
+Three headers do the work:
+
+- **`Accept-Encoding`** (request): the formats the client can decode, such as
+  `gzip, deflate, br, zstd`. Browsers send it automatically.
+- **`Content-Encoding`** (response): the format actually used.
+- **`Vary: Accept-Encoding`** (response): tells caches and
+  [CDNs](/blog/cdn-explained) that the response depends on that request
+  header, so they store a separate copy per encoding. Without it, a cache
+  could serve Brotli to a client that only understands gzip. (See
+  [HTTP caching headers](/blog/http-caching-headers).)
+
+Your code rarely deals with this directly. `fetch` and browsers decompress
+transparently, and servers, frameworks and CDNs compress for you — once it's
+enabled.
+
+## The formats
+
+**gzip** (DEFLATE: LZ77 back-references plus [Huffman coding](/blog/huffman-coding)).
+Supported everywhere, fast at its default levels. The safe baseline.
+
+**Brotli** (`br`, 2015). Uses the same family of techniques, plus a built-in
+dictionary of common web strings (HTML tags, JavaScript keywords, common
+English words). Typically 15–25% smaller than gzip for web text at
+comparable settings, and much smaller at maximum quality — but maximum
+quality is slow to compress. Supported by all modern browsers, over HTTPS.
+
+**zstd** (Zstandard, from Meta). Compresses and decompresses very fast, with
+ratios similar to Brotli at comparable speed. Chrome and Firefox support it
+as an HTTP content encoding; support elsewhere is newer, so always keep a
+gzip or Brotli fallback.
+
+## Static vs. on the fly
+
+- **Static assets** (JS bundles, CSS, fonts that aren't already compressed):
+  compress **once at build time** at maximum quality — Brotli 11 — and serve
+  the pre-compressed `.br` and `.gz` files. The slow compression happens
+  once, not per request.
+- **Dynamic responses** (HTML pages, API JSON): compress per response, at a
+  moderate level (gzip 6 or Brotli 4–5). Maximum Brotli would cost more CPU
+  than it saves in transfer time.
+
+Many CDNs do both automatically.
+
+## What not to compress
+
+- **Already-compressed formats**: JPEG, PNG, WebP, AVIF, MP4, WOFF2 fonts,
+  zip files. Compressing again wastes CPU and can even make them slightly
+  larger.
+- **Tiny responses**: below about 1 KB, the savings are smaller than the
+  overhead. Many servers have a minimum size setting.
+- **Streams that need low latency**: compression buffers data. For
+  [server-sent events](/blog/websockets-sse-polling) or streamed LLM output,
+  make sure the compressor flushes after each event, or the client receives
+  everything late, in bursts.
+
+## The security caveat: BREACH
+
+Compression leaks information about content through its size. If a response
+contains both a **secret** (like a CSRF token) and **attacker-influenced
+input** (like a reflected query parameter), an attacker who can observe
+encrypted response sizes can guess the secret one character at a time:
+guesses that match part of the secret compress better. This is the BREACH
+attack.
+
+Mitigations: don't reflect user input next to secrets in the same compressed
+response, mask CSRF tokens with a random value on every response (most
+frameworks do), and add rate limiting. It's not a reason to turn compression
+off. It's a reason to know where secrets appear.
+
+## Checking it
+
+In DevTools' Network panel, compare a request's transferred size with its
+resource size, and look for `content-encoding` in the response headers. A
+large JSON or JS response transferring at full size is the most common sign
+that compression isn't enabled.

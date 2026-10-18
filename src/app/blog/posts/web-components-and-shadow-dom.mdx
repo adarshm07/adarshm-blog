@@ -1,0 +1,142 @@
+---
+title: "Web Components and the Shadow DOM"
+publishedAt: "2026-10-18"
+summary: "Browsers have a built-in component model: custom elements with lifecycle callbacks, the shadow DOM for encapsulated markup and styles, slots for composition, and ways to theme from outside. How each part works, how they fit with frameworks, and when native components are the right choice."
+tags: "Web"
+---
+
+React, Vue and Svelte each have their own component model, and a component
+written for one doesn't work in the others. **Web Components** are the
+browser's own component model, built from standard APIs. A component written
+with them works in any framework, or with none — which is why design systems
+and widgets embedded in other people's sites often use them.
+
+Three APIs make up Web Components:
+
+1. **Custom elements** — define your own HTML tags, backed by a class.
+2. **Shadow DOM** — a private DOM tree with its own scoped styles.
+3. **`<template>` and `<slot>`** — reusable markup, and holes the user of the
+   component fills in.
+
+<WebComponentsVisualizer />
+
+## Custom elements
+
+```javascript
+class RatingStars extends HTMLElement {
+  static observedAttributes = ['value']
+
+  connectedCallback() { this.render() }
+  attributeChangedCallback() { this.render() }
+
+  render() {
+    const value = Number(this.getAttribute('value') ?? 0)
+    this.textContent = '★'.repeat(value) + '☆'.repeat(5 - value)
+  }
+}
+
+customElements.define('rating-stars', RatingStars)
+```
+
+```html
+<rating-stars value="3"></rating-stars>
+```
+
+- **The name must contain a hyphen**, so it can never clash with a future
+  built-in element.
+- **Lifecycle callbacks**: `connectedCallback` when the element is added to
+  the document, `disconnectedCallback` when it's removed (clean up timers and
+  listeners here), and `attributeChangedCallback` for each attribute listed
+  in `observedAttributes`.
+- **Upgrades**: elements already in the HTML before `define` runs are
+  upgraded when it does, so the page can render before the JavaScript loads.
+
+Attributes are strings. For rich data — arrays, objects — expose JavaScript
+**properties** (getters and setters on the class) and keep attributes for
+simple configuration.
+
+## Shadow DOM
+
+`this.attachShadow({ mode: 'open' })` gives the element a **shadow root**: a
+separate DOM tree, rendered in place of the element's children, with two
+boundaries:
+
+- **Styles inside don't leak out**: a `span { color: gold }` in the shadow
+  root affects only the component's spans.
+- **Styles outside don't leak in**: the page's CSS can't accidentally break
+  the component's layout.
+
+`document.querySelector` doesn't reach into shadow roots either. That's
+encapsulation, and it's also why testing tools need special selectors to
+reach inside.
+
+## Slots: composing with outside content
+
+A `<slot>` in the shadow DOM marks where the element's own children appear:
+
+```html
+<!-- inside the component's shadow root -->
+<div class="card">
+  <header><slot name="title"></slot></header>
+  <slot></slot>
+</div>
+
+<!-- using it -->
+<info-card>
+  <h2 slot="title">Order shipped</h2>
+  <p>Arriving Thursday.</p>
+</info-card>
+```
+
+The slotted elements stay in the page's DOM and keep the page's styles — they
+are only *displayed* inside the component.
+
+## Theming from outside
+
+Encapsulation would make components impossible to brand, so there are
+deliberate openings:
+
+- **CSS custom properties inherit through** the shadow boundary: the
+  component uses `color: var(--rating-colour, gold)`, and the page sets
+  `--rating-colour`.
+- **`::part()`**: the component marks elements with `part="label"`, and the
+  page styles them with `rating-stars::part(label) { … }`.
+- **`:host`** inside the component styles the element itself, and
+  `:host([disabled])` styles it based on its own attributes.
+
+## Server rendering
+
+A shadow root normally needs JavaScript to exist. **Declarative shadow DOM**
+lets the HTML include it directly, so the component renders before (or
+without) JavaScript:
+
+```html
+<rating-stars value="3">
+  <template shadowrootmode="open">
+    <style>span { color: gold }</style>
+    <span>★★★☆☆</span>
+  </template>
+</rating-stars>
+```
+
+## With frameworks, or instead of them
+
+Web Components don't replace a framework's state management or rendering
+model. Writing large apps directly against these APIs means a lot of manual
+DOM updating, so libraries like **Lit** add reactive properties and templates
+on top while still producing standard components.
+
+They shine for:
+
+- **Design systems** shared across teams using different frameworks.
+- **Embeddable widgets** for other people's sites — a chat bubble, a payment
+  button — where shadow DOM protects you from their CSS, and them from yours.
+- **Long-lived UI**, since browser APIs don't have major-version rewrites.
+
+React 19 supports custom elements fully — setting properties, not just
+attributes, and listening for custom events — which removed the main
+friction of using them inside React apps.
+
+Accessibility still applies: a custom element starts as a generic element, so
+give interactive ones the right roles, names and keyboard handling — or wrap
+native elements inside. See [accessibility fundamentals](/blog/web-accessibility-fundamentals).

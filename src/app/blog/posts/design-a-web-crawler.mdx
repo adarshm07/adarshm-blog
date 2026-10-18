@@ -1,0 +1,111 @@
+---
+title: "System Design Case Study: A Web Crawler"
+publishedAt: "2026-10-18"
+summary: "Designing a crawler that fetches billions of pages politely: the URL frontier with per-host queues, robots.txt and rate limits, DNS caching, de-duplicating URLs with Bloom filters and content with fingerprints, avoiding crawler traps, and scaling it all across machines."
+tags: "System Design"
+---
+
+A web crawler starts with a few seed URLs, downloads those pages, extracts
+their links, and repeats. Search engines, archives, price trackers and
+datasets for language models all start this way. At small scale it's a
+breadth-first search in twenty lines. At billions of pages, almost every
+line of that loop needs a design decision.
+
+## Requirements
+
+**Functional**: given seed URLs, fetch pages, extract links, follow them,
+store page content for downstream processing (indexing, analysis).
+
+**Non-functional**:
+
+- **Polite**: never overload a site; obey robots.txt.
+- **Scalable**: billions of pages; thousands of fetches per second.
+- **Robust**: malformed HTML, slow servers, infinite URL spaces, huge files.
+- **Fresh**: revisit important pages more often than unimportant ones.
+
+**Numbers**: 1 billion pages a month is about 400 pages a second. At an
+average of 100 KB of HTML, that's 40 MB/s of download and 100 TB a month of
+raw content — stored compressed, as the [compression post](/blog/http-compression-gzip-brotli)
+shows, text shrinks a lot.
+
+## The crawl loop
+
+<WebCrawlerVisualizer />
+
+## The URL frontier
+
+The frontier isn't one queue. It has two jobs that pull in different
+directions:
+
+- **Priority**: fetch important pages first — home pages and pages with many
+  incoming links, plus pages that change often and are due for a revisit.
+- **Politeness**: never send more than one request at a time to a host, and
+  leave a delay between requests (or obey a `Crawl-delay`).
+
+A common design has **front queues** by priority and **back queues** — one
+per host. A heap of back queues, ordered by "next allowed fetch time", tells
+fetchers which host they may hit next. Each fetcher thread takes the host at
+the top, fetches one URL, and puts the host back with a new time. With
+millions of hosts, the work spreads naturally and no single site is
+overwhelmed.
+
+## Fetching
+
+- **robots.txt**: fetch it once per host, cache it for a day, and check every
+  URL against it before fetching.
+- **DNS**: at hundreds of fetches a second, the system resolver becomes a
+  bottleneck. Run a local caching resolver.
+- **Timeouts and limits**: cap connection time, total time and response size,
+  and skip content types you don't need.
+- **Identify yourself**: a clear User-Agent with a contact URL, so site
+  owners can reach you instead of blocking you.
+
+## Not doing the same work twice
+
+**URL de-duplication.** Normalise first — lowercase the host, drop the
+`#fragment`, resolve relative paths, sort or strip tracking parameters —
+using a real [URL parser](/blog/url-anatomy-and-encoding). Then check a
+seen-set. With billions of URLs, a [Bloom filter](/blog/bloom-filters-explained)
+answers "seen before?" from memory, with a small, tunable false-positive
+rate (a few pages never crawled — acceptable).
+
+**Content de-duplication.** The same page appears under many URLs: mirrors,
+`?ref=` parameters, `http` and `https`. Hash the content and skip exact
+duplicates. Near-duplicates — the same article with a different date in the
+sidebar — need a similarity fingerprint such as SimHash, where similar pages
+have hashes that differ in only a few bits.
+
+## Crawler traps
+
+Some sites generate infinite URLs: calendars with a "next month" link
+forever, session IDs in every link, faceted search with endless filter
+combinations. Defend with limits on URL length, path depth and pages per
+host, and by spotting repetitive path patterns.
+
+## Scaling out
+
+Partition the work **by host**: hash each host to a crawler machine. All
+URLs for a host land on one machine, so its politeness timer and robots.txt
+cache are local — no coordination needed. When a machine extracts a link
+for a host owned elsewhere, it forwards it. That's
+[consistent hashing](/blog/consistent-hashing) again, so machines can be
+added without reshuffling everything.
+
+Downstream, fetched pages go into a log or queue
+([queues vs. event logs](/blog/message-queues-vs-event-logs)) for parsing,
+indexing — an [inverted index](/blog/inverted-index-and-full-text-search) —
+and storage in object storage. The fetchers never wait on the indexers.
+
+## Freshness
+
+Pages change at different rates. Track how often each page changed in the
+past and schedule revisits accordingly: a news front page every few
+minutes, an old blog post every few months. Conditional requests
+(`If-Modified-Since`, `If-None-Match`) make revisits of unchanged pages
+cheap — see [HTTP caching headers](/blog/http-caching-headers).
+
+## Practise it
+
+Draw the frontier, fetchers, dedupe and storage in the
+[system design practice tool](/tools/system-design), and send your design
+to Claude for a review.

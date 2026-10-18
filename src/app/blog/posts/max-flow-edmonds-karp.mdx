@@ -1,0 +1,116 @@
+---
+title: "Maximum Flow: Edmonds–Karp and the Min-Cut Theorem"
+publishedAt: "2026-10-18"
+summary: "How much can flow through a network of pipes with limited capacities? How augmenting paths found by BFS push flow until none remain, why residual edges let the algorithm undo earlier choices, how the max-flow equals the min-cut, and the matching and assignment problems that reduce to it."
+tags: "DSA"
+---
+
+Water flows from a source to a sink through pipes, each with a capacity. Or
+data through network links, or trucks along roads, or cars through a city at
+rush hour. How much can get through per second?
+
+That's the **maximum flow** problem. The answer is limited by bottlenecks,
+and finding it also finds those bottlenecks — the **minimum cut**.
+
+## The rules
+
+A flow network is a directed graph with a source S, a sink T, and a capacity
+on each edge. A valid flow:
+
+- never exceeds an edge's capacity, and
+- is **conserved**: at every node except S and T, flow in equals flow out.
+
+The goal is to maximise the flow leaving S.
+
+<MaxFlowVisualizer />
+
+## Augmenting paths, and undoing mistakes
+
+The basic idea (Ford–Fulkerson): while there's a path from S to T along
+edges with spare capacity, push as much flow as its tightest edge allows.
+
+Done greedily, that can get stuck: an early path can use an edge "the wrong
+way" and block a better arrangement. The fix is the **residual graph**.
+Every time you push *f* units along an edge u → v, you also add *f* units of
+capacity on a reverse edge v → u. A later path that uses the reverse edge is
+effectively **cancelling** some earlier flow and rerouting it. With residual
+edges, augmenting paths always reach the true maximum.
+
+**Edmonds–Karp** is Ford–Fulkerson where each augmenting path is found by
+[BFS](/blog/graph-traversal-bfs-dfs) — the path with the fewest edges. That
+choice bounds the number of augmentations, giving **O(V · E²)** total,
+whatever the capacities are.
+
+## The code
+
+```javascript
+function maxFlow(nodes, edges, source, sink) {
+  const cap = new Map(nodes.map((n) => [n, new Map()]))
+  for (const [u, v, c] of edges) {
+    cap.get(u).set(v, (cap.get(u).get(v) ?? 0) + c)
+    if (!cap.get(v).has(u)) cap.get(v).set(u, 0)      // residual edge
+  }
+
+  let flow = 0
+  while (true) {
+    // BFS for the shortest path with spare capacity.
+    const prev = new Map([[source, null]])
+    const queue = [source]
+    for (let h = 0; h < queue.length && !prev.has(sink); h++) {
+      const u = queue[h]
+      for (const [v, c] of cap.get(u)) {
+        if (c > 0 && !prev.has(v)) { prev.set(v, u); queue.push(v) }
+      }
+    }
+    if (!prev.has(sink)) return flow                  // no augmenting path left
+
+    let push = Infinity
+    for (let v = sink; prev.get(v) !== null; v = prev.get(v)) {
+      push = Math.min(push, cap.get(prev.get(v)).get(v))
+    }
+    for (let v = sink; prev.get(v) !== null; v = prev.get(v)) {
+      const u = prev.get(v)
+      cap.get(u).set(v, cap.get(u).get(v) - push)     // use forward capacity
+      cap.get(v).set(u, cap.get(v).get(u) + push)     // allow undoing it
+    }
+    flow += push
+  }
+}
+
+maxFlow(['S', 'A', 'B', 'C', 'D', 'T'], [
+  ['S', 'A', 10], ['S', 'B', 5], ['A', 'B', 15], ['A', 'C', 9],
+  ['B', 'D', 10], ['C', 'T', 10], ['C', 'D', 4], ['D', 'T', 10],
+], 'S', 'T')   // 15
+```
+
+## Max-flow equals min-cut
+
+A **cut** splits the nodes into two groups, one containing S and the other T.
+Its capacity is the total capacity of edges going from S's side to T's side.
+Every unit of flow must cross every cut, so the flow can never exceed any
+cut's capacity.
+
+The **max-flow min-cut theorem** says the bound is tight: the maximum flow
+equals the capacity of the **smallest** cut. When Edmonds–Karp stops, the
+nodes still reachable from S in the residual graph form one side of a
+minimum cut — so you get the bottleneck for free. In the example, only S is
+reachable at the end, and the cut is the two edges leaving it: 10 + 5 = 15.
+
+## Problems that are secretly max flow
+
+- **Bipartite matching**: connect S to every left node and every right node
+  to T, all with capacity 1. The max flow is the size of the maximum
+  matching — workers to jobs, students to projects. (See
+  [bipartite graphs](/blog/bipartite-graphs-two-coloring).)
+- **Edge-disjoint paths**: with capacity 1 on every edge, max flow counts how
+  many paths from S to T share no edge — a measure of network resilience.
+- **Minimum cut**: the cheapest set of links whose failure disconnects two
+  data centres; or, in image segmentation, the boundary separating
+  foreground from background.
+- **Project selection and scheduling**: choose projects with profits and
+  dependencies to maximise total gain, via a min-cut construction.
+
+Faster algorithms exist — Dinic's algorithm is the common choice in
+competitive programming, and push-relabel methods power many libraries — but
+Edmonds–Karp is the version to understand first: BFS, bottleneck, residual
+edges, repeat.
