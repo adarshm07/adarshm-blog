@@ -72,6 +72,11 @@ export const curriculum: CurriculumPhase[] = [
         note: 'The array-backed tree that always knows its minimum — the engine behind schedulers and top-K problems.',
       },
       {
+        slug: 'huffman-coding',
+        difficulty: 'Intermediate',
+        note: 'A heap-driven greedy algorithm with a proof: merge the two rarest symbols, and get the optimal prefix code behind gzip and PNG.',
+      },
+      {
         slug: 'tries-prefix-trees',
         difficulty: 'Intermediate',
         note: 'A tree keyed by characters instead of comparisons; the structure behind autocomplete.',
@@ -87,6 +92,11 @@ export const curriculum: CurriculumPhase[] = [
         slug: 'two-pointers-and-sliding-window',
         difficulty: 'Intermediate',
         note: 'The pattern that turns a whole family of O(n²) array and string problems into O(n).',
+      },
+      {
+        slug: 'longest-palindromic-substring',
+        difficulty: 'Intermediate',
+        note: 'Expand around each of the 2n − 1 centres: a simple O(n²) answer with O(1) memory, and when DP or Manacher fits better.',
       },
       {
         slug: 'prefix-sums-and-difference-arrays',
@@ -127,6 +137,11 @@ export const curriculum: CurriculumPhase[] = [
         slug: 'graph-traversal-bfs-dfs',
         difficulty: 'Intermediate',
         note: 'BFS and DFS are the entry point to every graph problem: reachability, shortest paths, cycles.',
+      },
+      {
+        slug: 'flood-fill-and-number-of-islands',
+        difficulty: 'Beginner',
+        note: 'Grids are graphs in disguise: BFS from every unvisited land cell counts islands — and solves a whole family of grid problems.',
       },
       {
         slug: 'bipartite-graphs-two-coloring',
@@ -214,6 +229,11 @@ export const curriculum: CurriculumPhase[] = [
         slug: 'lowest-common-ancestor-binary-lifting',
         difficulty: 'Advanced',
         note: 'Precompute ancestors at powers of two, and any tree query — LCA, k-th ancestor, distance — takes O(log n) jumps.',
+      },
+      {
+        slug: 'max-flow-edmonds-karp',
+        difficulty: 'Advanced',
+        note: 'Augmenting paths by BFS, residual edges that undo earlier choices, and the min cut that falls out — plus matching problems that reduce to it.',
       },
     ],
   },

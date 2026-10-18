@@ -1,0 +1,94 @@
+---
+title: "Semantic Caching for LLM Apps"
+publishedAt: "2026-10-18"
+summary: "An exact-match cache misses every rephrasing of the same question. A semantic cache matches by meaning, using embeddings — returning answers in milliseconds, for free. How it works, choosing a similarity threshold, what must be part of the cache key, invalidation, and when not to use it."
+tags: "AI Engineering"
+---
+
+LLM calls are slow (seconds) and cost money per token. Many applications —
+support assistants, documentation search, internal Q&A bots — get the same
+questions over and over. Caching the answers is the obvious move.
+
+But a normal cache keys on the exact text, and people rarely ask the same
+question in the same words: "How do I reset my password?", "forgot my
+password", "password reset steps". Three cache entries, all misses.
+
+A **semantic cache** matches on meaning instead.
+
+<SemanticCacheVisualizer />
+
+## How it works
+
+1. **Embed** the incoming query with an embedding model
+   ([what embeddings are](/blog/what-embeddings-actually-are)).
+2. **Search** a vector index of previously cached queries for the nearest
+   neighbour.
+3. If its similarity is above a **threshold**, return the cached answer.
+4. Otherwise call the LLM, return the answer, and store the
+   (embedding, answer) pair.
+
+Embedding a short query takes milliseconds and costs a tiny fraction of an
+LLM call, so even a moderate hit rate pays off. Vector databases and Redis
+both support the nearest-neighbour lookup; libraries such as GPTCache and
+several AI gateways package the whole pattern.
+
+## The threshold is the design
+
+Similarity scores are continuous; the cache needs a yes or no.
+
+- **Too low**, and different questions get the same answer: "reset my
+  password" and "reset my 2FA device" are close in wording, far apart in
+  meaning. A wrong cached answer is worse than a slow correct one.
+- **Too high**, and almost nothing hits.
+
+Tune it on real traffic. Collect pairs of queries, label which should share
+an answer, and pick the threshold with an acceptable false-hit rate — the same
+discipline as any [eval](/blog/evals-for-llm-apps). Thresholds don't transfer
+between embedding models, so re-tune when you change models.
+
+## What the key must include
+
+The query alone isn't enough. An answer depends on everything that shaped
+it, so make these part of the cache key, or partition the cache by them:
+
+- **The system prompt and model version** — change either, and old answers
+  may no longer be right.
+- **The user's permissions or tenant** — never serve one customer's answer,
+  built from their private documents, to another.
+- **Conversation context** — "what about the second one?" means nothing
+  without the earlier turns. Semantic caching suits standalone questions far
+  better than mid-conversation follow-ups.
+- **Retrieved documents** in a [RAG](/blog/rag-retrieval-explained) system —
+  if the knowledge base changes, cached answers built from old documents go
+  stale.
+
+## Invalidation
+
+- **TTLs** suited to how fast the underlying facts change: product prices
+  hours, policy documents weeks.
+- **Versioned keys**: include a knowledge-base version or a prompt hash, and
+  bump it when content changes — old entries simply stop matching.
+- **Feedback**: if users mark a cached answer unhelpful, evict it.
+
+## When not to use it
+
+- **Personalised or time-sensitive answers**: "what's my order status?" must
+  never come from a cache.
+- **Creative output** where users expect variety.
+- **Low-repetition traffic**: if few questions repeat, you pay for embedding
+  lookups and gain little. Measure your hit rate before and after.
+
+## Related, but different
+
+- **Exact-match caching** of whole responses is simpler and has no false
+  hits. Use it first for repeated identical requests — tests, retries,
+  scheduled jobs.
+- **Prompt caching** by the model provider caches the *processing* of a
+  repeated prompt prefix, not the answer. The model still generates a fresh
+  response, just with faster and cheaper prefill. It's safe for every
+  request, and complements a semantic cache. See
+  [context windows and caching](/blog/context-windows-and-caching).
+
+Use exact caching for identical requests, prompt caching for shared
+prefixes, and semantic caching — carefully thresholded and keyed — for
+rephrased questions with stable answers.

@@ -1,0 +1,120 @@
+---
+title: "Why 0.1 + 0.2 ≠ 0.3: JavaScript Numbers and Floating Point"
+publishedAt: "2026-10-18"
+summary: "Every JavaScript number is a 64-bit binary float. Why that makes 0.1 + 0.2 equal 0.30000000000000004, why toFixed rounds 1.005 down, how large IDs silently change when parsed from JSON, and the practical rules: integer minor units for money, BigInt or strings for big IDs, and Intl for display."
+tags: "JavaScript"
+---
+
+```javascript
+0.1 + 0.2            // 0.30000000000000004
+0.1 + 0.2 === 0.3    // false
+```
+
+This isn't a JavaScript bug. Python, Java, C and nearly every other language
+give the same answer, because they all use the same number format: **IEEE 754
+double-precision floating point**. JavaScript just has fewer ways around it,
+because `number` is the only numeric type most code ever uses.
+
+<FloatingPointVisualizer />
+
+## What a double is
+
+A 64-bit double stores a number as:
+
+- 1 sign bit,
+- 11 exponent bits (a power of two),
+- 52 fraction bits (the significant digits, in binary).
+
+So every number is stored as a binary fraction times a power of two — about
+15–17 significant decimal digits of precision, over an enormous range.
+
+The catch is **binary**. In base 10, 1/3 = 0.333… never ends. In base 2, the
+same happens to 1/10: 0.1 is 0.000110011001100… forever. The stored value is
+the nearest representable double, which is very slightly more than 0.1.
+Adding two such approximations gives a result whose nearest double isn't the
+same as the nearest double to 0.3.
+
+JavaScript prints the **shortest** decimal that uniquely identifies the stored
+double. That's why `0.1` prints as "0.1" even though the stored value isn't
+exactly that — and why the error suddenly appears after arithmetic.
+
+## Comparing floats
+
+Never compare computed floats with `===`. Compare with a tolerance suited to
+your values:
+
+```javascript
+const close = (a, b, eps = 1e-9) => Math.abs(a - b) <= eps * Math.max(1, Math.abs(a), Math.abs(b))
+
+close(0.1 + 0.2, 0.3)   // true
+```
+
+`Number.EPSILON` (about 2.2 × 10⁻¹⁶) is the gap between 1 and the next double.
+It works as a tolerance only for values near 1. For larger values the gaps
+between doubles are bigger, which is why the tolerance above scales with the
+magnitude.
+
+## Money: use integers
+
+`19.99 * 100` is `1998.9999999999998`, and `(1.005).toFixed(2)` is `"1.00"`,
+because 1.005 is stored as slightly less than 1.005. Errors like these turn
+into one-paisa discrepancies in totals, taxes and reconciliation.
+
+- **Store and compute money in integer minor units**: paise, cents. ₹19.99
+  is `1999`. Integers are exact up to 2⁵³.
+- **Round deliberately** at defined points (per line item, or per total —
+  your accountant will have an opinion), using an explicit rule.
+- **Format only for display**, with
+  [`Intl.NumberFormat`](/blog/intl-api-formatting):
+  `new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(1999 / 100)`
+  gives "₹19.99".
+- For exact decimal arithmetic (interest calculations, currency conversion),
+  use a decimal library or do it in the database's `NUMERIC` type.
+
+## Big integers: the 2⁵³ cliff
+
+Doubles hold integers exactly only up to `Number.MAX_SAFE_INTEGER`,
+2⁵³ − 1 = 9,007,199,254,740,991. Beyond that, not every integer can be
+represented:
+
+```javascript
+2 ** 53 + 1                                      // 9007199254740992
+JSON.parse('{"id": 1234567890123456789}').id     // 1234567890123456800
+```
+
+The second line is the dangerous one. 64-bit IDs — database keys,
+[Snowflake IDs](/blog/unique-id-generation-snowflake), tweet IDs — are
+silently changed by `JSON.parse`, with no error. Then you fetch, update or
+delete the wrong record.
+
+- **Send large IDs as strings** in JSON APIs.
+- **Use `BigInt`** for integer arithmetic beyond 2⁵³: `2n ** 64n` is exactly
+  18446744073709551616n. BigInts don't mix with numbers (`1n + 1` throws a
+  `TypeError`), and `JSON.stringify` can't serialise them without a
+  replacer.
+- `Number.isSafeInteger(x)` tells you whether you're still in exact
+  territory.
+
+## Rounding surprises
+
+- `Math.round(2.5)` is 3, but `Math.round(-2.5)` is −2: it rounds half
+  towards +∞, not away from zero.
+- `toFixed` works on the stored binary value, so "halfway" cases often aren't
+  halfway at all (the 1.005 example).
+- For display, `Intl.NumberFormat` has a `roundingMode` option, and handles
+  locale separators and currency symbols too.
+
+## Special values
+
+Doubles also have `NaN`, `Infinity`, `-Infinity` and `-0`:
+
+- `NaN !== NaN`. Use `Number.isNaN(x)`. (`[NaN].includes(NaN)` is true, but
+  `[NaN].indexOf(NaN)` is −1 — the two use different equality rules.)
+- `1 / 0` is `Infinity`, not an error. Check divisors.
+- `-0 === 0` is true, but `Object.is(-0, 0)` is false and `1 / -0` is
+  `-Infinity`. It rarely matters — until a sign shows up in a formatted
+  result.
+
+The rule of thumb: floats are excellent for measurements, graphics and
+science, where tiny relative errors don't matter. For money, identifiers and
+anything that must be exact, use integers, BigInt, strings or a decimal type.

@@ -1,0 +1,106 @@
+---
+title: "Longest Palindromic Substring: Expand Around the Centre"
+publishedAt: "2026-10-18"
+summary: "Find the longest substring that reads the same forwards and backwards. Why checking every substring is O(n³), how expanding around each of the 2n − 1 centres gives a simple O(n²) solution with O(1) memory, the DP alternative, and where Manacher's linear-time algorithm fits."
+tags: "DSA"
+---
+
+A palindrome reads the same in both directions: "racecar", "noon", "anana".
+Given a string, find its longest palindromic **substring** (contiguous, unlike
+a [subsequence](/blog/longest-common-subsequence-and-diff)).
+
+For "bananas", the answer is "anana".
+
+## Brute force
+
+There are about n²/2 substrings, and checking each one takes up to n steps:
+**O(n³)**. For a 1,000-character string, that's hundreds of millions of
+operations.
+
+## The idea: grow from the middle
+
+Every palindrome has a centre, and it mirrors around it. So instead of
+picking substrings and checking them, pick a centre and grow outwards while
+the characters on both sides match. When they stop matching, you've found
+the longest palindrome with that centre.
+
+There are two kinds of centre:
+
+- **A character**, for odd lengths: "ana" is centred on "n".
+- **A gap between two characters**, for even lengths: "noon" is centred
+  between the two "o"s.
+
+That's n + (n − 1) = **2n − 1 centres**.
+
+<PalindromeVisualizer />
+
+## The code
+
+```javascript
+function longestPalindrome(s) {
+  let start = 0, end = 0                       // best is s.slice(start, end)
+
+  function expand(left, right) {
+    while (left >= 0 && right < s.length && s[left] === s[right]) {
+      left--
+      right++
+    }
+    // The loop overshoots by one on each side.
+    if (right - left - 1 > end - start) {
+      start = left + 1
+      end = right
+    }
+  }
+
+  for (let i = 0; i < s.length; i++) {
+    expand(i, i)        // odd length, centred on s[i]
+    expand(i, i + 1)    // even length, centred between s[i] and s[i+1]
+  }
+  return s.slice(start, end)
+}
+
+longestPalindrome('bananas')   // 'anana'
+longestPalindrome('cbbd')      // 'bb'
+```
+
+Each expansion takes at most n steps, over 2n − 1 centres: **O(n²)** time in
+the worst case (a string like "aaaa…a"), and **O(1)** extra memory. On
+typical strings, most expansions stop after a step or two, so it runs much
+faster than the bound suggests.
+
+## The DP version
+
+Another way to see it: `s[i..j]` is a palindrome if its ends match and
+`s[i+1..j-1]` is a palindrome.
+
+```
+isPal[i][j] = s[i] === s[j] && (j - i < 2 || isPal[i+1][j-1])
+```
+
+Fill the table by increasing length. It's also O(n²) time, but O(n²)
+memory, and noticeably slower in practice. It's worth knowing because the
+same table answers related questions — "how many palindromic substrings are
+there?", or "minimum cuts to split a string into palindromes" — where you need
+every `isPal[i][j]`.
+
+## Manacher's algorithm
+
+Manacher's algorithm finds the longest palindrome in **O(n)**. It's centre
+expansion with memory: when a centre lies inside a palindrome already found,
+its mirror image on the other side tells you how far it extends for free, so
+expansions never re-check characters. It's elegant, and easy to get wrong
+under pressure. In interviews, centre expansion is the expected answer;
+mention Manacher if asked for something faster.
+
+## Related problems
+
+- **Palindromic substrings**: count them — the same expansion, adding one for
+  every successful step.
+- **Valid palindrome**: compare from both ends with
+  [two pointers](/blog/two-pointers-and-sliding-window), skipping
+  non-alphanumeric characters.
+- **Longest palindromic subsequence**: not contiguous — it's the
+  [LCS](/blog/longest-common-subsequence-and-diff) of the string and its
+  reverse.
+- **Palindrome partitioning**: [backtracking](/blog/backtracking-explained)
+  over cut positions, often with the `isPal` table to check pieces in O(1).

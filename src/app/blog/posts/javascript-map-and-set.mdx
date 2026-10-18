@@ -1,0 +1,132 @@
+---
+title: "Map and Set: When a Plain Object Isn't the Right Collection"
+publishedAt: "2026-10-18"
+summary: "Objects make poor dictionaries: keys are coerced to strings, inherited properties get in the way, and size takes extra work. How Map and Set fix that, their iteration order, identity-based keys, the new set operations, converting to and from JSON, and when an object is still the better choice."
+tags: "JavaScript"
+---
+
+For years, JavaScript code used plain objects as dictionaries:
+`const counts = {}; counts[word] = (counts[word] || 0) + 1`. It mostly works.
+But objects were designed to describe things with known properties, not to
+hold arbitrary keys, and the gaps show.
+
+`Map` and `Set` (ES2015) are collections built for the job.
+
+<MapSetVisualizer />
+
+## Problems with objects as maps
+
+**Keys become strings.** `obj[1]` and `obj['1']` are the same property, and
+an object used as a key turns into `"[object Object]"` — so different objects
+collide.
+
+**Inherited keys.** A plain object inherits from `Object.prototype`, so
+`'toString' in {}` is true. Code that checks `if (cache[key])` can be fooled
+by keys like `"constructor"`. (`Object.create(null)` avoids this, at the cost
+of being unusual.)
+
+**Key order rules.** Integer-like keys are listed first, in ascending order,
+before other keys in insertion order: `Object.keys({ 2: 'x', 1: 'y', b: 'z' })`
+is `['1', '2', 'b']`.
+
+**Size and iteration take extra work**: `Object.keys(obj).length`,
+`Object.entries(obj)`.
+
+## Map
+
+```javascript
+const visits = new Map()
+visits.set('/home', 3)
+visits.set('/blog', 1)
+
+visits.get('/home')            // 3
+visits.has('/about')           // false
+visits.size                    // 2
+visits.delete('/blog')
+
+for (const [path, count] of visits) console.log(path, count)
+```
+
+- **Any value can be a key** — objects, functions, numbers — compared by
+  identity (`SameValueZero`: like `===`, except `NaN` matches `NaN`).
+- **Insertion order**, always, for every kind of key.
+- **`size`** is a property, updated as you go.
+- **Frequent adds and deletes** are what engines optimise Map for.
+
+Using objects as keys is the big unlock: metadata for DOM nodes, memoisation
+keyed by an argument object, a graph's adjacency list keyed by node objects.
+If the keys should be garbage-collected when nothing else references them,
+use a [WeakMap](/blog/weakmap-and-weakset) instead.
+
+## Set
+
+A `Set` holds each value at most once, in insertion order:
+
+```javascript
+const tags = new Set(['js', 'ts', 'js'])
+tags.size               // 2
+tags.has('ts')          // true
+tags.add('css')
+
+const unique = [...new Set(array)]   // de-duplicate an array
+```
+
+Membership checks are O(1) on average, compared with O(n) for
+`array.includes`. If you're calling `includes` inside a loop over another
+array, that's O(n × m) — converting one side to a Set first makes it
+O(n + m).
+
+## Set operations
+
+Sets now have the operations you'd expect, in current browsers and Node 22+:
+
+```javascript
+const a = new Set([1, 2, 3]), b = new Set([2, 3, 4])
+
+a.union(b)              // Set {1, 2, 3, 4}
+a.intersection(b)       // Set {2, 3}
+a.difference(b)         // Set {1}
+a.symmetricDifference(b) // Set {1, 4}
+a.isSubsetOf(new Set([1, 2, 3, 4]))   // true
+```
+
+They return new sets and leave the originals unchanged.
+
+## Grouping
+
+`Object.groupBy` and `Map.groupBy` (ES2024) build the "group items by key"
+structure in one call:
+
+```javascript
+Object.groupBy([1, 2, 3, 4], (n) => (n % 2 ? 'odd' : 'even'))
+// { odd: [1, 3], even: [2, 4] }
+
+Map.groupBy(orders, (o) => o.customer)   // Map keyed by customer object
+```
+
+Use `Map.groupBy` when the keys aren't strings.
+
+## JSON
+
+`JSON.stringify(new Map([['a', 1]]))` gives `"{}"` — Maps and Sets don't
+serialise. Convert explicitly:
+
+```javascript
+JSON.stringify(Object.fromEntries(map))   // '{"a":1}'   (string keys only)
+JSON.stringify([...map])                  // '[["a",1]]' (any keys)
+JSON.stringify([...set])                  // arrays for sets
+
+new Map(Object.entries(JSON.parse(text)))  // and back
+```
+
+## When an object is still right
+
+- **Records with known fields** — a user, a config, a props object — are
+  objects. That's what objects are for, and TypeScript types them precisely.
+- **JSON in and out**, with string keys you don't need to iterate in a
+  special way.
+- **Small, fixed lookup tables** written as literals: `const STATUS_TEXT = {
+  404: 'Not found', 500: 'Server error' }`.
+
+Reach for `Map` when keys are dynamic, aren't strings, or the collection
+changes often — and `Set` whenever the question is "have I seen this?".

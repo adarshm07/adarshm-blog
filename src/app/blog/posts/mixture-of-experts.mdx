@@ -1,0 +1,89 @@
+---
+title: "Mixture of Experts: Big Models That Run Like Small Ones"
+publishedAt: "2026-10-18"
+summary: "How mixture-of-experts models have hundreds of billions of parameters but use only a fraction for each token. The router, top-k expert selection, why total and active parameters differ, the load-balancing problem, and what MoE means for memory, speed and serving."
+tags: "AI Engineering"
+---
+
+A dense language model uses **every** parameter for every token. Doubling
+its size doubles the compute per token. **Mixture of experts** (MoE) breaks
+that link: the model can grow its total parameters while each token uses
+only a small, fixed share of them.
+
+Many of today's largest open models are MoE models: Mixtral 8×7B, DeepSeek-V3,
+Qwen's MoE models, and others.
+
+## Where the experts sit
+
+A transformer layer has two main parts: [attention](/blog/how-attention-works),
+where tokens exchange information, and a **feed-forward network** (FFN), which
+processes each token on its own and holds much of the model's parameters.
+
+An MoE layer replaces the single FFN with:
+
+- several **experts** — separate FFNs, often 8 to over 100 of them — and
+- a **router**: a small learned layer that scores the experts for each token.
+
+For each token, only the top-scoring experts run.
+
+<MoeVisualizer />
+
+## Total vs. active parameters
+
+- **Mixtral 8×7B**: 8 experts per layer, 2 active per token. About 47 billion
+  parameters in total (not 56 — attention layers are shared), about 13
+  billion active per token.
+- **DeepSeek-V3**: 671 billion parameters, 37 billion active per token, with
+  many small experts plus a shared expert that every token uses.
+
+Compute per token tracks the **active** count: Mixtral generates at roughly
+the cost of a 13B dense model while drawing on the capacity of a much larger
+one. That's the appeal — more knowledge and quality for the same inference
+compute.
+
+## What the experts learn
+
+"Expert" suggests one for maths and one for French. That's not what happens.
+Routing is learned, per token and per layer, and analyses of trained models
+find specialisation that's mostly about **token-level patterns** — syntax,
+punctuation, particular kinds of tokens — rather than human-readable topics.
+Consecutive tokens of the same text often go to different experts.
+
+## The hard parts
+
+**Load balancing.** If the router sends most tokens to a few favourite
+experts, those experts become bottlenecks and the rest go untrained. Training
+adds a balancing objective — an auxiliary loss that penalises uneven
+routing, or (in DeepSeek-V3) adjustable per-expert biases — and limits how
+many tokens each expert accepts per batch (its **capacity**).
+
+**Memory.** Only some experts *compute* for each token, but **all** of them
+must be loaded, since the next token may need any of them. Mixtral needs the
+memory of a ~47B model while computing like a ~13B one. MoE trades memory for
+compute.
+
+**Serving at scale.** With large batches, every expert gets some tokens, so
+compute stays efficient. Very large MoE models are spread across many GPUs
+with **expert parallelism** — different experts on different devices — which
+adds communication as tokens are routed between them.
+
+**Fine-tuning** can be less stable than for dense models, because routing
+shifts as weights change.
+
+## What it means for you
+
+If you use models through an API, MoE is mostly invisible. It's one reason
+large, capable models have become cheaper and faster to serve.
+
+If you self-host:
+
+- **Size hardware by total parameters** for memory, and by active parameters
+  for throughput. An MoE model that "runs like a 13B" still needs the memory
+  of the whole model. Add the [KV cache](/blog/kv-cache-explained) on top.
+- **Quantisation** helps a lot, since memory is the constraint.
+- At **batch size 1** on limited hardware, offloading experts to CPU memory is
+  possible, but slow — every token may need weights that aren't on the GPU.
+
+Mixture of experts is one of a few tricks that decouple what a model knows
+from what it costs to run each token. [Speculative decoding](/blog/speculative-decoding)
+is another.

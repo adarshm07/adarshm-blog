@@ -1,0 +1,103 @@
+---
+title: "Gossip Protocols and Failure Detection"
+publishedAt: "2026-10-18"
+summary: "How a cluster of hundreds of nodes agrees on who's alive without a central coordinator: each node periodically tells a random peer what it knows, information spreads in about log N rounds, and heartbeats riding along let everyone detect failures. With SWIM, phi accrual detectors, and the trade-offs."
+tags: "System Design"
+---
+
+In a cluster of 500 nodes, every node needs to know which others are alive,
+and what state they're in. A central registry would work — until it fails or
+becomes a bottleneck. Having every node ping every other node means 500 × 499
+messages per round.
+
+**Gossip** spreads information the way rumours spread: each node
+periodically picks a random peer and exchanges what it knows. Nobody is in
+charge, and yet the whole cluster finds out quickly.
+
+<GossipVisualizer />
+
+## Why it's fast
+
+In each round, every informed node informs another. The number of informed
+nodes roughly doubles per round until most of the cluster knows, so spreading
+takes about **log₂ N** rounds:
+
+<Table
+  data={{
+    headers: ['cluster size', 'rounds to reach (almost) everyone', 'at 1 round / second'],
+    rows: [
+      ['8', '~3–4', 'a few seconds'],
+      ['1,000', '~10', 'about 10 s'],
+      ['1,000,000', '~20', 'about 20 s'],
+    ],
+  }}
+/>
+
+(The last few stragglers take a little longer — when most nodes already know,
+random peers are often already-informed ones.)
+
+Each node sends a constant number of messages per round, regardless of
+cluster size. The total load grows linearly with the number of nodes, and no
+node is special.
+
+## What gets gossiped
+
+- **Membership**: who's in the cluster, with their addresses.
+- **Heartbeats**: a counter each node increments about once a second.
+- **Metadata**: which data ranges a node owns, its load, its software
+  version, schema versions.
+
+Each node keeps a view — "node → (heartbeat counter, local time I last saw
+it increase)" — and merges views it receives, keeping the higher counter for
+each node. Conflicts resolve themselves: a higher counter always wins.
+
+## Failure detection
+
+If a node's heartbeat counter stops increasing in your view for long enough,
+it's probably down. "Long enough" is the hard part:
+
+- **Fixed timeouts** are simple, but too short a timeout flags slow nodes as
+  dead (during a GC pause, say), and too long delays recovery.
+- **Phi accrual detectors** (used by Cassandra and Akka) track the history of
+  heartbeat intervals for each node and output a suspicion level, φ, rising
+  continuously the longer a heartbeat is overdue relative to that node's
+  normal rhythm. Nodes on a jittery network get more slack automatically.
+
+## SWIM: faster, more accurate membership
+
+The **SWIM** protocol (2002), used in HashiCorp's Serf and Consul, separates
+detection from dissemination:
+
+1. Each round, a node **pings** one random member directly.
+2. No reply? It asks *k* other members to ping that node **indirectly** — so a
+   flaky link between two nodes doesn't get a healthy node declared dead.
+3. Still nothing: the node is **suspected**, and the suspicion is gossiped.
+   The suspected node gets a chance to refute it, by gossiping an
+   "I'm alive" message with a higher incarnation number.
+4. Only after a timeout does suspicion become **confirmed dead**.
+
+Membership changes piggyback on the ping messages, so dissemination costs
+almost nothing extra.
+
+## Trade-offs
+
+- **Eventual, not immediate**: different nodes see changes at different
+  moments. Fine for membership and load information; not for anything that
+  needs agreement, like electing a single leader or committing a write —
+  that's what [consensus](/blog/raft-leader-election) is for.
+- **Probabilistic**: delivery isn't guaranteed in any particular round, only
+  very likely after a few.
+- **Bandwidth grows with state**: gossiping full views gets expensive in
+  large clusters, so implementations send digests and deltas.
+
+## Where you see it
+
+- **Cassandra** and **ScyllaDB**: membership, token ownership and schema
+  versions spread by gossip.
+- **Consul** and **Serf**: SWIM-based membership and failure detection.
+- **Redis Cluster**: nodes gossip slot ownership and failure reports.
+- **Blockchains and peer-to-peer networks**: transactions and blocks spread
+  by gossip.
+
+When a design has "every node needs to know about every other node" and no
+strong-consistency requirement, gossip is the scalable default.

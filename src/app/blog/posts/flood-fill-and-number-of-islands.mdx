@@ -1,0 +1,122 @@
+---
+title: "Flood Fill and Number of Islands: Graphs Hiding in Grids"
+publishedAt: "2026-10-18"
+summary: "A grid is a graph: each cell is a node, and its neighbours are its edges. How flood fill (the paint-bucket tool) and 'number of islands' are BFS or DFS over that implicit graph, how to avoid stack overflows and revisits, and the family of grid problems the same template solves."
+tags: "DSA"
+---
+
+Click the paint bucket in an image editor and a whole region changes
+colour — every connected pixel of the same colour, and nothing past its
+edges. That's **flood fill**, and it's one of the most useful ideas in grid
+problems:
+
+> A grid is a graph. Every cell is a node, and each cell is connected to its
+> neighbours — up, down, left and right.
+
+You never build the graph explicitly. The neighbours of `(r, c)` are just
+`(r±1, c)` and `(r, c±1)`, when they're inside the grid.
+
+## Number of islands
+
+Given a grid of land (1) and water (0), count the islands — groups of land
+connected horizontally or vertically.
+
+<FloodFillVisualizer />
+
+The algorithm: scan every cell. When you find land that hasn't been visited,
+that's a new island — count it, then flood-fill from it to mark the whole
+island as visited, so it isn't counted again.
+
+```javascript
+function numIslands(grid) {
+  const rows = grid.length, cols = grid[0].length
+  const seen = grid.map((row) => row.map(() => false))
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+  let islands = 0
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (grid[r][c] !== 1 || seen[r][c]) continue
+      islands++
+      const queue = [[r, c]]
+      seen[r][c] = true
+      for (let head = 0; head < queue.length; head++) {
+        const [y, x] = queue[head]
+        for (const [dy, dx] of DIRS) {
+          const ny = y + dy, nx = x + dx
+          if (ny >= 0 && ny < rows && nx >= 0 && nx < cols &&
+              grid[ny][nx] === 1 && !seen[ny][nx]) {
+            seen[ny][nx] = true
+            queue.push([ny, nx])
+          }
+        }
+      }
+    }
+  }
+  return islands
+}
+
+numIslands([
+  [1, 1, 0, 0, 0],
+  [1, 1, 0, 1, 0],
+  [0, 0, 0, 1, 0],
+  [0, 1, 0, 0, 1],
+  [0, 0, 1, 1, 1],
+])   // 4
+```
+
+Every cell is visited a constant number of times: **O(rows × cols)** time and
+space.
+
+## The details that matter
+
+**Mark when you enqueue, not when you dequeue.** If you mark a cell visited
+only when it's taken off the queue, the same cell can be added many times by
+different neighbours first. The result is still correct, but the queue can
+grow far larger than the grid.
+
+**Recursion can overflow.** A recursive DFS is shorter:
+
+```javascript
+function fill(y, x) {
+  if (y < 0 || y >= rows || x < 0 || x >= cols || grid[y][x] !== 1 || seen[y][x]) return
+  seen[y][x] = true
+  fill(y + 1, x); fill(y - 1, x); fill(y, x + 1); fill(y, x - 1)
+}
+```
+
+But a 1000 × 1000 grid that's all land recurses a million levels deep, far
+past the default call-stack limit ([why](/blog/recursion-and-the-call-stack)).
+The BFS with a queue — or a DFS with an explicit stack — has no such limit.
+
+**Decide what "connected" means.** Four directions is the usual definition.
+Some problems count diagonals too: use eight directions.
+
+**Modify the input, or don't.** Setting visited land to 0 saves the `seen`
+array, but changes the caller's data. Say which you're doing in an
+interview.
+
+## The same template, many problems
+
+- **Flood fill / paint bucket**: recolour the connected region containing a
+  starting cell.
+- **Max area of an island**: count cells during each fill and keep the
+  largest.
+- **Surrounded regions**: flip enclosed regions, except those connected to the
+  border — so flood-fill *from the border* first and keep what you reach.
+- **Pacific–Atlantic water flow**: flood-fill backwards from each ocean, and
+  answer with the cells both reach.
+- **Rotting oranges**: multi-source BFS — start with every rotten orange in
+  the queue at once, and count rounds.
+- **Shortest path in a grid** (unweighted): BFS from the start; the first time
+  you reach the target is the shortest path. With weights, use
+  [Dijkstra](/blog/dijkstra-shortest-paths) or [A*](/blog/a-star-pathfinding).
+
+When cells are added one at a time ("how many islands after each new land
+cell?"), re-running flood fill each time is slow. Use
+[union-find](/blog/union-find-disjoint-set) instead, merging a new cell with
+its land neighbours in near-constant time.
+
+The general lesson is in [BFS and DFS](/blog/graph-traversal-bfs-dfs): once
+you see that a grid, a board or a maze is a graph, the traversal you already
+know solves it.

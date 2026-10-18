@@ -1,0 +1,97 @@
+---
+title: "Blue-Green and Canary Deployments: Shipping Without Holding Your Breath"
+publishedAt: "2026-10-18"
+summary: "How to release new versions with minimal risk: rolling updates, blue-green switches, canaries that expose a change to a small share of real traffic first, automated rollback on bad metrics, feature flags that separate deploy from release, and the database migrations that make rollback possible."
+tags: "System Design"
+---
+
+Most outages start with a change. Tests catch a lot, but real traffic has
+data, timing and scale that no test environment reproduces. So the question
+isn't whether some releases will be bad — it's how many users see a bad one,
+and for how long.
+
+## Rolling updates
+
+The default in Kubernetes and most platforms: replace instances a few at a
+time. Old and new versions run side by side during the rollout, and
+[readiness checks](/blog/health-checks-liveness-readiness) gate each step.
+
+Simple, and no extra capacity is needed. But a rollout that goes wrong is
+half-deployed, and rolling back means another rollout in reverse — minutes,
+not seconds.
+
+## Blue-green
+
+Run two complete environments. **Blue** serves all traffic; **green** gets
+the new version. Test green with real infrastructure, then switch the
+[load balancer](/blog/load-balancing-strategies) or DNS so all traffic goes to
+green. If something's wrong, switch back — blue is still running.
+
+- **Instant rollback**, and no mixed-version period for user traffic.
+- **Double the capacity** during the switch.
+- **Everything at once**: the switch exposes 100% of users immediately.
+
+## Canary
+
+Named after the canaries miners carried to detect gas: expose the new
+version to a small share of real traffic first, watch closely, then
+expand.
+
+<CanaryVisualizer />
+
+What makes canaries work:
+
+- **Comparable metrics.** Compare the canary with the current version over
+  the same time window — error rate, latency percentiles, saturation, and
+  business metrics such as checkouts or sign-ins. Tools such as Argo
+  Rollouts, Flagger and Spinnaker automate this analysis.
+- **Enough traffic to see a difference.** 1% of a small service may be a
+  handful of requests — not enough to detect a 1% error increase. Hold each
+  step long enough.
+- **Sticky assignment** where it matters: a user bouncing between versions
+  mid-session sees inconsistent behaviour.
+- **Automatic rollback.** If a guardrail metric crosses its threshold, shift
+  traffic back without waiting for a human.
+
+## Feature flags: deploy is not release
+
+**Deploying** puts code on servers. **Releasing** exposes behaviour to users.
+Feature flags separate the two: ship the code turned off, then enable it for
+employees, then 1% of users, then everyone — independently of deploys. A bad
+feature is turned off with a flag change in seconds, without a rollback.
+
+Flags carry costs: code paths multiply, and old flags pile up. Remove each
+flag once its feature is fully released.
+
+## The database is what makes rollback hard
+
+Code rolls back in seconds. Data doesn't. If v42 renames a column, v41 can't
+read the table anymore, and rolling back breaks everything. The fix is to
+make every schema change backwards compatible, in steps — **expand and
+contract**:
+
+1. **Expand**: add the new column; old code ignores it.
+2. Deploy code that **writes both** old and new columns, and reads the old.
+3. **Backfill** the new column for existing rows.
+4. Deploy code that **reads the new** column.
+5. **Contract**: once nothing uses the old column, drop it — in a later
+   release.
+
+At every step, the previous version of the code still works with the
+database, so any single deploy can be rolled back safely. The same thinking
+applies to APIs, message formats and cache contents: during a rollout, old
+and new versions coexist, so each must accept the other's data.
+
+## Choosing
+
+- **Rolling** for routine changes on stateless services, with good health
+  checks.
+- **Canary** for anything risky or high-traffic — and as the default if you
+  have the metrics to judge it.
+- **Blue-green** when you need an instant, all-or-nothing switch, such as a
+  major infrastructure change.
+- **Feature flags** on top of any of them, for product changes.
+
+Combined with [circuit breakers](/blog/circuit-breaker-pattern) and
+[graceful degradation](/blog/load-shedding-and-graceful-degradation), they
+turn "the deploy broke production" into "the canary failed and rolled back".

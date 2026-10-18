@@ -1,0 +1,121 @@
+---
+title: "Sorting Arrays in JavaScript: Comparators, Stability and Locale"
+publishedAt: "2026-10-18"
+summary: "Why [10, 9, 1].sort() returns [1, 10, 9], how comparator functions work, why sort is stable and what that buys you, sorting text correctly with localeCompare and Intl.Collator, multi-key sorts, and toSorted() for sorting without mutating."
+tags: "JavaScript"
+---
+
+```javascript
+[10, 9, 1, 100].sort()   // [1, 10, 100, 9]
+```
+
+Every JavaScript developer meets this once. It isn't broken: by default,
+`sort` converts elements to strings and compares them character by
+character, like words in a dictionary. "100" starts with "1", so it comes
+before "9".
+
+<SortingVisualizer />
+
+## Comparators
+
+Pass a function that takes two elements and returns:
+
+- a **negative** number if `a` should come first,
+- a **positive** number if `b` should come first,
+- **0** if they're equal for sorting purposes.
+
+```javascript
+nums.sort((a, b) => a - b)          // ascending numbers
+nums.sort((a, b) => b - a)          // descending
+
+users.sort((a, b) => a.age - b.age)
+users.sort((a, b) => a.name.localeCompare(b.name))
+dates.sort((a, b) => a.getTime() - b.getTime())
+```
+
+`a - b` works for numbers that won't overflow. For values where subtraction
+doesn't apply — strings, booleans, BigInts — compare explicitly:
+`a < b ? -1 : a > b ? 1 : 0`.
+
+A comparator must be **consistent**: if it says a < b and b < c, it must say
+a < c, and it must give the same answer every time for the same pair. Random
+comparators (`() => Math.random() - 0.5`, the classic "shuffle") break this
+rule, and the result is biased, not uniformly random. Shuffle with
+Fisher–Yates instead.
+
+## Stability
+
+Since ES2019, `Array.prototype.sort` is guaranteed **stable**: elements that
+compare equal keep their original relative order.
+
+That makes multi-key sorting easy. To sort by department, then by name
+within each department, you can either write one comparator:
+
+```javascript
+employees.sort((a, b) =>
+  a.department.localeCompare(b.department) || a.name.localeCompare(b.name)
+)
+```
+
+or sort by the secondary key first and then by the primary key — stability
+keeps the first ordering within each group. The `||` version is clearer:
+a comparison that returns 0 falls through to the next key.
+
+## Sorting text people will read
+
+Default sorting compares UTF-16 code units, so uppercase letters come before
+lowercase, and accented letters come after "z":
+
+```javascript
+['éclair', 'apple', 'Zebra'].sort()                              // ['Zebra', 'apple', 'éclair']
+['éclair', 'apple', 'Zebra'].sort((a, b) => a.localeCompare(b))  // ['apple', 'éclair', 'Zebra']
+```
+
+`localeCompare` follows the language's collation rules. For large lists,
+create an `Intl.Collator` once and reuse its `compare` function — it's much
+faster than calling `localeCompare` for every comparison:
+
+```javascript
+const byName = new Intl.Collator('en', { sensitivity: 'base', numeric: true })
+files.sort(byName.compare)   // file2 before file10; case and accents ignored
+```
+
+`numeric: true` gives "natural" ordering, so "file2" comes before "file10".
+`sensitivity: 'base'` treats "a", "A" and "á" as equal. See the
+[Intl API post](/blog/intl-api-formatting) for more.
+
+## sort mutates; toSorted doesn't
+
+`sort` sorts the array **in place** and returns the same array. That's a
+source of bugs when the array is shared — React state, a prop, a cached value.
+
+`toSorted` (ES2023) returns a sorted copy and leaves the original alone:
+
+```javascript
+const sorted = items.toSorted((a, b) => a.price - b.price)
+```
+
+`toReversed`, `toSpliced` and `with(index, value)` are the non-mutating
+versions of the other in-place methods. See
+[immutability](/blog/immutability-and-structural-sharing) for why that matters.
+
+## Edge cases
+
+- **`undefined` always goes last**, and the comparator is never called with it.
+  `[undefined, 3, null, 1].sort((a, b) => a - b)` gives
+  `[null, 1, 3, undefined]` — `null` becomes 0 in the subtraction.
+- **`NaN` breaks numeric comparators**: `a - b` with NaN is NaN, which isn't
+  negative, positive or 0, so the order becomes unpredictable. Filter or map
+  NaNs first.
+- **Sorting is O(n log n)**: V8 uses TimSort, which is also fast on data that's
+  already partly sorted. If you sort the same large array repeatedly, sort
+  once and keep it sorted, or use a structure that stays ordered, like a
+  [heap](/blog/heaps-and-priority-queues).
+- **Expensive keys**: if computing a sort key is costly (parsing a date,
+  normalising a string), compute it once per element first — map to
+  `[key, item]` pairs, sort, map back.
+
+The [sorting algorithms post](/blog/sorting-algorithms-explained) covers what
+happens inside; for everyday code, the rules are: always pass a comparator for
+numbers, use a collator for text, and use `toSorted` when the array isn't
+yours to change.

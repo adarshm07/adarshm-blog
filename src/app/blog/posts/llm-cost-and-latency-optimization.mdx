@@ -1,0 +1,94 @@
+---
+title: "Making LLM Apps Cheaper and Faster"
+publishedAt: "2026-10-18"
+summary: "Where the money and time go in an LLM application — input tokens, output tokens, prefill and decode — and the levers that move them: prompt caching, shorter outputs, routing easy requests to smaller models, batch APIs, streaming, parallel calls, and not calling the model at all. With the arithmetic."
+tags: "AI Engineering"
+---
+
+A prototype that costs a few cents a request and takes eight seconds is fine
+for a demo. At a million requests a day, the bill and the wait both matter.
+Most of the improvement comes from understanding what you're paying for,
+then applying a handful of levers.
+
+## What you pay for
+
+Providers charge per token, with separate prices for **input** (everything
+you send: system prompt, tools, documents, conversation history) and
+**output** (what the model writes). Output tokens typically cost several
+times as much as input tokens.
+
+Latency splits the same way:
+
+- **Time to first token** grows with the input — the prefill phase processes
+  the prompt.
+- **Generation time** grows with the output — one decode step per token.
+  (The [KV cache post](/blog/kv-cache-explained) explains why the two phases
+  behave so differently.)
+
+So long prompts mostly cost money and first-token latency, and long outputs
+cost both money and total time.
+
+<LlmCostVisualizer />
+
+The prices in the visualizer are examples. Check your provider's current
+pricing, but the arithmetic carries over.
+
+## The levers, roughly in order
+
+**1. Cache the stable prefix.** Most production prompts begin with the same
+thousands of tokens: instructions, tool definitions, reference documents.
+Put that content first, in a fixed order, and enable **prompt caching**.
+Cached input is billed at a small fraction of the normal price (Anthropic
+charges 10% for cache reads), and prefill is faster. The most common way to
+break it is to put something that changes — a timestamp, the user's name —
+near the top. See [context windows and caching](/blog/context-windows-and-caching).
+
+**2. Write less.** Output is the expensive, slow part. Ask for concise
+answers, set a sensible maximum output length, and use
+[structured outputs](/blog/structured-outputs-from-llms) for machine-readable
+results instead of prose. Asking for "a JSON object with these three fields"
+instead of "an explanation" can cut output by an order of magnitude.
+
+**3. Route by difficulty.** Many requests are easy: classifying a ticket,
+extracting a date, a yes/no question. Send those to a small, fast model, and
+only hard ones to the most capable model. A router can be a rule, a cheap
+classifier, or the small model itself saying when it's unsure. Use
+[evals](/blog/evals-for-llm-apps) to confirm the small model's quality on the
+easy class.
+
+**4. Batch what can wait.** Batch APIs process requests asynchronously —
+results within hours rather than seconds — at a large discount (about half
+price at major providers). Nightly classification, document backfills and
+offline evaluations belong there.
+
+**5. Don't call the model.** Cache whole answers for repeated requests —
+exactly, or [semantically](/blog/semantic-caching-for-llm-apps) for
+rephrasings. Use ordinary code for things code does well: validation,
+arithmetic, formatting, routing by keywords.
+
+**6. Trim the context.** In long conversations, every turn re-sends the
+history. Summarise or drop old turns, and in [RAG](/blog/rag-retrieval-explained),
+send the 5 best chunks rather than 20 mediocre ones — a
+[reranker](/blog/reranking-with-cross-encoders) makes that possible.
+
+## Making it feel faster
+
+Perceived latency matters as much as total latency:
+
+- **Stream** the response, so users read the first sentence while the rest is
+  generated ([streaming LLM responses](/blog/streaming-llm-responses)).
+- **Run independent calls in parallel** instead of one after another — three
+  sequential 2-second calls feel very different from three parallel ones.
+- **Start early**: begin retrieval or a cheap classification while the user is
+  still typing, or as soon as a page opens.
+- **Fewer round trips** in [agent loops](/blog/the-agent-loop): let the model
+  request several tool calls in one turn, and give tools enough to do in one
+  call.
+
+## Measure per feature
+
+Log tokens in, tokens out, cache hits, model, and latency for every request,
+tagged by feature. The cost of an LLM app is usually concentrated: one
+feature with a huge prompt, or one agent that loops ten times. Optimise
+there, and check with evals that quality didn't drop. A cheaper answer that's
+wrong isn't a saving.

@@ -197,6 +197,30 @@ import {
   SweepLineVisualizer,
   ZodVisualizer,
 } from '@/app/components/mixed-topic-visualizers'
+import {
+  FloodFillVisualizer,
+  HuffmanVisualizer,
+  MaxFlowVisualizer,
+  PalindromeVisualizer,
+} from '@/app/components/algo-extra-visualizers'
+import {
+  CanaryVisualizer,
+  CompressionVisualizer,
+  FloatingPointVisualizer,
+  GossipVisualizer,
+  LlmCostVisualizer,
+  MapSetVisualizer,
+  MoeVisualizer,
+  QuorumVisualizer,
+  RecursiveTypesVisualizer,
+  RideHailingVisualizer,
+  SemanticCacheVisualizer,
+  SortingVisualizer,
+  TsconfigFlagsVisualizer,
+  UrlVisualizer,
+  WebComponentsVisualizer,
+  WebCrawlerVisualizer,
+} from '@/app/components/topics-oct18-visualizers'
 import { CopyButton } from '@/app/components/copy-button'
 
 function Table({ data }: { data: { headers: string[]; rows: string[][] } }) {
@@ -497,6 +521,26 @@ const components = {
   SweepLineVisualizer,
   InvertedIndexVisualizer,
   CacheStampedeVisualizer,
+  FloodFillVisualizer,
+  PalindromeVisualizer,
+  HuffmanVisualizer,
+  MaxFlowVisualizer,
+  WebCrawlerVisualizer,
+  RideHailingVisualizer,
+  QuorumVisualizer,
+  GossipVisualizer,
+  CanaryVisualizer,
+  FloatingPointVisualizer,
+  MapSetVisualizer,
+  SortingVisualizer,
+  TsconfigFlagsVisualizer,
+  RecursiveTypesVisualizer,
+  CompressionVisualizer,
+  UrlVisualizer,
+  WebComponentsVisualizer,
+  MoeVisualizer,
+  SemanticCacheVisualizer,
+  LlmCostVisualizer,
 }
 
 export function CustomMDX(props: MDXRemoteProps) {
