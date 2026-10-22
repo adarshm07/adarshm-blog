@@ -1,0 +1,177 @@
+---
+title: "Symbols and Well-Known Symbols in JavaScript"
+publishedAt: "2026-07-18"
+summary: "Symbol is JavaScript's seventh primitive type: a guaranteed-unique value used as a collision-free object key. Well-known symbols like Symbol.iterator are also the hook that lets your own objects plug into for-of, spreading, and coercion."
+tags: "JavaScript"
+---
+
+Object keys in JavaScript are usually strings, and string keys collide:
+two independent pieces of code both choosing `"id"` as a property name
+will silently overwrite each other if they share an object. `Symbol` is
+JavaScript's answer — a primitive type whose entire purpose is producing
+values that are **guaranteed unique**, making them safe to use as property
+keys that will never accidentally clash with anything else.
+
+## Every symbol is unique, even with the same description
+
+```javascript
+const a = Symbol("id");
+const b = Symbol("id");
+
+a === b; // false — same description, different symbols entirely
+```
+
+The string passed to `Symbol()` is only a **description** for debugging
+(shows up in `console.log` and `.toString()`) — it plays no role in
+equality or identity. Every call to `Symbol()` mints a brand new, distinct
+value no matter what description it's given.
+
+## Using symbols as property keys
+
+```javascript
+const ID = Symbol("id");
+
+const user = {
+  name: "Ada",
+  [ID]: 12345, // computed property key
+};
+
+user[ID];              // 12345
+Object.keys(user);      // ["name"] — symbol keys are skipped
+JSON.stringify(user);    // '{"name":"Ada"}' — symbol keys are skipped
+for (const key in user) { /* only "name" — symbol keys are skipped */ }
+```
+
+This is the core use case: a symbol-keyed property behaves like a
+**semi-private** field. It's not truly hidden — `Object.getOwnPropertySymbols(user)`
+can still find it — but it's invisible to every mechanism that iterates
+"normal" keys: `for...in`, `Object.keys`, `JSON.stringify`, and spreading
+into a plain object literal all skip symbol keys by design. That makes
+symbols a good fit for library-internal metadata attached to objects that
+consumer code shouldn't stumble into by accident.
+
+## Global symbols: opting back into sharing
+
+Sometimes two separate modules *do* want to agree on the same symbol —
+for example, to recognize objects tagged by a shared library. `Symbol.for()`
+uses a global registry keyed by string, so the same key always returns the
+same symbol:
+
+```javascript
+const s1 = Symbol.for("app.cache");
+const s2 = Symbol.for("app.cache");
+
+s1 === s2; // true — same key, same registry entry, same symbol
+
+Symbol.keyFor(s1); // "app.cache" — reverse lookup
+```
+
+`Symbol()` gives you guaranteed uniqueness; `Symbol.for()` gives you a
+controlled way to opt back into a shared, well-known value when that's
+actually the goal — different tools for different problems, not two ways
+to do the same thing.
+
+## Well-known symbols: the real payoff
+
+The more interesting use of symbols isn't your own code — it's the set of
+**well-known symbols** the language itself defines, which let your objects
+hook into built-in JavaScript behavior. The most common is
+`Symbol.iterator`.
+
+```javascript
+const range = {
+  from: 1,
+  to: 5,
+  [Symbol.iterator]() {
+    let current = this.from;
+    const last = this.to;
+    return {
+      next() {
+        return current <= last
+          ? { value: current++, done: false }
+          : { value: undefined, done: true };
+      },
+    };
+  },
+};
+
+[...range];           // [1, 2, 3, 4, 5] — spread works
+for (const n of range) console.log(n); // for...of works
+Array.from(range);    // [1, 2, 3, 4, 5]
+```
+
+Implementing `[Symbol.iterator]` is what makes `range` a genuine
+**iterable** — it's the exact mechanism arrays, strings, `Map`, and `Set`
+use internally, and it's why `for...of`, the spread operator, and
+destructuring all work identically on your own custom objects the moment
+you supply this one method.
+
+## Other well-known symbols worth knowing
+
+<table>
+  <thead>
+    <tr>
+      <th>Symbol</th>
+      <th>Hooks into</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>Symbol.iterator</code></td>
+      <td><code>for...of</code>, spread, destructuring, <code>Array.from</code></td>
+    </tr>
+    <tr>
+      <td><code>Symbol.asyncIterator</code></td>
+      <td><code>for await...of</code></td>
+    </tr>
+    <tr>
+      <td><code>Symbol.toPrimitive</code></td>
+      <td>Coercion in <code>+</code>, template literals, comparisons — full control over how an object becomes a number or string</td>
+    </tr>
+    <tr>
+      <td><code>Symbol.toStringTag</code></td>
+      <td>What <code>Object.prototype.toString.call(obj)</code> reports, e.g. <code>"[object CustomType]"</code></td>
+    </tr>
+    <tr>
+      <td><code>Symbol.hasInstance</code></td>
+      <td>Customizes <code>instanceof</code> checks</td>
+    </tr>
+  </tbody>
+</table>
+
+`Symbol.toPrimitive` is worth a concrete look, since coercion bugs are a
+frequent source of confusion elsewhere in JavaScript:
+
+```javascript
+class Money {
+  constructor(cents) {
+    this.cents = cents;
+  }
+  [Symbol.toPrimitive](hint) {
+    if (hint === "number") return this.cents / 100;
+    if (hint === "string") return `$${(this.cents / 100).toFixed(2)}`;
+    return this.cents / 100; // "default" hint, e.g. `+` or `==`
+  }
+}
+
+const price = new Money(1999);
+`${price}`;      // "$19.99" — string hint
+price + 1;        // 20.99   — number hint (default falls through here too)
+Number(price);     // 19.99   — explicit number hint
+```
+
+Without this, an object being coerced falls back to `valueOf`/`toString`
+and usually produces `"[object Object]"` or `NaN` — well-known symbols are
+how you make an object coerce *correctly*, on purpose, instead of by
+accident.
+
+## Wrap-up
+
+`Symbol` solves a narrow problem — guaranteed-unique property keys that
+never collide and stay invisible to ordinary enumeration — which makes it
+a natural fit for semi-private object metadata. Its bigger role is as the
+extension point for the language itself: well-known symbols like
+`Symbol.iterator` and `Symbol.toPrimitive` are exactly how your own
+objects plug into `for...of`, spreading, and coercion, using the same
+mechanism the built-in types use internally rather than a separate,
+special-cased API.

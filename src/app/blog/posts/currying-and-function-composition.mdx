@@ -1,0 +1,185 @@
+---
+title: "Currying and Function Composition in JavaScript"
+publishedAt: "2026-07-18"
+summary: "Currying turns a multi-argument function into a chain of single-argument ones, and composition chains functions end to end. Together they're the backbone of functional-style JavaScript — and the reason libraries like Redux and Ramda look the way they do."
+tags: "JavaScript"
+---
+
+A function that takes three arguments and a function that takes one
+argument three times, one call at a time, can compute the same thing —
+but they compose very differently. **Currying** transforms the former into
+the latter, and once every function takes exactly one input and produces
+exactly one output, **composition** becomes trivial: just plug outputs
+into inputs.
+
+## What currying actually does
+
+A curried function of `n` arguments is a chain of `n` unary functions,
+each returning the next, until all arguments are collected and the
+original computation runs:
+
+```javascript
+function add(a, b, c) {
+  return a + b + c;
+}
+
+function curriedAdd(a) {
+  return function (b) {
+    return function (c) {
+      return a + b + c;
+    };
+  };
+}
+
+curriedAdd(1)(2)(3); // 6
+curriedAdd(1)(2);    // a function, waiting for c
+```
+
+The payoff isn't the nesting itself — it's **partial application**: calling
+`curriedAdd(1)` produces a reusable function with `a` locked in, which you
+can pass around and call later with the remaining arguments. That's much
+harder to express cleanly with a plain multi-argument function.
+
+## A generic curry helper
+
+Writing the nested-function version by hand for every function is
+tedious. A generic `curry` wraps any function and handles the "collect
+arguments until there are enough, then call" logic once:
+
+```javascript
+function curry(fn) {
+  return function curried(...args) {
+    if (args.length >= fn.length) {
+      return fn(...args); // enough arguments collected — run it
+    }
+    return (...more) => curried(...args, ...more); // still waiting — keep collecting
+  };
+}
+
+const add3 = curry((a, b, c) => a + b + c);
+
+add3(1, 2, 3);     // 6 — called with everything at once, still works
+add3(1)(2)(3);     // 6 — fully curried
+add3(1, 2)(3);     // 6 — partially applied, then finished
+```
+
+`fn.length` — the number of a function's declared parameters — is what
+tells `curry` when enough arguments have arrived. This is also why curry
+helpers don't play well with default parameters or rest parameters:
+JavaScript doesn't count those toward `fn.length`, so a function like
+`(a, b = 1) => a + b` reports `length` 1, not 2, and the curry helper
+would fire too early.
+
+## Partial application without full currying
+
+Currying is the "one argument at a time" discipline; **partial
+application** is the more general idea of pre-filling *some* arguments
+and getting back a function for the rest, in one step rather than a
+strict chain. `Function.prototype.bind` is JavaScript's built-in tool for
+exactly this:
+
+```javascript
+function multiply(a, b) {
+  return a * b;
+}
+
+const double = multiply.bind(null, 2); // lock in the first argument
+double(5); // 10
+double(21); // 42
+```
+
+Curried functions happen to support partial application for free (calling
+with fewer than all arguments naturally returns a function for the rest),
+but the two ideas are separable — you can partially apply an uncurried
+function too, as `bind` demonstrates.
+
+## Composition: chaining unary functions
+
+Once functions take a single argument and return a single value, they
+compose the way math functions do: `f(g(x))` is "apply `g`, then feed the
+result into `f`." A `compose` helper generalizes this to any number of
+functions:
+
+```javascript
+const compose = (...fns) => (x) =>
+  fns.reduceRight((acc, fn) => fn(acc), x); // right to left, like math notation
+
+const pipe = (...fns) => (x) =>
+  fns.reduce((acc, fn) => fn(acc), x);      // left to right, reads like a pipeline
+
+const toUpper = (s) => s.toUpperCase();
+const exclaim = (s) => s + "!";
+const trim = (s) => s.trim();
+
+const shout = pipe(trim, toUpper, exclaim);
+shout("  hello  "); // "HELLO!"
+```
+
+`compose` applies right-to-left (matching mathematical notation
+`f ∘ g ∘ h`), while `pipe` applies left-to-right (matching the order you'd
+naturally read a data pipeline). Both do the same thing — the choice is
+purely about which reading order matches how you think about the
+transformation, and libraries disagree on the default, which is why it's
+worth knowing both names.
+
+## Why this pattern shows up in real libraries
+
+<table>
+  <thead>
+    <tr>
+      <th>Library</th>
+      <th>Where currying/composition appears</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Redux</td>
+      <td><code>applyMiddleware</code> composes middleware functions; action creators are often curried for partial application</td>
+    </tr>
+    <tr>
+      <td>Ramda / lodash/fp</td>
+      <td>Every function is auto-curried by default — arguments are supplied incrementally throughout a pipeline</td>
+    </tr>
+    <tr>
+      <td>Express / Koa middleware</td>
+      <td>Middleware chains are function composition: each handler wraps the next</td>
+    </tr>
+    <tr>
+      <td>React higher-order components</td>
+      <td><code>compose(withRouter, connect(mapState), withStyles(styles))(Component)</code></td>
+    </tr>
+  </tbody>
+</table>
+
+## The practical benefit: building specialized functions from general ones
+
+The real value of currying isn't the syntax — it's turning one general
+function into a family of specialized ones without rewriting anything:
+
+```javascript
+const filter = curry((predicate, arr) => arr.filter(predicate));
+const map = curry((fn, arr) => arr.map(fn));
+
+const getEvens = filter((n) => n % 2 === 0); // specialized, reusable
+const double = map((n) => n * 2);
+
+const pipeline = pipe(getEvens, double);
+pipeline([1, 2, 3, 4, 5, 6]); // [4, 8, 12]
+```
+
+`getEvens` and `double` read as named, reusable steps in a pipeline
+instead of anonymous inline callbacks — currying is what makes it natural
+to build them by partially applying a shared, general-purpose `filter`
+and `map`.
+
+## Wrap-up
+
+Currying reshapes a multi-argument function into a chain of one-argument
+functions, which makes partial application — locking in some arguments
+and getting back a function for the rest — fall out for free. Composition
+takes that further, chaining unary functions end to end so a pipeline
+reads as a sequence of named transformations instead of nested calls.
+Neither technique is exotic; they're the quiet mechanism behind
+middleware chains, higher-order components, and every functional-utility
+library that lets you build specific behavior out of small, general
+pieces.
