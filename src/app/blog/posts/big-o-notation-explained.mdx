@@ -29,60 +29,20 @@ insertion sort for small slices.
 
 ## The ladder, from best to worst
 
-<table>
-  <thead>
-    <tr>
-      <th>Complexity</th>
-      <th>Name</th>
-      <th>n = 1,000</th>
-      <th>Typical example</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>O(1)</td>
-      <td>Constant</td>
-      <td>1</td>
-      <td>Hash map lookup, array index</td>
-    </tr>
-    <tr>
-      <td>O(log n)</td>
-      <td>Logarithmic</td>
-      <td>~10</td>
-      <td>Binary search</td>
-    </tr>
-    <tr>
-      <td>O(n)</td>
-      <td>Linear</td>
-      <td>1,000</td>
-      <td>Single loop, linear scan</td>
-    </tr>
-    <tr>
-      <td>O(n log n)</td>
-      <td>Linearithmic</td>
-      <td>~10,000</td>
-      <td>Merge sort, heap sort</td>
-    </tr>
-    <tr>
-      <td>O(n²)</td>
-      <td>Quadratic</td>
-      <td>1,000,000</td>
-      <td>Nested loops over same input</td>
-    </tr>
-    <tr>
-      <td>O(2ⁿ)</td>
-      <td>Exponential</td>
-      <td>astronomical</td>
-      <td>Naive recursion on subsets</td>
-    </tr>
-    <tr>
-      <td>O(n!)</td>
-      <td>Factorial</td>
-      <td>don't</td>
-      <td>Brute-force permutations</td>
-    </tr>
-  </tbody>
-</table>
+<Table
+  data={{
+    headers: ['Complexity', 'Name', 'n = 1,000', 'Typical example'],
+    rows: [
+      ['O(1)', 'Constant', '1', 'Hash map lookup, array index'],
+      ['O(log n)', 'Logarithmic', '~10', 'Binary search'],
+      ['O(n)', 'Linear', '1,000', 'Single loop, linear scan'],
+      ['O(n log n)', 'Linearithmic', '~10,000', 'Merge sort, heap sort'],
+      ['O(n²)', 'Quadratic', '1,000,000', 'Nested loops over same input'],
+      ['O(2ⁿ)', 'Exponential', 'astronomical', 'Naive recursion on subsets'],
+      ['O(n!)', 'Factorial', "don't", 'Brute-force permutations'],
+    ],
+  }}
+/>
 
 The gap between rows is the whole story. At `n = 1,000`, quadratic does a
 **million** operations where linearithmic does ten thousand. At
@@ -165,6 +125,13 @@ whole string) and in `unshift` (shifts every element). When something is
 "fine in dev, dead in prod", the input grew and a hidden O(n²) woke up —
 this is the first thing to look for.
 
+The same shape appears outside your code. A loop that runs one database
+query per item — the "N+1 query" problem — is O(n) *round trips*, and at
+a few milliseconds each, 1,000 items is several seconds of waiting.
+Replacing it with one query that fetches all the rows (`WHERE id = ANY($1)`)
+turns n network round trips into one. Big-O thinking applies to I/O as
+much as to CPU; the unit of work just got much more expensive.
+
 ## Space complexity: the same idea, for memory
 
 Every rule above applies to memory too. A function that builds an output
@@ -191,6 +158,165 @@ sequence of pushes, each one costs O(1) — the expensive resizes are rare
 enough that they "amortize" away. That's why we still call `push` constant
 time.
 
+## Recursion: count the calls, then the work per call
+
+Loops are easy to read; recursion needs one more step. Two questions
+cover most cases: **how many calls happen in total**, and **how much work
+does each call do outside its recursive calls?**
+
+```javascript
+function fib(n) {                // each call makes two more
+  if (n < 2) return n;
+  return fib(n - 1) + fib(n - 2);
+}
+```
+
+The call tree branches twice per level and is about `n` levels deep, so
+the number of calls grows exponentially — roughly O(2ⁿ) (more precisely
+about 1.6ⁿ). Each call does O(1) work, so that's the total. Memoising it
+— caching each `fib(k)` the first time it's computed — means each value is
+computed once: n calls of O(1) work, O(n) total. That one change is the
+whole idea of [dynamic programming](/blog/dynamic-programming-intro).
+
+Divide-and-conquer recursion has a recognisable shape too. Merge sort
+splits the input in half (two calls on n/2) and does O(n) merging work per
+call:
+
+```
+T(n) = 2·T(n/2) + O(n)   →   O(n log n)
+T(n) = 1·T(n/2) + O(1)   →   O(log n)       (binary search)
+T(n) = 2·T(n/2) + O(1)   →   O(n)           (visiting every node of a balanced tree)
+T(n) = 1·T(n−1) + O(n)   →   O(n²)          (selection sort, written recursively)
+```
+
+The intuition: draw the recursion tree, add up the work on each level, and
+multiply by the number of levels. When every level does the same total
+work (merge sort: n per level, log n levels), multiply. When the work
+shrinks fast enough down the tree, the top level dominates. The formal
+version is the master theorem, but the picture is enough for almost every
+interview. Space for recursion is the maximum depth of the tree — see
+[recursion and the call stack](/blog/recursion-and-the-call-stack).
+
+## Reading the required complexity from the constraints
+
+Competitive programming problems and interview questions usually state
+input limits, and those limits tell you which complexity the intended
+solution has. A typical machine does very roughly 10⁸ simple operations
+a second, so:
+
+<Table
+  data={{
+    headers: ['if n is at most…', 'aim for', 'typical technique'],
+    rows: [
+      ['10–12', 'O(n!) or O(2ⁿ · n)', 'brute force over permutations, backtracking'],
+      ['20–25', 'O(2ⁿ)', 'subsets, bitmask DP'],
+      ['500', 'O(n³)', 'triple loops, interval DP'],
+      ['5,000', 'O(n²)', 'nested loops, 2D DP'],
+      ['10⁵ – 10⁶', 'O(n log n) or O(n)', 'sorting, heaps, two pointers, hashing'],
+      ['10⁹ and up', 'O(log n) or O(1)', 'binary search on the answer, maths'],
+    ],
+  }}
+/>
+
+So "n ≤ 10⁵" quietly says "your O(n²) idea will time out — find something
+with a sort, a hash map or two pointers". Reading the constraints before
+designing saves a lot of wasted effort.
+
+## From brute force to optimal: one problem, three complexities
+
+**Problem**: given an array and a target, return the indices of two numbers
+that add up to the target.
+
+**Brute force, O(n²) time, O(1) space** — try every pair:
+
+```javascript
+function twoSumBrute(nums, target) {
+  for (let i = 0; i < nums.length; i++)
+    for (let j = i + 1; j < nums.length; j++)
+      if (nums[i] + nums[j] === target) return [i, j];
+  return null;
+}
+```
+
+**Sort + two pointers, O(n log n) time** — sort (keeping original
+indices), then move pointers inward: too small, move left up; too big,
+move right down. See [two pointers](/blog/two-pointers-and-sliding-window).
+
+**Hash map, O(n) time, O(n) space** — for each number, ask whether its
+complement has been seen:
+
+```javascript
+function twoSum(nums, target) {
+  const seen = new Map();               // value → index
+  for (let i = 0; i < nums.length; i++) {
+    const need = target - nums[i];
+    if (seen.has(need)) return [seen.get(need), i];
+    seen.set(nums[i], i);
+  }
+  return null;
+}
+```
+
+The progression is the standard interview arc: state the brute force and
+its cost, identify the repeated work (the inner loop searches for the same
+kind of thing every time), and remove it with a better data structure — a
+[hash map](/blog/hash-maps-under-the-hood), at the price of O(n) memory.
+
+## What common JavaScript operations cost
+
+<Table
+  data={{
+    headers: ['operation', 'cost'],
+    rows: [
+      ['arr[i], arr.push(x), arr.pop()', 'O(1) (push is amortised)'],
+      ['arr.shift(), arr.unshift(x)', 'O(n) — every element moves'],
+      ['arr.includes / indexOf / find', 'O(n)'],
+      ['arr.slice, [...arr], arr.concat', 'O(n) — a copy'],
+      ['arr.splice(i, k)', 'O(n) in general'],
+      ['arr.sort()', 'O(n log n)'],
+      ['map.get / set / has, set.has / add', 'O(1) average'],
+      ['Object.keys(obj)', 'O(number of keys)'],
+      ['str += piece in a loop', 'often fine in modern engines; join an array if unsure'],
+      ['JSON.parse / stringify', 'O(size of the data)'],
+    ],
+  }}
+/>
+
+`shift` is the one that surprises people: using an array as a queue with
+`push` and `shift` makes a BFS over a large graph quadratic. Use a head
+index or a real queue instead — see [stacks and queues](/blog/stacks-and-queues).
+
+## O, Θ and Ω
+
+Strictly, Big-O is an *upper bound*: O(n²) means "grows no faster than
+n²", so a linear algorithm is technically also O(n²). Θ (theta) is a tight
+bound — grows exactly like — and Ω (omega) is a lower bound. Everyday
+usage says "O" and means "Θ", and that's fine in practice. The distinction
+matters in one common sentence: "comparison sorting is Ω(n log n)" means
+*no* comparison sort can do better, which is a much stronger claim than
+any one algorithm's O.
+
+The base of a logarithm doesn't matter either: log₂ n and log₁₀ n differ
+by a constant factor, and constants are dropped. That's why it's just
+"O(log n)". Exponent bases do matter, though: O(2ⁿ) and O(3ⁿ) are
+genuinely different.
+
+## Practice
+
+Work out the time and space complexity of each before reading the post:
+
+- [Binary search and BSTs](/blog/binary-search-and-bst) — why balanced
+  matters.
+- [Heaps and priority queues](/blog/heaps-and-priority-queues) — O(log n)
+  push and pop, O(n) heapify.
+- [Merge intervals](/blog/merge-intervals-and-greedy-scheduling) — where the
+  sort dominates.
+- [Prefix sums](/blog/prefix-sums-and-difference-arrays) — O(n) setup for
+  O(1) range queries.
+- [Union-find](/blog/union-find-disjoint-set) — nearly O(1) amortised.
+- [Dijkstra's shortest paths](/blog/dijkstra-shortest-paths) — O((V + E) log V)
+  with a heap.
+
 ## Wrap-up
 
 Big-O answers one question: *what happens to the work when the input
@@ -198,4 +324,5 @@ grows?* Loops add when sequential and multiply when nested; halving is
 logarithmic; a linear helper inside a loop makes the loop quadratic — and
 that hidden case is where real-world slowness usually lives. You don't
 need the math background; you need the habit of glancing at every loop and
-asking "what's the cost of the thing inside it?"
+asking "what's the cost of the thing inside it?" — and, before you write a line,
+checking the input limits to see which answer you need.

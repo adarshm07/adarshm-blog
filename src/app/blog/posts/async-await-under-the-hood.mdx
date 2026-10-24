@@ -85,6 +85,10 @@ don't literally compile to this — V8 implements `async` functions natively
 — but the observable behaviour is the same, and it's what Babel and
 TypeScript emit when targeting older runtimes.
 
+The same model explains why an `async` function always returns a *new*
+promise, even when it returns one: the driver's `resolve(value)` adopts
+it, adding a layer the caller never sees.
+
 ## Why sequential await is slower than it needs to be
 
 Because each `await` genuinely pauses the function until that specific

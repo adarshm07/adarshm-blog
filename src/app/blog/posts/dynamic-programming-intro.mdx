@@ -48,6 +48,13 @@ is computed exactly once, then reused. This is **memoization** — keep the
 recursion, just stop repeating work. It's called *top-down* because you
 start from the answer you want and recurse toward the base cases.
 
+For functions of more than one argument, build the key from all of them —
+a `Map` keyed by a string like `` `${i},${cap}` `` is the simplest way in
+JavaScript, or a 2D array when the ranges are small and known. Memoisation
+is often the fastest route to a correct solution in an interview: write
+the recursion you'd write anyway, add three lines, and you're at the
+optimal complexity.
+
 ## Fix #2: tabulation (bottom-up)
 
 If we're going to solve every subproblem from `0` to `n` anyway, why
@@ -102,45 +109,231 @@ function climb(n) {
 ```
 
 `O(1)` space. This "only keep the window of state you actually reference"
-trick is common once you have a working table.
+trick is common once you have a working table. Get the full-table version
+working and tested first; compress it only afterwards, when you can
+compare the two outputs.
 
 ## Memoization vs. tabulation
 
-<table>
-  <thead>
-    <tr>
-      <th></th>
-      <th>Memoization (top-down)</th>
-      <th>Tabulation (bottom-up)</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>Shape</td>
-      <td>Recursion + cache</td>
-      <td>Loop + array</td>
-    </tr>
-    <tr>
-      <td>Computes</td>
-      <td>Only subproblems it needs</td>
-      <td>Every subproblem, in order</td>
-    </tr>
-    <tr>
-      <td>Risk</td>
-      <td>Stack overflow if deep</td>
-      <td>None (no recursion)</td>
-    </tr>
-    <tr>
-      <td>Best when</td>
-      <td>Sparse / unclear which states matter</td>
-      <td>All states needed; want O(1) space tricks</td>
-    </tr>
-  </tbody>
-</table>
+<Table
+  data={{
+    headers: ['', 'Memoization (top-down)', 'Tabulation (bottom-up)'],
+    rows: [
+      ['Shape', 'Recursion + cache', 'Loop + array'],
+      ['Computes', 'Only subproblems it needs', 'Every subproblem, in order'],
+      ['Risk', 'Stack overflow if deep', 'None (no recursion)'],
+      ['Best when', 'Sparse / unclear which states matter', 'All states needed; want O(1) space tricks'],
+    ],
+  }}
+/>
+
+## A recipe for any DP problem
+
+Climbing stairs is small enough to solve by instinct. For harder problems,
+the same five questions do the work, in order:
+
+1. **State** — what does one subproblem need to know? Write it as a
+   function signature: `dp(i)` = "the answer for the first i items",
+   `dp(i, j)` = "the answer for prefixes of length i and j".
+2. **Recurrence** — how does `dp(state)` follow from smaller states?
+   Usually by asking "what choice do I make at this step?" and combining
+   the answers for each choice (sum, min, max).
+3. **Base cases** — the smallest states, answered directly.
+4. **Order** — for tabulation, which states must be filled first? Fill so
+   every state's dependencies are already done.
+5. **Answer** — which state (or combination) is the final result?
+
+If step 1 is right, the rest usually falls out. If you're stuck on the
+recurrence, the state is probably missing information — add a dimension.
+
+## Second problem: house robber
+
+Houses in a row hold amounts of money; you can't rob two adjacent houses.
+What's the most you can take?
+
+- **State**: `dp[i]` = the best total from the first `i` houses.
+- **Choice at house i−1**: skip it (`dp[i−1]`) or rob it, which means
+  skipping the one before (`dp[i−2] + money[i−1]`).
+- **Recurrence**: `dp[i] = max(dp[i−1], dp[i−2] + money[i−1])`.
+- **Base cases**: `dp[0] = 0`, `dp[1] = money[0]`.
+
+Dry run on `[2, 7, 9, 3, 1]`:
+
+<Table
+  data={{
+    headers: ['i', 'house value', 'skip: dp[i−1]', 'rob: dp[i−2] + value', 'dp[i]'],
+    rows: [
+      ['1', '2', '0', '0 + 2', '2'],
+      ['2', '7', '2', '0 + 7', '7'],
+      ['3', '9', '7', '2 + 9', '11'],
+      ['4', '3', '11', '7 + 3', '11'],
+      ['5', '1', '11', '11 + 1', '12'],
+    ],
+  }}
+/>
+
+```javascript
+function rob(money) {
+  let prev = 0, curr = 0;          // dp[i-2], dp[i-1]
+  for (const m of money) [prev, curr] = [curr, Math.max(curr, prev + m)];
+  return curr;
+}
+```
+
+It's the stairs pattern again — two previous values — with `max` instead
+of `+`. Recognising that two problems share a recurrence shape is most of
+getting good at DP.
+
+## Two dimensions: unique paths in a grid
+
+A robot moves only right or down through an `m × n` grid. How many paths
+lead from the top-left to the bottom-right?
+
+- **State**: `dp[r][c]` = paths to cell `(r, c)`.
+- **Recurrence**: you arrive from above or from the left, so
+  `dp[r][c] = dp[r−1][c] + dp[r][c−1]`.
+- **Base cases**: the first row and first column have exactly one path.
+- **Order**: row by row, left to right — each cell's dependencies are
+  already filled.
+
+```javascript
+function uniquePaths(m, n) {
+  const row = new Array(n).fill(1);          // the first row
+  for (let r = 1; r < m; r++) {
+    for (let c = 1; c < n; c++) row[c] += row[c - 1];   // above + left
+  }
+  return row[n - 1];
+}
+```
+
+The 2D table compresses to one row, because each cell only needs the row
+above (still in `row[c]` before it's overwritten) and the cell to its left
+(already updated). That's the same space trick as before, one dimension
+up. Most string DP — [edit distance](/blog/edit-distance-levenshtein),
+[longest common subsequence](/blog/longest-common-subsequence-and-diff) —
+is this grid shape, with the two strings along the axes.
+
+## Getting the choices back, not just the number
+
+Interviewers often follow up with "now return *which* houses". Keep the
+full table instead of two variables, then walk backwards from the answer,
+asking at each step which choice produced the value:
+
+```javascript
+function robWithChoice(money) {
+  const dp = [0, money[0] ?? 0];
+  for (let i = 2; i <= money.length; i++) {
+    dp[i] = Math.max(dp[i - 1], dp[i - 2] + money[i - 1]);
+  }
+  const picked = [];
+  for (let i = money.length; i >= 1; ) {
+    if (dp[i] === dp[i - 1]) i -= 1;         // house i-1 was skipped
+    else { picked.push(i - 1); i -= 2; }     // house i-1 was robbed
+  }
+  return { total: dp[money.length], houses: picked.reverse() };
+}
+```
+
+That's why the space optimisation is always a *final* step: you can't
+reconstruct choices from two variables.
+
+## A "minimum" problem: coin change
+
+Not every DP adds things up. Given coin denominations and an amount, find
+the fewest coins that make the amount (or −1 if impossible).
+
+- **State**: `dp[a]` = fewest coins to make amount `a`.
+- **Choice**: the last coin used, `c`. Then the rest is `dp[a − c]`.
+- **Recurrence**: `dp[a] = 1 + min over coins c ≤ a of dp[a − c]`.
+- **Base case**: `dp[0] = 0`; everything else starts at Infinity
+  ("not reachable yet").
+
+```javascript
+function coinChange(coins, amount) {
+  const dp = new Array(amount + 1).fill(Infinity);
+  dp[0] = 0;
+  for (let a = 1; a <= amount; a++) {
+    for (const c of coins) {
+      if (c <= a && dp[a - c] + 1 < dp[a]) dp[a] = dp[a - c] + 1;
+    }
+  }
+  return dp[amount] === Infinity ? -1 : dp[amount];
+}
+
+coinChange([1, 5, 6, 9], 11);   // 2  (5 + 6)
+```
+
+This is the classic case where greedy fails: always taking the biggest
+coin gives 9 + 1 + 1 = three coins, while DP finds 5 + 6. Whenever an
+"obvious" greedy choice can be wrong, DP — which tries every last choice
+and keeps the best — is the safe default. Time is O(amount × coins).
+
+Infinity as "unreachable" is a common trick: `Infinity + 1` is still
+`Infinity`, so unreachable states never win a `min`, and no special cases
+are needed.
+
+## Recognising a DP problem
+
+Signals that a problem is DP:
+
+- It asks for a **count** of ways, or the **min/max** of something, or
+  whether something is **possible** — not for every solution listed out
+  (that's [backtracking](/blog/backtracking-explained)).
+- Choices are made **step by step** (take or skip, go right or down, match
+  or edit), and later choices depend only on a small summary of earlier
+  ones.
+- A brute-force recursion exists but **revisits the same arguments** —
+  draw two levels of the call tree and look for repeats.
+
+## Common DP families
+
+<Table
+  data={{
+    headers: ['family', 'state looks like', 'read next'],
+    rows: [
+      ['1D sequence', 'dp[i] from a few earlier i', 'Kadane’s maximum subarray'],
+      ['take or skip items', 'dp[i][capacity]', '0/1 knapsack'],
+      ['subsequences', 'dp[i] = best ending at i', 'longest increasing subsequence'],
+      ['two strings', 'dp[i][j] over prefixes', 'edit distance, LCS'],
+      ['intervals', 'dp[l][r] over substrings', 'longest palindromic substring'],
+      ['subsets', 'dp[mask][last]', 'bitmask DP (travelling salesman)'],
+    ],
+  }}
+/>
+
+Each has its own post: [Kadane's algorithm](/blog/kadanes-algorithm-maximum-subarray),
+[0/1 knapsack](/blog/zero-one-knapsack),
+[longest increasing subsequence](/blog/longest-increasing-subsequence),
+[edit distance](/blog/edit-distance-levenshtein),
+[longest palindromic substring](/blog/longest-palindromic-substring) and
+[bitmask DP](/blog/bitmask-dp-traveling-salesman).
+
+## Mistakes to watch for
+
+- **A memo keyed on the wrong thing.** If the result depends on two
+  arguments, the cache key must include both of them; `memo[i]` for a function of
+  `(i, capacity)` returns wrong answers silently.
+- **Mutable defaults shared across calls.** In some languages a default
+  memo object persists between top-level calls; pass a fresh one each time.
+- **Wrong fill order** in tabulation — reading a cell before it's computed
+  gives zeros, not errors.
+- **Off-by-one in "first i items"** states. Decide whether `dp[i]` covers
+  `i` items or index `i`, write it down, and stick to it.
+- **Deep recursion.** Memoised recursion on n = 100,000 overflows the call
+  stack in JavaScript; switch to tabulation.
+
+## Practice
+
+In rough order of difficulty: climbing stairs, house robber, minimum cost
+climbing stairs, coin change (fewest coins), unique paths, longest common
+subsequence, 0/1 knapsack, edit distance. For each, write the five-step
+recipe before any code.
 
 ## Wrap-up
 
-DP is recursion with a memory. Write the honest recursive solution first,
+DP is recursion with a memory, nothing more. Write the honest recursive solution first,
 notice it recomputes subproblems, then either cache them (top-down) or fill
 a table of them in order (bottom-up). Find the recurrence and the rest
-writes itself.
+writes itself. When it doesn't, go back to the state: the
+missing piece is almost always something the subproblem needs to know but
+the state doesn't record.

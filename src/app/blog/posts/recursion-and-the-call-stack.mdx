@@ -36,6 +36,108 @@ frames pile up. Going **up**, the base case returns a concrete value and
 each paused frame completes its multiplication in reverse order. The answer
 is assembled during the unwinding.
 
+## How to write a recursive function: the leap of faith
+
+Tracing every frame is how you *understand* recursion. It's a terrible
+way to *write* it — you'll drown in frames by the third level. Writers of
+recursive code use a different habit: **assume the recursive call already
+works** for smaller inputs, and only ask how to use its answer.
+
+Three questions, every time:
+
+1. **What's the smallest input I can answer directly?** That's the base
+   case.
+2. **How do I make the problem smaller?** One element shorter, half the
+   size, one level down a tree.
+3. **If the smaller call returns the right answer, how do I build mine
+   from it?**
+
+Applied to "sum of an array":
+
+```javascript
+function sum(arr, i = 0) {
+  if (i === arr.length) return 0;          // 1. empty suffix sums to 0
+  return arr[i] + sum(arr, i + 1);         // 2 + 3. my element + the rest's sum
+}
+```
+
+You never trace `sum` five levels deep. You trust that `sum(arr, i + 1)`
+returns the sum of everything after `i` — and if the base case is right and
+each call shrinks the problem, induction guarantees it does. That's the
+same reasoning as a proof by induction, which is no coincidence.
+
+Passing an index instead of `arr.slice(1)` is deliberate: slicing copies
+the array at every level, turning an O(n) function into O(n²) time and
+memory.
+
+## More examples, same three questions
+
+**Reverse a string**: the reverse of `"abc"` is the reverse of `"bc"`
+followed by `"a"`.
+
+```javascript
+const reverse = (s) => (s.length <= 1 ? s : reverse(s.slice(1)) + s[0]);
+```
+
+(Elegant, and O(n²) because of the slicing and concatenation — fine for
+short strings, a reason to use a loop for long ones.)
+
+**Height of a binary tree**: an empty tree has height 0; otherwise it's one
+more than the taller subtree.
+
+```javascript
+const height = (node) =>
+  node ? 1 + Math.max(height(node.left), height(node.right)) : 0;
+```
+
+**Flatten a nested array**: a non-array is itself; an array is the
+flattened versions of its items, joined.
+
+```javascript
+const flatten = (x) => (Array.isArray(x) ? x.flatMap(flatten) : [x]);
+flatten([1, [2, [3, [4]], 5]]);   // [1, 2, 3, 4, 5]
+```
+
+**Fast exponentiation**: xⁿ = (x^(n/2))² for even n. Halving instead of
+subtracting one makes it O(log n) calls instead of O(n):
+
+```javascript
+function power(x, n) {
+  if (n === 0) return 1;
+  const half = power(x, Math.floor(n / 2));
+  return n % 2 === 0 ? half * half : half * half * x;
+}
+```
+
+Computing `half` once and squaring it is the important part. Writing
+`power(x, n / 2) * power(x, n / 2)` makes two calls per level and quietly
+turns it back into O(n) — the same trap as naive Fibonacci.
+
+## Cost: calls × work, and depth
+
+Two numbers describe any recursive function:
+
+- **Time** = total number of calls × work done in each (outside its
+  recursive calls).
+- **Extra space** = the maximum depth of the call stack × size of a frame.
+
+<Table data={{
+  headers: ["Function", "Calls", "Work per call", "Time", "Max depth (space)"],
+  rows: [
+    ["factorial(n)", "n", "O(1)", "O(n)", "O(n)"],
+    ["sum(arr, i)", "n", "O(1)", "O(n)", "O(n)"],
+    ["power(x, n)", "log n", "O(1)", "O(log n)", "O(log n)"],
+    ["height(tree)", "n nodes", "O(1)", "O(n)", "O(tree height)"],
+    ["naive fib(n)", "~1.6ⁿ", "O(1)", "exponential", "O(n)"]
+  ]
+}} />
+
+The last row is the cautionary one: depth is only n, so it won't overflow,
+but the number of calls explodes because the same subproblems are solved
+over and over. Caching them is [dynamic programming](/blog/dynamic-programming-intro);
+the [Big-O guide](/blog/big-o-notation-explained) covers recurrences in
+more detail.
+
 ## The base case is not optional
 
 Every recursion needs a **base case** — an input it can answer without
@@ -52,6 +154,51 @@ boom(5); // RangeError: Maximum call stack size exceeded
 That error is the runtime telling you it ran out of room to push frames.
 Most engines cap the stack in the low tens of thousands of frames, so deep
 recursion on large inputs can overflow even when the logic is correct.
+
+### How deep can you go?
+
+The limit depends on the engine and on how big each frame is — more local
+variables and arguments mean bigger frames and fewer of them. In practice,
+Node and browsers manage somewhere around ten thousand frames for a small
+function, so recursion over a 100,000-element linked list or a degenerate
+tree (every node with one child) will overflow. Node has a
+`--stack-size` flag, but raising it is a workaround, not a fix: the
+depth grows with the input, and some input will always be bigger. If the
+depth is proportional to the input size and the input can be large,
+convert to a loop or an explicit stack.
+
+Balanced structures are different. A balanced binary tree of a billion
+nodes is only about 30 levels deep, so recursion over it is perfectly
+safe. The question to ask is "how deep can this get?", not "is this
+recursive?".
+
+### Mutual recursion
+
+Recursion doesn't have to be a function calling itself directly. Two
+functions calling each other is **mutual recursion**, and it's how
+recursive-descent parsers are built — one function per grammar rule:
+
+```javascript
+// expr := term ('+' term)*      term := number | '(' expr ')'
+function parseExpr(tokens) {
+  let value = parseTerm(tokens);
+  while (tokens[0] === '+') { tokens.shift(); value += parseTerm(tokens); }
+  return value;
+}
+function parseTerm(tokens) {
+  const t = tokens.shift();
+  if (t === '(') { const v = parseExpr(tokens); tokens.shift(); return v; }  // ')'
+  return Number(t);
+}
+
+parseExpr(['(', '1', '+', '2', ')', '+', '3']);   // 6
+```
+
+Nested parentheses become nested calls, so the call stack tracks how deep
+inside the expression you are — exactly the bookkeeping you'd otherwise do
+by hand. (It also means a maliciously deep input like ten thousand
+opening brackets can overflow the stack, which is why real parsers limit
+nesting depth.)
 
 ## Recursion is a stack you didn't write
 
@@ -102,6 +249,60 @@ optimization*). The ES2015 spec even requires it — but in practice almost
 no JavaScript engine implements it, so don't rely on it. If depth is a
 concern, convert to a loop.
 
+### Trampolines: deep recursion without the stack
+
+If you want to keep a recursive *shape* but can't afford the depth, a
+**trampoline** turns tail calls into a loop. Instead of calling itself,
+the function returns a thunk — a function that makes the next call — and a
+driver keeps calling thunks until it gets a value:
+
+```javascript
+const trampoline = (fn) => (...args) => {
+  let result = fn(...args);
+  while (typeof result === 'function') result = result();
+  return result;
+};
+
+const sumTo = trampoline(function go(n, acc = 0) {
+  return n === 0 ? acc : () => go(n - 1, acc + n);   // return the next step
+});
+
+sumTo(1_000_000);   // 500000500000 — no stack overflow
+```
+
+Each step returns to the driver before the next begins, so the stack never
+grows past a couple of frames. It's slower than a plain loop and only works
+for tail-recursive functions, but it's a useful tool when a recursive
+formulation is genuinely clearer.
+
+## Debugging recursion
+
+When a recursive function returns the wrong answer, print the frames —
+indented by depth — rather than staring at the code:
+
+```javascript
+function fib(n, depth = 0) {
+  const pad = '  '.repeat(depth);
+  console.log(`${pad}fib(${n})`);
+  const r = n < 2 ? n : fib(n - 1, depth + 1) + fib(n - 2, depth + 1);
+  console.log(`${pad}→ ${r}`);
+  return r;
+}
+```
+
+The indented trace *is* the call tree, and wrong values jump out at the
+level where they first appear. Most bugs turn out to be one of a few:
+
+- **A base case that's never reached** — the recursive call doesn't
+  shrink the input (`f(n)` calling `f(n)`), or shrinks it past the base
+  case (`n - 2` skipping over `n === 1`).
+- **A missing base case** for an input you didn't think of — the empty
+  array, the null child, zero.
+- **Forgetting to `return`** the recursive call's result, so the function
+  returns `undefined` from every level but the deepest.
+- **Shared mutable state** — a default parameter object or an outer
+  array — that one branch modifies and another branch then sees.
+
 ## Where recursion shines
 
 Recursion is the natural fit whenever the problem is **self-similar** — a
@@ -113,11 +314,23 @@ thing defined in terms of smaller copies of itself:
 
 For those, recursive code often reads almost exactly like the definition of
 the problem. For simple linear iteration, a plain loop is clearer and
-cheaper — don't recurse just to prove you can.
+cheaper — don't recurse just to prove you can. Readability is the reason to choose
+recursion; it's never a performance win in JavaScript.
+
+## Practice
+
+Write each one with the three questions before running any code: sum of
+digits of a number; check whether a string is a palindrome; binary search;
+count the nodes of a binary tree; merge two sorted lists; generate all
+subsets (which leads straight into [backtracking](/blog/backtracking-explained));
+and the Tower of Hanoi, the classic case where the recursive solution is a
+few lines and an iterative one is a puzzle.
 
 ## Wrap-up
 
 Recursion isn't magic; it's a stack of paused calls. Keep three things
 straight and it stops being scary: every call gets a frame, the base case
 is what lets the stack unwind, and deep recursion can overflow — at which
-point an explicit stack or a loop is your way out.
+point an explicit stack or a loop is your way out. And when writing one, don't
+trace the frames: answer the three questions, trust the smaller call, and
+let the stack do the bookkeeping.
