@@ -1,7 +1,7 @@
 ---
-title: "Map and Set: When a Plain Object Isn't the Right Collection"
+title: "JavaScript Collections: Map, Set, WeakMap and WeakSet"
 publishedAt: "2026-10-18"
-summary: "Objects make poor dictionaries: keys are coerced to strings, inherited properties get in the way, and size takes extra work. How Map and Set fix that, their iteration order, identity-based keys, the new set operations, converting to and from JSON, and when an object is still the better choice."
+summary: "Objects make poor dictionaries: keys are coerced to strings, inherited properties get in the way, and size takes extra work. How Map and Set fix that — iteration order, identity-based keys, set operations, JSON — and how WeakMap and WeakSet stop object-keyed caches and metadata from leaking memory."
 tags: "JavaScript"
 ---
 
@@ -10,7 +10,9 @@ For years, JavaScript code used plain objects as dictionaries:
 But objects were designed to describe things with known properties, not to
 hold arbitrary keys, and the gaps show.
 
-`Map` and `Set` (ES2015) are collections built for the job.
+`Map` and `Set` (ES2015) are collections built for the job. Their weak
+siblings, `WeakMap` and `WeakSet`, solve a narrower problem: attaching data
+to objects without keeping those objects alive forever.
 
 <MapSetVisualizer />
 
@@ -55,8 +57,8 @@ for (const [path, count] of visits) console.log(path, count)
 
 Using objects as keys is the big unlock: metadata for DOM nodes, memoisation
 keyed by an argument object, a graph's adjacency list keyed by node objects.
-If the keys should be garbage-collected when nothing else references them,
-use a [WeakMap](/blog/weakmap-and-weakset) instead.
+But it comes with a catch, covered [below](#weakmap-keys-the-garbage-collector-can-still-reclaim):
+a Map keeps every key alive for as long as the Map exists.
 
 ## Set
 
@@ -119,14 +121,136 @@ JSON.stringify([...set])                  // arrays for sets
 new Map(Object.entries(JSON.parse(text)))  // and back
 ```
 
-## When an object is still right
+## Strong references: why a plain Map can leak
 
-- **Records with known fields** — a user, a config, a props object — are
-  objects. That's what objects are for, and TypeScript types them precisely.
-- **JSON in and out**, with string keys you don't need to iterate in a
-  special way.
-- **Small, fixed lookup tables** written as literals: `const STATUS_TEXT = {
-  404: 'Not found', 500: 'Server error' }`.
+Attach some metadata to a DOM node, or cache a computed value keyed by an
+object, and a `Map` seems like the obvious tool. It has a hidden cost: a
+`Map` holds a **strong reference** to every key, so none of its keys can be
+garbage collected while the map exists — even after every other part of the
+program has stopped using them.
 
-Reach for `Map` when keys are dynamic, aren't strings, or the collection
-changes often — and `Set` whenever the question is "have I seen this?".
+```javascript
+const cache = new Map();
+
+function attachMetadata(el) {
+  cache.set(el, { clickCount: 0 });
+}
+
+let button = document.createElement("button");
+attachMetadata(button);
+
+button = null; // the only other reference to this element is gone...
+// ...but the Map still holds it. The DOM node and its metadata can
+// never be garbage collected while `cache` exists.
+```
+
+If the keys' lifetime is tied to something transient — DOM nodes that get
+removed, request-scoped objects, component instances that unmount — the map
+grows forever unless you remember to delete every entry by hand.
+
+## WeakMap: keys the garbage collector can still reclaim
+
+`WeakMap` holds its keys **weakly**: being a key in a `WeakMap` does not
+stop an object being garbage collected. Once nothing else references the
+key, the engine can reclaim it, and the entry disappears with it — no
+cleanup code required.
+
+```javascript
+const cache = new WeakMap();
+
+function attachMetadata(el) {
+  cache.set(el, { clickCount: 0 });
+}
+
+let button = document.createElement("button");
+attachMetadata(button);
+
+button = null; // nothing else references the element, so it and its
+               // WeakMap entry can be collected. No leak.
+```
+
+Same `get` / `set` / `has` / `delete` API as `Map`, with constraints that
+follow from the weak-reference guarantee:
+
+- **Keys must be objects** (or non-registered `Symbol`s) — primitives like
+  strings and numbers aren't tracked by identity, so they can't be weakly
+  referenced.
+- **Not iterable** — no `keys()`, `values()`, `entries()`, no `size`. If the
+  collection could be enumerated, iterating it would itself keep every key
+  alive. It's a deliberate restriction, not a missing feature.
+
+## WeakSet
+
+`WeakSet` is to `Set` what `WeakMap` is to `Map`: weakly held membership for
+"have I already processed this object?" checks that shouldn't keep the
+object alive.
+
+```javascript
+const processed = new WeakSet();
+
+function process(obj) {
+  if (processed.has(obj)) return; // already handled
+  processed.add(obj);
+  // ... do work ...
+}
+```
+
+Once `obj` is unreachable elsewhere, it's collected and silently drops out
+of `processed`. There's no removal to forget.
+
+## Two WeakMap patterns
+
+**Object-keyed memoisation.** A cache keyed by argument identity should
+never be the reason the argument outlives its natural lifetime:
+
+```javascript
+const memoCache = new WeakMap();
+
+function expensiveComputation(config) {
+  if (memoCache.has(config)) return memoCache.get(config);
+  const result = compute(config);
+  memoCache.set(config, result);
+  return result;
+}
+```
+
+With a `Map`, every config object ever passed in would live as long as the
+process. With a `WeakMap`, each cache entry dies with its argument.
+
+**Private state, before `#fields`.** External code has no handle to the
+map, so there's no way to read the data:
+
+```javascript
+const _private = new WeakMap();
+
+class Counter {
+  constructor() { _private.set(this, { count: 0 }); }
+  increment() { _private.get(this).count++; }
+  get value() { return _private.get(this).count; }
+}
+```
+
+New code should prefer [`#count` class fields](/blog/javascript-classes-and-private-fields),
+which give the same privacy as built-in syntax. But the pattern shows why
+`WeakMap` fits: an instance's private state shouldn't outlive the instance.
+
+## Choosing a collection
+
+<Table data={{
+  headers: ["You need", "Use"],
+  rows: [
+    ["A record with known fields, or JSON in and out", "Plain object"],
+    ["A dictionary with dynamic or non-string keys, frequent changes, iteration", "Map"],
+    ["\"Have I seen this value?\" — de-duplication, fast membership", "Set"],
+    ["Metadata or a cache keyed by objects with their own lifetime", "WeakMap"],
+    ["Tracking which objects you've already handled, without keeping them alive", "WeakSet"],
+    ["To iterate, count, or use primitive keys", "Map / Set — the weak versions can't"]
+  ]
+}} />
+
+Small, fixed lookup tables written as literals —
+`const STATUS_TEXT = { 404: 'Not found', 500: 'Server error' }` — are still
+objects, and TypeScript types them precisely. Reach for `Map` when keys are
+dynamic, aren't strings, or the collection changes often; `Set` whenever the
+question is "have I seen this?"; and the weak versions when the keys are
+objects that should be free to go.

@@ -96,7 +96,7 @@ This is different from the old conventions:
 - A [closure](/blog/closures-and-the-module-pattern) gives real privacy, but
   you create functions per instance, and methods can't be shared on the
   prototype.
-- A [WeakMap](/blog/weakmap-and-weakset) keyed by instance was the old way to
+- A [WeakMap](/blog/javascript-map-and-set#weakmap-keys-the-garbage-collector-can-still-reclaim) keyed by instance was the old way to
   get private per-instance data — essentially what private fields do
   natively.
 - TypeScript's `private` keyword is a compile-time check only; the property
