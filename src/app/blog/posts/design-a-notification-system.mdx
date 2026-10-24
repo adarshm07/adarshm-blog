@@ -1,7 +1,7 @@
 ---
 title: "System Design Case Study: A Notification System"
 publishedAt: "2026-10-16"
-summary: "One service that sends push, email and SMS for every other team: an API by notification type, user preferences and quiet hours, deduplication, per-channel queues, retries with a dead-letter queue, provider failover, and delivery tracking."
+summary: "One service that sends push, email and SMS for every other team: an API by notification type, user preferences and quiet hours, deduplication, per-channel queues, retries with a dead-letter queue, provider failover, digests and batching, and delivery tracking."
 tags: "System Design"
 ---
 
@@ -11,7 +11,11 @@ email or push provider directly, and users get duplicates, messages at 3 a.m.,
 and marketing they unsubscribed from. A shared notification service fixes
 that by owning the rules in one place.
 
-## Requirements
+It's a good interview question because the hard parts aren't sending —
+providers do that — but deciding *whether* to send, *when*, and what to do
+when a provider half-fails.
+
+## 1. Requirements
 
 **Functional**
 
@@ -24,12 +28,34 @@ that by owning the rules in one place.
 
 **Non-functional**: transactional messages (password reset, 2FA codes) within
 seconds; no duplicates; one slow provider must not delay the others; survive
-provider outages.
+provider outages; never send to someone who opted out.
 
-**Scale**: say 50 million notifications a day, with bursts — a marketing
-campaign might enqueue 10 million at once.
+**Out of scope**: building a push or email provider (we use APNs, FCM, an
+email API and an SMS gateway), campaign design tools.
 
-## The API
+## 2. The numbers
+
+Say 50 million notifications a day, with bursts — a marketing campaign
+might enqueue 10 million at once.
+
+<Table
+  data={{
+    headers: ['quantity', 'estimate', 'what it means'],
+    rows: [
+      ['average rate', '50M/day → ~600/s', 'a modest steady load'],
+      ['campaign burst', '10M enqueued in minutes', 'queues absorb it; senders drain at provider limits'],
+      ['transactional share', 'maybe 10%, but latency-critical', 'separate queues so bursts never delay them'],
+      ['delivery records', '~50M rows/day × ~300 B = ~15 GB/day', 'partition by day; expire after 90 days'],
+      ['provider limits', 'e.g. a few thousand emails/s per account', 'the real bottleneck during campaigns'],
+    ],
+  }}
+/>
+
+The last row is the one that shapes the design: you can enqueue faster
+than any provider will accept, so the system has to queue, pace and
+prioritise rather than just "send faster".
+
+## 3. The API
 
 ```
 POST /notifications
@@ -46,11 +72,37 @@ Callers describe *what happened*. The service decides whether, how and when
 to tell the user. That keeps channel logic, preferences and templates out of
 every other team's code.
 
-## The flow
+`202 Accepted` is deliberate: the caller learns the request was recorded,
+not that anything was delivered. For callers that need to know — a 2FA
+flow showing "code sent" — a status endpoint or a callback reports the
+delivery outcome later.
+
+Each notification **type** is registered once, with its defaults:
+
+```yaml
+order_shipped:
+  channels: [push, email]
+  priority: normal          # transactional | normal | bulk
+  respects_quiet_hours: true
+  user_can_disable: true
+  templates: { push: order_shipped_push_v3, email: order_shipped_email_v5 }
+two_factor_code:
+  channels: [sms]
+  priority: transactional
+  respects_quiet_hours: false
+  user_can_disable: false
+  ttl: 5m                   # useless after it expires; don't retry past this
+```
+
+Putting these rules in a registry rather than in callers is the whole
+point: product decides "shipping updates go by push and email", and no
+team has to change code to change it.
+
+## 4. The flow
 
 <NotificationSystemVisualizer />
 
-## The pieces
+## 5. The pieces
 
 **Deduplication.** Callers retry, and events are delivered at least once, so
 the same request will arrive twice. Store each `idempotencyKey` with a TTL
@@ -88,7 +140,69 @@ deliveries and opens through [webhooks](/blog/webhooks-explained), which
 update the record. Hard bounces and invalid tokens feed back into user data,
 so you stop sending to dead addresses.
 
-## Data model
+## 6. The decision step in code
+
+The rules engine is the heart of the service, and it's mostly plain code:
+
+```javascript
+async function plan(req) {
+  if (!(await dedupe.claim(req.idempotencyKey, { ttl: '24h' }))) return [];
+
+  const type = registry.get(req.type);
+  const user = await users.get(req.userId);
+  const prefs = await preferences.get(req.userId, req.type);
+  const jobs = [];
+
+  for (const channel of type.channels) {
+    if (type.userCanDisable && prefs[channel] === false) continue;
+    if (!user.hasAddressFor(channel)) continue;          // no phone, no token
+
+    let sendAt = Date.now();
+    if (type.respectsQuietHours && inQuietHours(user)) {
+      sendAt = endOfQuietHours(user);                     // delay, don't drop
+    }
+    if (await overUserRateLimit(user.id, channel, type.priority)) {
+      if (type.priority === 'bulk') continue;             // drop marketing
+      sendAt = Math.max(sendAt, nextAllowedSlot(user.id, channel));
+    }
+    jobs.push({ channel, sendAt, queue: queueFor(channel, type.priority), req });
+  }
+  return jobs;
+}
+```
+
+Three judgement calls are encoded there, and each is worth saying out loud
+in an interview: quiet hours **delay** rather than drop; rate limits **drop**
+marketing but only delay transactional messages; and a type the user can't
+disable (security alerts) skips the preference check entirely.
+
+### Scheduling delayed sends
+
+Jobs with a future `sendAt` go into a delay store — a sorted set keyed by
+time, or the delayed-job feature of a queue like BullMQ or SQS — and a
+scheduler moves them to the channel queue when they're due. Re-check
+preferences at send time too: a user who unsubscribes at 11 p.m. shouldn't
+get the digest that was queued at 10.
+
+## 7. Digests and batching
+
+Twenty "someone liked your post" pushes in an hour is a reason to
+uninstall. Collapse them:
+
+- **Aggregation window**: the first like sends immediately; further likes
+  in the next 30 minutes are counted, and one "and 19 others" push goes at
+  the end of the window.
+- **Daily or weekly digests**: low-priority types aren't sent individually
+  at all. They're appended to a per-user digest, rendered and sent on
+  schedule.
+- **Collapse keys**: push providers let you replace an earlier notification
+  on the device with a newer one under the same key, so the lock screen
+  shows the latest count, not a stack.
+
+Batching trades immediacy for attention. Decide it per type, in the
+registry, not in each caller.
+
+## 8. Data model
 
 ```
 notifications(id, user_id, type, idempotency_key, data, created_at)
@@ -97,7 +211,26 @@ preferences(user_id, type, channel, enabled)
 device_tokens(user_id, platform, token, last_seen)
 ```
 
-## What breaks first
+`deliveries.status` moves through `queued → sent → delivered / bounced /
+failed`, with `opened` and `clicked` for channels that report them. Keep the
+raw provider callbacks too: when a user says "I never got the code", the
+answer is in those events.
+
+## 9. Sending at provider speed
+
+Each provider account has a rate limit, and exceeding it gets you throttled
+or, for email, hurts deliverability for everyone. Workers draw from a
+shared [token bucket](/blog/rate-limiting-algorithms) per provider account,
+so total throughput across all workers stays under the limit. When the
+bucket is empty, workers wait — and the queue simply grows, which is
+exactly what the queue is for.
+
+For email specifically, a few operational rules matter more than code:
+send bulk and transactional mail from different domains or IP pools, so a
+campaign's spam complaints can't land password resets in junk folders; and
+honour unsubscribe headers instantly.
+
+## 10. What breaks first
 
 - **Campaign bursts** flood the queues. Rate-limit enqueueing for bulk
   sends, and respect each provider's own rate limits.
@@ -107,6 +240,85 @@ device_tokens(user_id, platform, token, last_seen)
   and time out before replying, so a retry sends it twice. Dedupe at the
   provider where possible (many accept an idempotency key), and accept rare
   duplicates for non-critical types.
+- **Expired messages**: a 2FA code retried after ten minutes is noise.
+  Give time-sensitive types a TTL and drop jobs past it rather than
+  retrying.
+
+## 11. Knowing it works
+
+A notification system fails quietly. Nothing crashes when a provider
+starts silently dropping 5% of pushes; users just stop getting them, and
+you find out from support tickets a week later. So the service needs
+signals that go beyond "the workers are up":
+
+- **End-to-end latency per priority**: time from `POST /notifications` to
+  the provider's `delivered` callback. Alert when transactional p99 goes
+  past a few seconds — that's the number users feel on a login screen.
+- **Queue age, not just queue length**: a bulk queue holding 5 million
+  jobs during a campaign is normal; a transactional queue whose oldest job
+  is two minutes old is an incident.
+- **Delivery rate per provider and channel**: delivered ÷ sent over the
+  last hour, compared with the same hour last week. A drop is the earliest
+  sign of a provider problem, an expired certificate, or a blocked sending
+  domain.
+- **Bounce and complaint rates for email**: these decide whether mailbox
+  providers keep accepting your mail at all.
+- **Dead-letter queue inflow**: should be near zero; a spike means a
+  template bug, a bad deploy, or a provider rejecting a whole class of
+  message.
+
+### Canaries
+
+Synthetic users help a lot. A test account on a real phone, with a real
+inbox and a real SIM, receives a canary notification of each important type
+every few minutes; a checker confirms it arrived. It's the only test that
+exercises the whole path — your service, the provider, the carrier or
+mailbox, and the device — the same way a user's message travels.
+
+### Testing templates
+
+Templates are code that ships to millions of people, so treat them that
+way: render every template, in every supported locale, against fixture
+data in CI, and fail on missing variables. A broken template should never
+reach a user as `Hi {{first_name}}`.
+
+## 12. Trade-offs to state out loud
+
+<Table
+  data={{
+    headers: ['decision', 'choice here', 'what you give up'],
+    rows: [
+      ['API', 'by type, async (202)', 'callers cannot know delivery synchronously'],
+      ['queues', 'per channel × priority', 'more queues to run and monitor'],
+      ['quiet hours', 'delay, not drop', 'messages arriving hours after the event'],
+      ['retries', 'bounded, then dead-letter', 'some messages need manual follow-up'],
+      ['batching', 'per-type windows and digests', 'immediacy for low-priority types'],
+      ['providers', 'two for critical channels', 'cost and template duplication'],
+    ],
+  }}
+/>
+
+## 13. Follow-up questions to expect
+
+- **"In-app notifications."** A per-user inbox table plus a real-time push
+  over an existing connection if the app is open. Unread counts come from
+  the inbox, not from push delivery.
+- **"Guarantee the order of notifications."** Usually not needed across
+  types. For a sequence that matters (order placed → shipped → delivered),
+  partition the queue by user so one worker handles a user's messages in
+  order, and drop stale states ("shipped" after "delivered").
+- **"Measure whether notifications work."** Track opens and clicks per type
+  and channel, and the unsubscribe rate after each type. A type that drives
+  unsubscribes is costing more than it earns.
+- **"A bug sends a million duplicates."** Global and per-type kill switches
+  in the registry, checked by workers before each send.
+- **"Support multiple tenants"** (a notification platform for other
+  companies). Per-tenant queues or weighted fair scheduling, so one
+  tenant's campaign can't starve another's password resets; per-tenant
+  provider credentials and rate limits; and tenant ID in every key.
+- **"Users in many time zones get a campaign at 9 a.m. local."** Don't
+  enqueue it all at once: schedule one batch per time zone, which also
+  spreads the load over the day.
 
 ## Practise it
 

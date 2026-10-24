@@ -1,7 +1,7 @@
 ---
 title: "System Design Case Study: A Web Crawler"
 publishedAt: "2026-10-18"
-summary: "Designing a crawler that fetches billions of pages politely: the URL frontier with per-host queues, robots.txt and rate limits, DNS caching, de-duplicating URLs with Bloom filters and content with fingerprints, avoiding crawler traps, and scaling it all across machines."
+summary: "Designing a crawler that fetches billions of pages politely: the URL frontier with per-host queues, robots.txt and rate limits, DNS caching, de-duplicating URLs with Bloom filters and content with fingerprints, avoiding crawler traps, freshness scheduling, and scaling it all across machines."
 tags: "System Design"
 ---
 
@@ -11,7 +11,29 @@ datasets for language models all start this way. At small scale it's a
 breadth-first search in twenty lines. At billions of pages, almost every
 line of that loop needs a design decision.
 
-## Requirements
+Here's the twenty-line version, because every section below is a fix for
+one of its problems:
+
+```javascript
+const queue = [...seeds];
+const seen = new Set(seeds);
+
+while (queue.length) {
+  const url = queue.shift();
+  const html = await (await fetch(url)).text();   // no politeness, no limits
+  await store(url, html);
+  for (const link of extractLinks(html, url)) {
+    if (!seen.has(link)) { seen.add(link); queue.push(link); }   // Set grows forever
+  }
+}
+```
+
+It hammers whichever host has the most links, the `seen` set outgrows
+memory after a few hundred million URLs, one slow server blocks
+everything, and a calendar page with a "next month" link keeps it busy
+until the heat death of the universe.
+
+## 1. Requirements
 
 **Functional**: given seed URLs, fetch pages, extract links, follow them,
 store page content for downstream processing (indexing, analysis).
@@ -22,17 +44,54 @@ store page content for downstream processing (indexing, analysis).
 - **Scalable**: billions of pages; thousands of fetches per second.
 - **Robust**: malformed HTML, slow servers, infinite URL spaces, huge files.
 - **Fresh**: revisit important pages more often than unimportant ones.
+- **Extensible**: new content types (PDFs, images) and new downstream
+  consumers without rewriting the fetchers.
 
-**Numbers**: 1 billion pages a month is about 400 pages a second. At an
-average of 100 KB of HTML, that's 40 MB/s of download and 100 TB a month of
-raw content — stored compressed, as the [compression post](/blog/http-compression-gzip-brotli)
-shows, text shrinks a lot.
+**Out of scope**: rendering JavaScript-heavy pages (mention a headless
+browser pool as an extension), the search index itself, ranking.
 
-## The crawl loop
+## 2. The numbers
+
+1 billion pages a month is about 400 pages a second. At an average of
+100 KB of HTML, that's 40 MB/s of download and 100 TB a month of raw
+content — stored compressed, as the
+[compression post](/blog/http-compression-gzip-brotli) shows, text shrinks a
+lot.
+
+<Table
+  data={{
+    headers: ['quantity', 'estimate', 'what it means'],
+    rows: [
+      ['fetch rate', '~400 pages/s average', 'a few dozen machines with async I/O'],
+      ['bandwidth', '~40 MB/s (~320 Mbit/s)', 'a real but ordinary network budget'],
+      ['raw storage', '~100 TB/month, ~10–20 TB compressed', 'object storage, not a database'],
+      ['URLs discovered', '~50 links/page → ~20,000 new URLs/s before dedupe', 'dedupe must be in memory and fast'],
+      ['URL seen-set', '10 billion URLs × ~100 B = ~1 TB', 'too big for a hash set in RAM — use a Bloom filter'],
+      ['concurrent fetches', '400/s × ~2 s per fetch = ~800 in flight', 'async I/O, not a thread per fetch'],
+    ],
+  }}
+/>
+
+The last two rows drive the design. Link discovery outpaces fetching by
+roughly 50×, so most of the work is *deciding not to fetch*. And because
+each fetch spends most of its time waiting on someone else's server, the
+fetchers are I/O-bound — concurrency, not CPU, is the resource.
+
+## 3. The crawl loop
 
 <WebCrawlerVisualizer />
 
-## The URL frontier
+The components, in the order a URL flows through them:
+
+1. **URL frontier** — what to fetch next, and when.
+2. **Fetchers** — download pages, honouring robots.txt and limits.
+3. **Parser** — extract links and text from the response.
+4. **Content dedupe** — drop pages already seen under another URL.
+5. **URL filter + dedupe** — normalise, apply rules, drop seen URLs.
+6. **Storage** — raw pages to object storage, metadata to a database,
+   events to a log for downstream consumers.
+
+## 4. The URL frontier
 
 The frontier isn't one queue. It has two jobs that pull in different
 directions:
@@ -49,18 +108,70 @@ the top, fetches one URL, and puts the host back with a new time. With
 millions of hosts, the work spreads naturally and no single site is
 overwhelmed.
 
-## Fetching
+```javascript
+// one per crawler machine; hosts are already partitioned to this machine
+class Frontier {
+  hostQueues = new Map();      // host → queue of URLs
+  ready = new MinHeap((a, b) => a.nextFetchAt - b.nextFetchAt);
+
+  add(url, priority) {
+    const host = new URL(url).host;
+    if (!this.hostQueues.has(host)) {
+      this.hostQueues.set(host, new PriorityQueue());
+      this.ready.push({ host, nextFetchAt: Date.now() });
+    }
+    this.hostQueues.get(host).push(url, priority);
+  }
+
+  async next() {
+    const slot = this.ready.pop();
+    await sleepUntil(slot.nextFetchAt);
+    const url = this.hostQueues.get(slot.host).pop();
+    return { url, release: (delayMs) =>
+      this.ready.push({ host: slot.host, nextFetchAt: Date.now() + delayMs }) };
+  }
+}
+```
+
+The fetcher calls `release` when it's done, with a delay based on how the
+host behaved — a fixed minimum, the robots.txt `Crawl-delay`, or a multiple
+of the last response time, so slow (struggling) servers automatically get
+fewer requests. A host whose queue is empty simply isn't put back.
+
+At this scale the frontier can't live only in memory: millions of host
+queues with billions of URLs. Keep the head of each host's queue in memory
+and spill the rest to disk (or an embedded key-value store like RocksDB),
+reading back in batches.
+
+### How is priority decided?
+
+Cheap signals work surprisingly well: depth from a seed (shallower first),
+whether the host is new to you, how many already-crawled pages link to
+the URL, and — for revisits — how overdue the page is. Full PageRank is a
+batch job over the link graph; its output can feed back into priorities on
+the next cycle.
+
+## 5. Fetching
 
 - **robots.txt**: fetch it once per host, cache it for a day, and check every
-  URL against it before fetching.
+  URL against it before fetching. If it returns a 5xx, treat the whole host
+  as disallowed for now — that's the conservative reading.
 - **DNS**: at hundreds of fetches a second, the system resolver becomes a
   bottleneck. Run a local caching resolver.
 - **Timeouts and limits**: cap connection time, total time and response size,
   and skip content types you don't need.
+- **Redirects**: follow a few, but treat the target as a new URL that goes
+  back through dedupe and the frontier — the redirect may point at a
+  different host with its own politeness budget.
 - **Identify yourself**: a clear User-Agent with a contact URL, so site
   owners can reach you instead of blocking you.
 
-## Not doing the same work twice
+Back off on errors: a `429` or `503` with a `Retry-After` header is the
+site telling you exactly how long to wait. Respect it, and widen that
+host's delay for a while afterwards. [Retries with backoff and
+jitter](/blog/retries-backoff-and-jitter) applies here per host.
+
+## 6. Not doing the same work twice
 
 **URL de-duplication.** Normalise first — lowercase the host, drop the
 `#fragment`, resolve relative paths, sort or strip tracking parameters —
@@ -69,20 +180,60 @@ seen-set. With billions of URLs, a [Bloom filter](/blog/bloom-filters-explained)
 answers "seen before?" from memory, with a small, tunable false-positive
 rate (a few pages never crawled — acceptable).
 
+```javascript
+function normalise(raw, base) {
+  const u = new URL(raw, base);
+  u.hash = '';
+  u.hostname = u.hostname.toLowerCase();
+  if ((u.protocol === 'https:' && u.port === '443') ||
+      (u.protocol === 'http:' && u.port === '80')) u.port = '';
+  for (const p of [...u.searchParams.keys()]) {
+    if (/^(utm_|fbclid$|gclid$|ref$)/.test(p)) u.searchParams.delete(p);
+  }
+  u.searchParams.sort();
+  return u.toString();
+}
+```
+
+How big is the Bloom filter? For 10 billion URLs at a 1% false-positive
+rate you need about 9.6 bits per item — roughly 12 GB, split across
+crawler machines by host partition. That's a hundredth of the exact set.
+
 **Content de-duplication.** The same page appears under many URLs: mirrors,
 `?ref=` parameters, `http` and `https`. Hash the content and skip exact
 duplicates. Near-duplicates — the same article with a different date in the
 sidebar — need a similarity fingerprint such as SimHash, where similar pages
 have hashes that differ in only a few bits.
 
-## Crawler traps
+SimHash in one paragraph: split the page into features (shingles of
+words), hash each to 64 bits, and for each bit position add the feature's
+weight if the bit is 1 and subtract it if 0. The sign of each total is that
+bit of the fingerprint. Small edits flip only a few totals' signs, so
+near-identical pages land within a Hamming distance of 3 or so. Finding
+"any stored fingerprint within distance 3" is done by splitting the
+fingerprint into blocks and indexing each block — two pages within 3 bits
+must match exactly on at least one of four 16-bit blocks.
+
+## 7. Crawler traps
 
 Some sites generate infinite URLs: calendars with a "next month" link
 forever, session IDs in every link, faceted search with endless filter
 combinations. Defend with limits on URL length, path depth and pages per
 host, and by spotting repetitive path patterns.
 
-## Scaling out
+Concretely:
+
+- **Per-host page budget** — say 100,000 pages per crawl cycle unless the
+  host has earned more (many inbound links from other hosts).
+- **Repetition detection** — `/a/b/a/b/a/b/` or the same query parameter
+  with ever-increasing values.
+- **Low novelty** — if the last 1,000 pages from a host were all near-
+  duplicates by SimHash, stop crawling it this cycle.
+
+Traps aren't always malicious. Most are just bad URL design. The budget
+is what keeps a single badly-built site from eating a crawl.
+
+## 8. Scaling out
 
 Partition the work **by host**: hash each host to a crawler machine. All
 URLs for a host land on one machine, so its politeness timer and robots.txt
@@ -91,18 +242,84 @@ for a host owned elsewhere, it forwards it. That's
 [consistent hashing](/blog/consistent-hashing) again, so machines can be
 added without reshuffling everything.
 
+Forwarded links are batched — a machine collects outbound URLs per
+destination and sends them every second or so, not one RPC per link.
+Dedupe happens at the owner, which holds that host's slice of the Bloom
+filter.
+
 Downstream, fetched pages go into a log or queue
 ([queues vs. event logs](/blog/message-queues-vs-event-logs)) for parsing,
 indexing — an [inverted index](/blog/inverted-index-and-full-text-search) —
 and storage in object storage. The fetchers never wait on the indexers.
+A log is the better fit here: several independent consumers (indexer,
+link-graph builder, analytics) each read every page at their own pace, and
+a new consumer can replay history.
 
-## Freshness
+### Storage layout
+
+- **Raw pages** in object storage, packed into large files (WARC is the
+  standard format) rather than one object per page — billions of tiny
+  objects are expensive and slow to list.
+- **Per-URL metadata** — last fetch time, status, content hash, ETag,
+  change history — in a wide-column store keyed by URL. This is what the
+  freshness scheduler reads.
+
+## 9. Freshness
 
 Pages change at different rates. Track how often each page changed in the
 past and schedule revisits accordingly: a news front page every few
 minutes, an old blog post every few months. Conditional requests
 (`If-Modified-Since`, `If-None-Match`) make revisits of unchanged pages
 cheap — see [HTTP caching headers](/blog/http-caching-headers).
+
+A simple adaptive rule: after each revisit, halve the interval if the page
+changed and double it if it didn't, within a floor and ceiling. Over a few
+visits each page settles near its true change rate. Weight by importance —
+a page many sites link to is worth checking more often than one nobody
+links to, even at the same change rate.
+
+## 10. What breaks first
+
+- **One huge host** (a site with 100 million pages) pins one machine's
+  frontier and disk. Split very large hosts across several back queues
+  sharing one politeness budget, or give them dedicated capacity.
+- **DNS** — a few slow authoritative servers stall many fetches. Resolve
+  ahead of time for hosts near the top of the frontier.
+- **The Bloom filter fills up.** False positives climb as it fills past
+  its design size. Size for growth, or rotate to a new, larger filter
+  each crawl cycle.
+- **Downstream backlog.** If indexing falls behind, the log absorbs it —
+  that's what it's for. Alert on consumer lag, not on fetch rate.
+
+## 11. Trade-offs to state out loud
+
+<Table
+  data={{
+    headers: ['decision', 'choice here', 'what you give up'],
+    rows: [
+      ['partitioning', 'by host', 'uneven load when one host is huge'],
+      ['URL dedupe', 'Bloom filter', 'a few URLs never crawled (false positives)'],
+      ['content dedupe', 'SimHash, ~3-bit threshold', 'occasionally drops a page that differs meaningfully'],
+      ['politeness', 'one in-flight request per host + adaptive delay', 'slower crawls of large sites'],
+      ['JavaScript', 'not rendered by default', 'content that only exists after scripts run'],
+    ],
+  }}
+/>
+
+## 12. Follow-up questions to expect
+
+- **"Crawl JavaScript-rendered sites."** A separate pool of headless
+  browsers for hosts known to need it, fed from the same frontier, with a
+  far lower rate — rendering costs 10–100× a plain fetch.
+- **"Prioritise one topic"** (a focused crawler). Score pages with a
+  classifier as they're parsed, and give links from relevant pages higher
+  priority.
+- **"A site owner complains."** Honour robots.txt changes quickly (shorter
+  cache for hosts that complained), offer a contact address, and keep
+  per-host rate overrides.
+- **"Restart without losing progress."** The frontier's on-disk state plus
+  the metadata store are enough to resume; in-flight fetches just happen
+  again, and dedupe absorbs the repeats.
 
 ## Practise it
 

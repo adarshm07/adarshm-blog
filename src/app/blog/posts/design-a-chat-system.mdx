@@ -1,7 +1,7 @@
 ---
 title: "System Design Case Study: A Chat System"
 publishedAt: "2026-10-16"
-summary: "Designing one-to-one and group messaging like WhatsApp or Slack: persistent connections, presence, message ordering with per-conversation sequence numbers, delivery receipts, offline sync, and fan-out for groups. With the trade-offs at each step."
+summary: "Designing one-to-one and group messaging like WhatsApp or Slack: persistent connections, presence, message ordering with per-conversation sequence numbers, delivery receipts, offline sync, media, and fan-out for groups. With the trade-offs at each step."
 tags: "System Design"
 ---
 
@@ -11,21 +11,40 @@ may be online, offline, or on three devices. The network drops halfway
 through. Messages must arrive in order, exactly once, and show ticks for
 sent, delivered and read.
 
-## Requirements
+## 1. Requirements
 
 **Functional**: one-to-one and group chats (up to, say, 500 members); text
-messages; delivery and read receipts; message history on every device;
-online presence.
+messages and media attachments; delivery and read receipts; message history
+on every device; online presence.
 
 **Non-functional**: messages delivered in well under a second when both
 people are online; no message ever lost once the sender sees "sent"; order
 preserved within a conversation; works on flaky mobile networks.
 
-**Scale**: assume 50 million daily users, 40 messages each a day — 2 billion
-messages a day, about 23,000 a second on average and perhaps 70,000 at peak.
-At ~200 bytes a message, that's ~400 GB of new messages a day.
+**Out of scope**: voice and video calls, payments, stories. Large broadcast
+channels get a mention at the end.
 
-## Persistent connections
+## 2. The numbers
+
+Assume 50 million daily users sending 40 messages each a day:
+
+<Table
+  data={{
+    headers: ['quantity', 'estimate', 'what it means'],
+    rows: [
+      ['messages/day', '2 billion', ''],
+      ['message writes', '~23,000/s avg, ~70,000/s peak', 'needs a write-optimised, partitioned store'],
+      ['new message data', '~200 B × 2B = ~400 GB/day', '~150 TB/year before replication'],
+      ['concurrent connections', '~20 million at peak', 'a few hundred gateway servers'],
+      ['receipts', '2 per message (delivered, read) × recipients', 'more events than messages — aggregate them'],
+    ],
+  }}
+/>
+
+The receipts row is the one people forget. In a busy group, receipt
+traffic outnumbers message traffic many times over.
+
+## 3. Persistent connections
 
 Polling for new messages every few seconds would mean millions of empty
 requests and seconds of delay. Instead each app keeps a long-lived
@@ -38,7 +57,30 @@ gateway a user is on. That's the **presence store**: a fast key-value map
 (Redis, for example) of `user → gateway`, updated on connect and disconnect,
 with a TTL refreshed by heartbeats so crashed gateways don't leave ghosts.
 
-## Sending a message
+A user on three devices has three connections, possibly on three gateways,
+so the presence entry is really `user → set of (device, gateway)`.
+
+### The wire protocol
+
+Over the socket, a small set of frames covers everything:
+
+```
+client → server
+  SEND      { clientMsgId, conversationId, body }
+  ACK_DELIVERED { conversationId, seq }
+  ACK_READ  { conversationId, seq }
+  SYNC      { cursors: { [conversationId]: lastSeq } }
+
+server → client
+  SENT      { clientMsgId, conversationId, seq, ts }      ← the single tick
+  MESSAGE   { conversationId, seq, senderId, body, ts }
+  RECEIPT   { conversationId, userId, deliveredSeq?, readSeq? }
+```
+
+Each frame is tiny and the socket is already open, so the per-message cost
+is a few hundred bytes, not an HTTP request.
+
+## 4. Sending a message
 
 <ChatSystemVisualizer />
 
@@ -58,16 +100,110 @@ Three details carry most of the design:
    it's stored. Ordering within a chat is then exact; ordering *across* chats
    doesn't matter.
 
-## Storage
+The chat service's send path, roughly:
 
-The access pattern is "the latest N messages of conversation X", plus "everything
-after sequence S" for syncing. A wide-column store such as Cassandra or
-ScyllaDB fits well: partition by `conversation_id`, cluster by `seq`
-descending. Writes are appends, and reads are one partition slice. Very
-active conversations can be split into time buckets so partitions don't
-grow without bound.
+```javascript
+async function onSend(userId, { clientMsgId, conversationId, body }) {
+  await assertMember(userId, conversationId);
 
-## Offline users and multiple devices
+  // Dedupe: the same clientMsgId already stored → re-ack, don't re-store.
+  const existing = await dedupe.get(`${conversationId}:${clientMsgId}`);
+  if (existing) return ack(userId, clientMsgId, existing);
+
+  const seq = await nextSeq(conversationId);       // atomic per conversation
+  const msg = { conversationId, seq, senderId: userId, body, ts: Date.now() };
+  await messages.insert(msg);                      // durable, replicated
+  await dedupe.set(`${conversationId}:${clientMsgId}`, seq, { ttl: 86400 });
+
+  ack(userId, clientMsgId, seq);                   // ✓ sent
+  deliveryQueue.publish(msg);                      // fan-out happens async
+}
+```
+
+### Where does the sequence number come from?
+
+It must be atomic per conversation, but there's no need for a global
+counter. Options:
+
+- **A counter per conversation in Redis** (`INCR conv:{id}:seq`). Fast, but
+  if Redis loses a write, numbers can repeat. Persist the high-water mark
+  and on recovery restart from `stored max + 1`.
+- **A conditional write in the message store** — insert with `seq = last + 1`
+  only if no row has that seq (a lightweight transaction in Cassandra, a
+  unique constraint in SQL). Correct, but slower under contention.
+- **Route each conversation to one owner** (consistent hashing over chat
+  servers), which hands out numbers from memory and persists them with the
+  message. The common choice at scale: one writer per conversation removes
+  the race entirely.
+
+Gaps are fine as long as clients know they *might* exist only after a
+failure. The sync protocol below fills them.
+
+## 5. Storage
+
+The access pattern is "the latest N messages of conversation X", plus
+"everything after sequence S" for syncing. A wide-column store such as
+Cassandra or ScyllaDB fits well: partition by `conversation_id`, cluster by
+`seq` descending. Writes are appends, and reads are one partition slice.
+Very active conversations can be split into time buckets so partitions
+don't grow without bound.
+
+```sql
+CREATE TABLE messages (
+  conversation_id uuid,
+  bucket          int,          -- e.g. month number; bounds partition size
+  seq             bigint,
+  sender_id       uuid,
+  body            blob,
+  media_ref       text,
+  ts              timestamp,
+  PRIMARY KEY ((conversation_id, bucket), seq)
+) WITH CLUSTERING ORDER BY (seq DESC);
+```
+
+Alongside it, two small tables matter as much as the messages:
+
+- **`user_conversations`** — for each user, their conversations ordered by
+  last activity, with an unread count. This is what the chat list screen
+  reads; without it, rendering the inbox means querying every
+  conversation.
+- **`read_state`** — per (conversation, user): `delivered_seq` and
+  `read_seq`. One row per member, overwritten, instead of a receipt row per
+  message.
+
+## 6. Delivering to the recipient
+
+The delivery worker looks up each recipient's devices in the presence
+store and forwards the message to the right gateways. Gateways talk to
+each other through a pub/sub layer — each gateway subscribes to a channel
+for itself — so the chat service never needs a direct connection to all
+of them.
+
+```javascript
+async function deliver(msg) {
+  for (const userId of await members(msg.conversationId)) {
+    if (userId === msg.senderId) continue;
+    const devices = await presence.devices(userId);       // [{device, gateway}]
+    if (devices.length === 0) {
+      await push.notify(userId, preview(msg));            // APNs / FCM
+      continue;
+    }
+    for (const { gateway } of devices) {
+      await pubsub.publish(`gateway:${gateway}`, { to: userId, msg });
+    }
+  }
+}
+```
+
+The recipient's device sends `ACK_DELIVERED` with the highest seq it has,
+the server updates `read_state.delivered_seq`, and the sender gets a
+`RECEIPT` frame — the double tick. When the chat is opened, `ACK_READ`
+does the same for the blue ticks.
+
+If a gateway forwards a message and the device never acks, nothing is
+lost: the message is in storage, and the next sync brings it.
+
+## 7. Offline users and multiple devices
 
 If the presence lookup finds no gateway, the message is already safe in
 storage. The service sends a push notification (through APNs or FCM), and
@@ -79,7 +215,23 @@ in my conversations after the sequence numbers I already have". Because
 sequence numbers have no gaps, the client can also notice a missing message
 and ask for it.
 
-## Groups
+```javascript
+async function* onSync(userId, { cursors }) {
+  const convs = await userConversations.changedSince(userId, cursors);
+  for (const { conversationId, lastSeq } of convs) {
+    const from = cursors[conversationId] ?? 0;
+    if (lastSeq > from) {
+      yield* messages.range(conversationId, from + 1, lastSeq, { limit: 200 });
+    }
+  }
+}
+```
+
+The limit matters: a phone that's been off for a month shouldn't download
+every message in every chat on reconnect. Sync the latest page of each
+conversation and backfill older history lazily when the user scrolls.
+
+## 8. Groups
 
 For a group of 500, the chat service looks up the members and delivers to
 each online member's gateway — a **fan-out on write** per message. That's
@@ -90,16 +242,52 @@ clients pull, the same trade-off as in a
 
 Receipts in groups multiply quickly: 500 members × 500 messages of "read"
 events. Aggregate them — store "read up to seq S" per member rather than a
-receipt per message.
+receipt per message. Showing "read by 312" is then a count over 500 rows,
+not 156,000.
 
-## End-to-end encryption
+Membership changes need care: a member removed at seq 1,000 must not
+receive seq 1,001, and a member added at seq 1,000 shouldn't see older
+history unless the product allows it. Store join and leave seqs per
+member, and filter both delivery and sync by them.
+
+### Putting the guarantees together
+
+It's worth tracing "no message lost, none duplicated" through every hop,
+because an interviewer will:
+
+- **Phone → server**: at-least-once. The client retries until it gets
+  `SENT`; the server dedupes on `clientMsgId`. Net effect: exactly one
+  stored copy.
+- **Server → storage**: the message is written with replication before
+  `SENT` goes back. Once the sender sees one tick, a single node failure
+  can't lose it.
+- **Server → recipient**: at-least-once again. Gateways may deliver the
+  same message twice (a retry after a lost ack); the client dedupes by
+  `(conversationId, seq)`. Missed deliveries are repaired by sync.
+
+No single hop is exactly-once. The combination — retries everywhere,
+dedupe at each receiver, and a durable log that sync can always fall back
+on — is what makes it look that way to the user.
+
+## 9. Media
+
+Never send images or video through the chat path. The client uploads the
+file directly to object storage using a short-lived signed URL, then sends
+a normal message whose body references the object. Recipients download
+from a CDN. The chat servers handle a few hundred bytes per message
+whatever the attachment size, and thumbnails are generated asynchronously
+after upload.
+
+## 10. End-to-end encryption
 
 With E2E encryption (the Signal protocol, used by WhatsApp), the server
 stores and forwards ciphertext it can't read. The architecture above doesn't
 change, but server-side features do: search, link previews and spam
-filtering have to happen on the device. Mention it, and say what it costs.
+filtering have to happen on the device. Multi-device gets harder too —
+each device has its own keys, so a message is effectively encrypted once
+per recipient device. Mention it, and say what it costs.
 
-## What breaks first
+## 11. What breaks first
 
 - **A gateway crashes** and drops 200,000 connections. They all reconnect at
   once, to other gateways. Clients must reconnect with
@@ -110,6 +298,40 @@ filtering have to happen on the device. Mention it, and say what it costs.
 - **Presence churn**: online/offline events for millions of users. Don't
   broadcast every change to every contact. Fetch presence when a chat is
   opened, and subscribe only while it's visible.
+- **Push provider throttling**: a viral group message triggers millions of
+  notifications. Collapse them per conversation ("12 new messages") and
+  send through a queue with rate limits per provider.
+
+## 12. Trade-offs to state out loud
+
+<Table
+  data={{
+    headers: ['decision', 'choice here', 'what you give up'],
+    rows: [
+      ['transport', 'WebSocket per device', 'stateful gateways and a presence store'],
+      ['ordering', 'per-conversation seq, one writer per conversation', 'no global order across chats (not needed)'],
+      ['store', 'wide-column, partitioned by conversation + bucket', 'ad-hoc queries; search needs its own index'],
+      ['receipts', 'high-water mark per member', 'per-message read times'],
+      ['groups', 'fan-out on write, pull for huge channels', 'two delivery paths to maintain'],
+      ['media', 'direct upload to object storage', 'an extra round trip before sending'],
+    ],
+  }}
+/>
+
+## 13. Follow-up questions to expect
+
+- **"Message search."** Without E2E: index messages asynchronously into a
+  search cluster partitioned by user, see
+  [inverted indexes](/blog/inverted-index-and-full-text-search). With E2E:
+  on-device only.
+- **"Edit and delete."** New events in the same conversation (`EDIT seq 42`)
+  with their own seq numbers, applied by clients — never in-place updates
+  that devices would miss.
+- **"Typing indicators."** Ephemeral: send over the socket, never store,
+  drop when the recipient is offline, and throttle to one per few seconds.
+- **"Multi-region."** Home each conversation in one region (its owner), so
+  seq allocation stays single-writer; route sends there, and replicate
+  messages to other regions for reads.
 
 ## Practise it
 

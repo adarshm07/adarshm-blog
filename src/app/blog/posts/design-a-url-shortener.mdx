@@ -190,6 +190,42 @@ repeat visits never reach you — fast, but those clicks go uncounted. A 302
 (temporary) brings every click back. Most shorteners choose 302 because
 analytics are part of the product.
 
+The redirect handler is short, and that's the point — everything that isn't
+"find the URL and answer" is pushed somewhere else:
+
+```javascript
+app.get('/:key', async (req, res) => {
+  const { key } = req.params;
+
+  let link = await cache.get(key);
+  if (link === undefined) {
+    link = await replica.oneOrNone(
+      'SELECT long_url, expires_at FROM links WHERE key = $1', [key]
+    );
+    // Cache misses too (as null), briefly, so random keys can't
+    // hammer the database.
+    await cache.set(key, link, { ttl: link ? 3600 : 60 });
+  }
+
+  if (!link) return res.status(404).send('Not found');
+  if (link.expires_at && link.expires_at < Date.now()) {
+    return res.status(410).send('This link has expired');
+  }
+
+  // Fire-and-forget: the user never waits for analytics.
+  clicks.publish({ key, at: Date.now(), ref: req.get('Referer') });
+
+  res.set('Cache-Control', 'private, max-age=0');
+  return res.redirect(302, link.long_url);
+});
+```
+
+Two lines in there are worth defending in an interview. `clicks.publish`
+must not be awaited on anything slower than a local buffer, or an analytics
+outage becomes a redirect outage. And the `Cache-Control` header matters
+with a 302: without it, some proxies will cache the redirect anyway, and
+your click counts quietly drop.
+
 ## 7. Scaling the read path
 
 - **Cache**: a read-through cache keyed by short key, with a TTL. Popular
@@ -213,6 +249,103 @@ analytics are part of the product.
   them in batches — counts a few seconds behind are fine.
 - **Expiry**: don't delete in the request path. Return 410 for expired keys
   and clean up with a background job.
+
+## 9. The analytics pipeline
+
+Click counts are where a "tiny" product quietly becomes a data system.
+At ~4,000 clicks a second, that's ~350 million events a day.
+
+```
+redirect servers ──► log (Kafka / Kinesis) ──► stream aggregator ──► click_counts
+                                            └──► object storage (raw events, for reprocessing)
+```
+
+- **Redirect servers** append events to a local buffer and flush to the
+  log in batches. If the log is down, they drop or spool to disk — they
+  never block the redirect.
+- **The aggregator** consumes events and keeps per-key, per-minute counters
+  in memory, flushing them every few seconds as upserts:
+  `UPDATE click_counts SET clicks = clicks + $n WHERE key = $k AND minute = $m`.
+  One write per hot key per flush instead of one per click.
+- **Raw events** go to cheap object storage, partitioned by day. When
+  someone asks a new question ("clicks by country last quarter"), you
+  reprocess them instead of wishing you'd counted it.
+
+Because the log delivers at least once, the aggregator can count a click
+twice after a crash. For a click counter that's usually acceptable; if it
+isn't, commit consumer offsets in the same transaction as the counter
+update — see [message queues vs event logs](/blog/message-queues-vs-event-logs).
+
+## 10. Growing beyond one database
+
+The numbers above fit one Postgres primary with replicas for years. If
+they didn't — say 10× the writes, or a requirement to keep links forever —
+the move is to shard by key:
+
+- **Shard key = short key.** Every query is a lookup by key, so every query
+  hits exactly one shard. There are no cross-shard queries to worry about.
+- **Use [consistent hashing](/blog/consistent-hashing)** or a fixed number
+  of logical shards mapped onto physical nodes, so adding capacity moves a
+  fraction of the data, not all of it.
+- **Owner queries** ("show me all my links") now fan out to every shard.
+  Keep a small secondary table keyed by `owner_id` instead, written
+  alongside the link.
+
+See [sharding and replication](/blog/database-sharding-and-replication)
+for the general trade-offs.
+
+### Multiple regions
+
+Short links are shared globally, so a visitor in Mumbai shouldn't wait for
+a round trip to Virginia. Reads are the easy part: replicate the links
+table to every region and serve redirects locally. Writes are rarer, and
+can go to a single home region — a newly created link appearing in other
+regions a second later is fine, *except* for its creator, who will click it
+immediately. Route the creator's first redirect to the home region, or
+write the new link into the local region's cache at creation time. That's
+the [read-your-writes](/blog/read-your-writes-and-replication-lag) problem
+in miniature.
+
+## 11. Trade-offs to state out loud
+
+<Table
+  data={{
+    headers: ['decision', 'choice here', 'what you give up'],
+    rows: [
+      ['key generation', 'counter blocks + permutation', 'a coordination service; lost IDs on crash'],
+      ['redirect status', '302', 'more traffic than 301 — every click returns'],
+      ['database', 'one relational primary + replicas', 'needs sharding past a few TB of writes/day'],
+      ['analytics', 'async, batched, a few seconds stale', 'real-time exact counts'],
+      ['expiry', 'checked on read, cleaned up later', 'dead rows linger until the cleanup job runs'],
+    ],
+  }}
+/>
+
+## 12. Follow-up questions to expect
+
+- **"Make keys unguessable."** Random keys, or counter + a keyed
+  permutation. Then add rate limits on 404s per IP, so scanning is slow.
+- **"Two users shorten the same URL — same key?"** Only if the product
+  wants it. Shared keys share stats and expiry, which usually isn't what
+  either user expects. A unique index on `(owner_id, long_url)` gives
+  per-user dedup without the surprise.
+- **"A link points to malware after it was created."** The destination can
+  change after you checked it. Re-scan popular destinations periodically,
+  and keep a kill switch that flips a key to 410 instantly — which means
+  the cache must be invalidated, not just left to expire.
+- **"What if the cache cluster dies?"** Everything falls through to the
+  replicas at once. Size replicas for a degraded hit rate, and protect them
+  with [load shedding](/blog/load-shedding-and-graceful-degradation)
+  rather than letting the whole fleet fall over together.
+- **"How would you test this?"** Load-test the redirect path with a
+  realistic key distribution — a few very hot keys and a long tail — not
+  uniform random keys, which make the cache look worse and the database
+  look better than reality.
+
+The pattern underneath all of this: keep the redirect path to one cache
+lookup and one response, and move every other concern — counting,
+scanning, cleanup — off to the side where it can be slow, retried, or
+temporarily broken without anyone noticing.
 
 ## Practise it
 
