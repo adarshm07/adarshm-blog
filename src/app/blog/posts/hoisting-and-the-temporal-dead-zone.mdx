@@ -1,22 +1,128 @@
 ---
-title: "Hoisting and the Temporal Dead Zone"
+title: "let, const and var: Scope, Hoisting and the Temporal Dead Zone"
 publishedAt: "2026-09-19"
-summary: "Nothing moves to the top of the file. What actually happens is that bindings are created before any code runs — and let, const, var, and function declarations are created in four different states."
+summary: "Three ways to declare a variable, and the differences that actually matter: block vs function scope, the loop bug var causes, what const does and doesn't protect — and why 'hoisting' is really bindings created before any code runs, in four different states."
 tags: "JavaScript"
 ---
 
-"Declarations are moved to the top of the scope" is the explanation most of
-us learned, and it's wrong in a way that stops being harmless the moment you
-hit a `ReferenceError` that says *"Cannot access 'x' before
-initialization"*.
+JavaScript has three keywords for declaring a variable. Older code is full
+of `var`; modern code uses `let` and `const`. They look interchangeable,
+but they behave differently in ways that cause real bugs — and the usual
+explanation of why, "declarations are moved to the top of the scope", is
+wrong in a way that stops being harmless the moment you hit *"Cannot access
+'x' before initialization"*.
 
-Nothing moves. The engine processes a scope in two phases, and everything
-confusing about hoisting is a consequence of what happens in the first one.
+This post covers the practical differences first, then what's actually
+going on underneath.
 
-## Two phases
+<VariableScopeVisualizer />
 
-Before a single statement executes, the engine scans the scope and creates a
-binding for every declaration it finds. Then it runs the code. The
+## Scope: where a variable exists
+
+A variable's **scope** is the part of the code where it can be used.
+
+`let` and `const` are **block-scoped**: they exist only inside the nearest
+pair of curly braces `{ }` — an `if`, a loop, a function body.
+
+```javascript
+if (true) {
+  let message = 'hi';
+  console.log(message);   // 'hi'
+}
+console.log(message);     // ReferenceError: message is not defined
+```
+
+`var` is **function-scoped**: it ignores blocks and belongs to the whole
+function it's declared in (or the whole script, outside any function).
+
+```javascript
+if (true) {
+  var message = 'hi';
+}
+console.log(message);     // 'hi' — it leaked out of the block
+```
+
+Block scope is what you'd expect from almost any other language, and it
+keeps variables close to where they're used.
+
+## The loop bug
+
+This is the most famous `var` problem:
+
+```javascript
+for (var i = 0; i < 3; i++) {
+  setTimeout(() => console.log(i));
+}
+// 3, 3, 3
+```
+
+There's only one `i` for the whole loop. The timers run after the loop has
+finished, when that single `i` is 3 — so all three print 3.
+
+Switch to `let`, and each iteration gets its **own** `i`:
+
+```javascript
+for (let i = 0; i < 3; i++) {
+  setTimeout(() => console.log(i));
+}
+// 0, 1, 2
+```
+
+`let` in a `for` head creates a new binding for each iteration and copies
+the value forward, so each callback remembers the `i` from its own
+iteration — a [closure](/blog/closures-and-the-module-pattern) doing
+exactly what you'd want.
+
+## const: can't reassign, can still change
+
+`const` means the variable can't be pointed at a different value:
+
+```javascript
+const max = 10;
+max = 20;   // TypeError: Assignment to constant variable.
+```
+
+But it does **not** make the value itself unchangeable. If it holds an
+object or array, you can still modify what's inside:
+
+```javascript
+const user = { name: 'Ada' };
+user.name = 'Grace';   // fine — same object, changed contents
+user = {};             // TypeError — can't point user at a new object
+
+const list = [1, 2];
+list.push(3);          // fine
+```
+
+`const` protects the *variable*, not the *data*. To freeze the data, there's
+[`Object.freeze`](/blog/property-descriptors-and-object-freeze) — but you
+rarely need it.
+
+## Using a variable too early
+
+With `var`, reading a variable before its declaration line gives
+`undefined` instead of an error:
+
+```javascript
+console.log(count);   // undefined
+var count = 5;
+```
+
+With `let` and `const`, it's an error — which is better, because using a
+variable before you've set it is almost always a mistake:
+
+```javascript
+console.log(total);   // ReferenceError: Cannot access 'total' before initialization
+let total = 5;
+```
+
+Why the difference? That's hoisting.
+
+## Hoisting: two phases, not code moving
+
+Nothing moves to the top of the file. The engine processes a scope in two
+phases: before a single statement executes, it scans the scope and creates
+a binding for every declaration it finds. Then it runs the code. The
 declarations differ in what state their binding starts in:
 
 <HoistingVisualizer />
@@ -101,39 +207,6 @@ bindings started as `undefined` like `var`, there would be a window where a
 constant held a value it was never assigned — and the engine would have to
 allow writing to a `const` at least once, undermining the guarantee.
 
-## var's other problem: function scope
-
-Hoisting and scoping are separate issues that compound each other. `var` is
-scoped to the nearest **function**, ignoring blocks entirely:
-
-```javascript
-function f() {
-  if (true) {
-    var a = 1;
-    let b = 2;
-  }
-  console.log(a);   // 1  — var leaked out of the block
-  console.log(b);   // ReferenceError: b is not defined
-}
-```
-
-The classic loop bug is the same thing in a loop:
-
-```javascript
-for (var i = 0; i < 3; i++) {
-  setTimeout(() => console.log(i));   // 3, 3, 3 — one shared binding
-}
-
-for (let i = 0; i < 3; i++) {
-  setTimeout(() => console.log(i));   // 0, 1, 2 — a fresh binding per iteration
-}
-```
-
-`let` in a `for` head creates a new binding for each iteration and copies the
-value forward — which is why the closures capture different values. See
-[closures](/blog/closures-and-the-module-pattern) for the mechanics of what
-those callbacks are holding onto.
-
 ## Function declarations vs function expressions
 
 Only *declarations* are fully hoisted:
@@ -158,13 +231,32 @@ strict mode and ES modules, but has messy legacy behaviour in sloppy scripts.
 Declare functions at the top level of a function or module, not inside `if`
 blocks.
 
-## What to actually do
+## Side by side
 
-- Use `const` by default, `let` when reassigning, and `var` never. This
-  isn't style preference — `let` and `const` turn a silent `undefined` into
-  an immediate, named error.
-- Declare variables close to where they're used. The TDZ only bites code
-  that reads a variable above its declaration, which is worth not writing
-  anyway.
-- Read the error message carefully. "is not defined" and "cannot access
-  before initialization" point at completely different mistakes.
+<Table data={{
+  headers: ["", "var", "let", "const"],
+  rows: [
+    ["Scope", "Function", "Block", "Block"],
+    ["Can reassign", "Yes", "Yes", "No"],
+    ["Can redeclare in same scope", "Yes", "No", "No"],
+    ["Hoisted binding starts as", "undefined", "Uninitialized (TDZ)", "Uninitialized (TDZ)"],
+    ["Use before declaration", "undefined", "ReferenceError", "ReferenceError"],
+    ["New copy per loop iteration", "No", "Yes", "Yes"]
+  ]
+}} />
+
+## The rule
+
+1. Use **`const`** by default.
+2. Use **`let`** when you genuinely need to reassign — a counter, a value
+   that changes in a loop.
+3. Don't use **`var`** in new code. This isn't style preference — `let` and
+   `const` turn a silent `undefined` into an immediate, named error.
+
+Starting from `const` has a nice side effect: when you see `let`, it's a
+signal to the reader that this value is going to change, so it's worth
+watching. Declare variables close to where they're used — the TDZ only
+bites code that reads a variable above its declaration, which is worth not
+writing anyway. And read the error message carefully: "is not defined" and
+"cannot access before initialization" point at completely different
+mistakes.

@@ -27,7 +27,7 @@ export const curriculum: CurriculumPhase[] = [
       {
         slug: 'sorting-algorithms-explained',
         difficulty: 'Beginner',
-        note: 'Bubble, insertion, and merge sort as a first tour of comparing algorithms by their complexity.',
+        note: 'Every classic sort in one guide — bubble, insertion and merge sort first, then quick, heap, counting and radix sort — as a tour of comparing algorithms by their complexity.',
       },
       {
         slug: 'binary-search-and-bst',
@@ -47,14 +47,9 @@ export const curriculum: CurriculumPhase[] = [
       'The structures behind almost every practical program — and most interview questions.',
     entries: [
       {
-        slug: 'arrays-vs-linked-lists',
-        difficulty: 'Beginner',
-        note: 'How a sequence sits in memory — the trade-off between instant access and cheap inserts that every later structure inherits.',
-      },
-      {
         slug: 'linked-lists-and-cycle-detection',
         difficulty: 'Beginner',
-        note: 'Pointer manipulation basics plus the classic fast/slow-pointer cycle trick.',
+        note: 'How a sequence sits in memory — arrays vs linked lists, the trade-off every later structure inherits — plus the classic fast/slow-pointer cycle trick.',
       },
       {
         slug: 'hash-functions-explained',
@@ -117,11 +112,6 @@ export const curriculum: CurriculumPhase[] = [
         slug: 'sliding-window-maximum',
         difficulty: 'Advanced',
         note: 'The monotonic stack with a moving left edge: a deque that gives every window\'s maximum in O(n).',
-      },
-      {
-        slug: 'quick-sort-and-heap-sort',
-        difficulty: 'Intermediate',
-        note: 'Divide-and-conquer and heap ideas applied back to sorting — partitioning shows up far beyond sort itself.',
       },
       {
         slug: 'quickselect-kth-smallest',

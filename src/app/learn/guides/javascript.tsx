@@ -72,7 +72,7 @@ const PARTS: Part[] = [
         ),
         demo: <VariableScopeVisualizer />,
         keyIdea: 'Use const by default, let when the value must change, and never var in new code.',
-        post: 'let-const-and-var',
+        post: 'hoisting-and-the-temporal-dead-zone',
       },
       {
         id: 'hoisting',
