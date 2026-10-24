@@ -35,7 +35,9 @@ This one-shot guarantee is the entire value proposition: a promise is a
 container you can hand to five different consumers, attach callbacks
 before *or after* it settles, and everyone observes the same immutable
 outcome. Compare that to a raw callback, which you just have to trust gets
-called exactly once.
+called exactly once. A buggy callback-based library can call you twice,
+or never, or call you synchronously sometimes and asynchronously other
+times; a promise rules out all three.
 
 ## The chaining rules
 
@@ -104,42 +106,17 @@ Four static methods coordinate multiple promises, differing along two
 axes: do you need *all* results or just *one*, and what should a failure
 do?
 
-<table>
-  <thead>
-    <tr>
-      <th>Combinator</th>
-      <th>Resolves with</th>
-      <th>Rejects when</th>
-      <th>Use for</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>Promise.all</td>
-      <td>Array of all values (order preserved)</td>
-      <td>Any one rejects (fail fast)</td>
-      <td>Parallel work where every piece is required</td>
-    </tr>
-    <tr>
-      <td>Promise.allSettled</td>
-      <td>Array of {'{ status, value | reason }'}</td>
-      <td>Never</td>
-      <td>Batch jobs where partial success is fine</td>
-    </tr>
-    <tr>
-      <td>Promise.race</td>
-      <td>First to settle — fulfilled or rejected</td>
-      <td>First settler rejected</td>
-      <td>Timeouts, "whichever responds first"</td>
-    </tr>
-    <tr>
-      <td>Promise.any</td>
-      <td>First to fulfill</td>
-      <td>All reject (AggregateError)</td>
-      <td>Redundant sources, fastest mirror wins</td>
-    </tr>
-  </tbody>
-</table>
+<Table
+  data={{
+    headers: ['Combinator', 'Resolves with', 'Rejects when', 'Use for'],
+    rows: [
+      ['Promise.all', 'Array of all values (order preserved)', 'Any one rejects (fail fast)', 'Parallel work where every piece is required'],
+      ['Promise.allSettled', 'Array of { status, value | reason }', 'Never', 'Batch jobs where partial success is fine'],
+      ['Promise.race', 'First to settle — fulfilled or rejected', 'First settler rejected', 'Timeouts, "whichever responds first"'],
+      ['Promise.any', 'First to fulfill', 'All reject (AggregateError)', 'Redundant sources, fastest mirror wins'],
+    ],
+  }}
+/>
 
 The pattern that shows up constantly — independent requests should run
 **in parallel**, and `await` makes it deceptively easy not to:
@@ -178,6 +155,174 @@ function withTimeout(promise, ms) {
 keeps running, you just stop waiting for it. Actual cancellation needs
 `AbortController`.)
 
+## Concurrency with a limit
+
+`Promise.all` over 10,000 items starts 10,000 requests at once — usually
+a good way to get rate-limited, exhaust a connection pool, or run out of
+file descriptors. What you usually want is "parallel, but at most N at a
+time":
+
+```javascript
+async function mapWithLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;                    // safe: no await between read and increment
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+const pages = await mapWithLimit(urls, 5, (url) => fetch(url).then((r) => r.text()));
+```
+
+Five "workers" pull from a shared index until the list is empty. Results
+keep input order, the first rejection rejects the whole call (like
+`Promise.all`), and at most five requests are ever in flight. Because
+JavaScript runs one callback at a time, `next++` needs no lock — there's
+no `await` between reading and incrementing it.
+
+## Turning callbacks into promises
+
+Older APIs take a callback. Wrapping one is a one-time job:
+
+```javascript
+function readFileAsync(path) {
+  return new Promise((resolve, reject) => {
+    fs.readFile(path, 'utf8', (err, data) => (err ? reject(err) : resolve(data)));
+  });
+}
+```
+
+For Node-style `(err, value)` callbacks, `util.promisify` does it for you,
+and most of Node's core modules now ship promise versions anyway
+(`node:fs/promises`, `node:timers/promises`). For event-style APIs where
+the resolver needs to escape the executor, `Promise.withResolvers()` hands
+you the promise and its `resolve`/`reject` together:
+
+```javascript
+const { promise, resolve, reject } = Promise.withResolvers();
+socket.once('ready', resolve);
+socket.once('error', reject);
+await promise;
+```
+
+## Real cancellation
+
+The `race`-based timeout above stops *waiting*, not *working*. For
+`fetch` and many newer APIs, pass an `AbortSignal`, and the underlying
+operation is actually cancelled:
+
+```javascript
+const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+// rejects with a TimeoutError after 5 s, and the request is torn down
+```
+
+Signals compose — `AbortSignal.any([userCancel, AbortSignal.timeout(5000)])`
+aborts on whichever comes first — and you can accept a `signal` in your own
+async functions and pass it down, so cancelling the top-level operation
+cancels everything beneath it. See
+[AbortController and cancellation](/blog/abortcontroller-and-cancellation).
+
+## Unhandled rejections, in detail
+
+A rejection is "unhandled" if no handler is attached by the time the
+microtask queue drains after it rejects. Two common ways to get one
+without noticing:
+
+```javascript
+const p = fetchUser();          // starts, then rejects…
+await sleep(1000);              // …while nothing is listening
+await p;                        // too late: already reported as unhandled
+```
+
+```javascript
+items.forEach(async (item) => { await save(item); });   // forEach ignores the promises
+```
+
+The first starts a promise and attaches a handler later; start it when
+you're ready to await it, or attach a `.catch` immediately. The second
+fires off promises nobody awaits — any rejection escapes, and the code
+after the `forEach` runs before the saves finish. Use `for...of` with
+`await`, or `Promise.all(items.map(save))`.
+
+In Node, an unhandled rejection crashes the process by default. Register
+a `process.on('unhandledRejection', …)` handler to log it with context —
+but treat it as a bug report, not a recovery mechanism.
+
+## Common bugs at a glance
+
+<Table
+  data={{
+    headers: ['you see', 'likely cause', 'fix'],
+    rows: [
+      ['next .then gets undefined', 'missing return in the previous callback', 'return the promise or value'],
+      ['error not caught by .catch', 'an orphaned, unreturned promise inside a callback', 'return it so it joins the chain'],
+      ['code after a loop runs too early', 'async callback in forEach', 'for...of with await, or Promise.all(map)'],
+      ['slow page despite fast APIs', 'sequential awaits on independent work', 'Promise.all'],
+      ['429s or pool exhaustion', 'unbounded Promise.all over a big list', 'a concurrency limit'],
+      ['timeout fires but work continues', 'race-based timeout', 'AbortSignal'],
+    ],
+  }}
+/>
+
+## A promise in thirty lines
+
+Writing a toy promise is the fastest way to make the three chaining rules
+stick, because the implementation *is* the rules:
+
+```javascript
+class TinyPromise {
+  #state = 'pending'; #value; #handlers = [];
+
+  constructor(executor) {
+    const settle = (state) => (value) => {
+      if (this.#state !== 'pending') return;            // one transition only
+      if (state === 'fulfilled' && value && typeof value.then === 'function') {
+        return value.then(settle('fulfilled'), settle('rejected'));  // adopt
+      }
+      this.#state = state; this.#value = value;
+      this.#handlers.forEach((h) => queueMicrotask(h));  // callbacks are async
+    };
+    try { executor(settle('fulfilled'), settle('rejected')) }
+    catch (err) { settle('rejected')(err) }
+  }
+
+  then(onFulfilled, onRejected) {
+    return new TinyPromise((resolve, reject) => {
+      const run = () => {
+        const cb = this.#state === 'fulfilled' ? onFulfilled : onRejected;
+        if (typeof cb !== 'function') {                  // pass through
+          return (this.#state === 'fulfilled' ? resolve : reject)(this.#value);
+        }
+        try { resolve(cb(this.#value)) }                 // rules 1 and 2
+        catch (err) { reject(err) }                      // rule 3
+      };
+      if (this.#state === 'pending') this.#handlers.push(run);
+      else queueMicrotask(run);
+    });
+  }
+
+  catch(onRejected) { return this.then(undefined, onRejected) }
+}
+```
+
+Every behaviour from this post is visible in it: settling twice is
+ignored; `then` always returns a new promise; a returned value fulfils it,
+a returned promise is adopted (via `resolve`'s check for a `.then`), and a
+throw rejects it; a missing handler passes the outcome through, which is
+how rejections skip forward to the nearest `catch`; and callbacks always
+run as microtasks, even if the promise is already settled. The real
+specification adds edge cases — a promise resolved with itself, thenables
+whose `then` throws — but not new ideas.
+
+The "adopt anything with a `.then` method" step has a name: **thenable
+assimilation**. It's why promises from different libraries, and objects
+like query builders that define `then`, can all be awaited.
+
 ## Odds and ends worth knowing
 
 - **`Promise.resolve(x)` is idempotent** — if `x` is already a promise it
@@ -190,9 +335,21 @@ keeps running, you just stop waiting for it. Actual cancellation needs
   outcome unchanged; perfect for hiding spinners regardless of result.
 - **`async` functions are promise factories** — `return x` fulfills,
   `throw` rejects, and callers compose them with the same combinators.
+- **`allSettled` results need reading.** It never rejects, so failures are
+  easy to ignore. Filter for `status === 'rejected'` and log or retry them,
+  or you've built a batch job that silently drops errors.
+- **`AggregateError` from `Promise.any`** carries every rejection in its
+  `errors` array — useful when all mirrors failed and you need to say why.
+- **Don't mix styles in one chain.** Code that awaits some promises and
+  `.then`s others is harder to follow than either style alone; in modern
+  code, `await` with `try`/`catch` is the default, and `.then` earns its
+  place in small one-line transformations. See
+  [async/await under the hood](/blog/async-await-under-the-hood).
 
 The mental model that ties it together: a promise chain is a **pipeline of
 one-shot containers**, each link deciding the next one's fate by value,
 promise, or throw — with rejections riding an express lane to the nearest
 catch. Every confusing chain becomes legible once you trace it link by
-link with those three rules.
+link with those three rules. And when a chain is too tangled to trace, that's
+usually the signal to rewrite it with `await` — the rules don't change,
+but the control flow becomes ordinary code again.

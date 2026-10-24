@@ -31,7 +31,10 @@ can show you exactly what's being requested.
 
 **Scopes.** `scope=calendar.read` asks for read access to calendars and
 nothing else. The consent screen shows it, and the resulting token is
-limited to it. Ask for the narrowest scopes that work.
+limited to it. Ask for the narrowest scopes that work. Where you need more later, ask
+for it then — incremental authorization — rather than front-loading every
+permission into the first consent screen, which users increasingly
+decline.
 
 **`state`.** A random value the app generates, stores, and checks when the
 redirect comes back. Without it, an attacker can complete a flow with *their*
@@ -64,6 +67,103 @@ secret: anything shipped in an app can be extracted. It's now recommended
 for every client, including servers that also have a secret. The OAuth 2.1
 draft makes it mandatory.
 
+## The flow as HTTP requests
+
+The animation shows the shape. Here are the actual messages, which is
+what you'll see in DevTools when you debug one.
+
+**1. The app redirects the browser to the authorization server:**
+
+```http
+GET /authorize?response_type=code
+    &client_id=calendar-app
+    &redirect_uri=https%3A%2F%2Fapp.example%2Fcallback
+    &scope=openid%20calendar.read
+    &state=af0ifjsldkj
+    &code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM
+    &code_challenge_method=S256 HTTP/1.1
+Host: auth.example
+```
+
+**2. After login and consent, the browser is redirected back:**
+
+```http
+HTTP/1.1 302 Found
+Location: https://app.example/callback?code=SplxlOBeZQQYbYS6WxSbIA&state=af0ifjsldkj
+```
+
+**3. The app's backend exchanges the code** — server to server, not
+through the browser:
+
+```http
+POST /token HTTP/1.1
+Host: auth.example
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=authorization_code
+&code=SplxlOBeZQQYbYS6WxSbIA
+&redirect_uri=https%3A%2F%2Fapp.example%2Fcallback
+&client_id=calendar-app
+&code_verifier=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk
+```
+
+**4. And gets tokens back:**
+
+```json
+{
+  "access_token": "eyJhbGciOi…",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "refresh_token": "8xLOxBtZp8",
+  "id_token": "eyJhbGciOi…",
+  "scope": "openid calendar.read"
+}
+```
+
+The `redirect_uri` appears twice on purpose: the server checks that the
+one used to redeem the code matches the one the code was issued for, so a
+code can't be redirected somewhere else and redeemed there.
+
+## A server-side implementation
+
+For a web app with a backend, the backend runs the flow and the browser
+never sees a token. With Express and `openid-client`, the moving parts
+fit on one screen (the library's API varies between major versions; the
+steps don't):
+
+```javascript
+app.get('/login', async (req, res) => {
+  const verifier = client.randomPKCECodeVerifier()
+  const state = client.randomState()
+  req.session.oauth = { verifier, state }          // server-side session
+  const url = client.buildAuthorizationUrl(config, {
+    redirect_uri: REDIRECT_URI,
+    scope: 'openid email calendar.read',
+    code_challenge: await client.calculatePKCECodeChallenge(verifier),
+    code_challenge_method: 'S256',
+    state,
+  })
+  res.redirect(url.href)
+})
+
+app.get('/callback', async (req, res) => {
+  const { verifier, state } = req.session.oauth ?? {}
+  const tokens = await client.authorizationCodeGrant(config, currentUrl(req), {
+    pkceCodeVerifier: verifier,
+    expectedState: state,                          // library checks it
+  })
+  req.session.regenerate(() => {                   // new session ID after login
+    req.session.userId = tokens.claims().sub
+    req.session.refreshToken = tokens.refresh_token
+    res.redirect('/')
+  })
+})
+```
+
+Note `session.regenerate` after login: issuing a fresh session ID at the
+moment of authentication prevents session fixation, where an attacker
+plants a session ID before you log in.
+
 ## Tokens
 
 - **Access token**: sent to the API as `Authorization: Bearer …`. Short-lived
@@ -77,6 +177,100 @@ draft makes it mandatory.
 Revoking the app's access in your account settings kills its refresh token;
 the access token expires soon after.
 
+### Rotation and reuse detection
+
+Rotation does more than limit a refresh token's lifetime; it turns theft
+into something the server can notice. Each refresh token belongs to a
+**family** started by one login. When a refresh token is used, the server
+issues a new one and marks the old one spent. If a spent token is ever
+presented again, two parties hold copies of the same token — the real
+client and an attacker — and the server can't tell which is which. So it
+revokes the whole family, forcing a fresh login. The legitimate user signs
+in again; the attacker's copy is dead.
+
+### Where to keep tokens
+
+<Table data={{
+  headers: ["Where", "Risk", "Verdict"],
+  rows: [
+    ["localStorage / sessionStorage", "Readable by any script on the page — one XSS and they're gone", "Avoid for anything long-lived"],
+    ["In memory in a SPA", "Lost on reload; still readable by injected script while it runs", "OK for short-lived access tokens"],
+    ["HttpOnly cookie holding the token", "Not readable by scripts; sent automatically (mind CSRF)", "Reasonable"],
+    ["Server-side session (BFF)", "Browser holds only a session cookie; tokens never reach it", "Most robust for web apps"],
+    ["Mobile OS keychain / keystore", "Protected by the OS", "Right for native apps"]
+  ]
+}} />
+
+## Validating an ID token
+
+If you do handle tokens yourself, validation is a checklist, and a JWT
+library does most of it:
+
+```javascript
+import { createRemoteJWKSet, jwtVerify } from 'jose'
+
+const JWKS = createRemoteJWKSet(new URL('https://auth.example/.well-known/jwks.json'))
+
+const { payload } = await jwtVerify(idToken, JWKS, {
+  issuer: 'https://auth.example',     // iss must match exactly
+  audience: 'calendar-app',           // aud must be *your* client ID
+})                                    // signature and exp checked too
+if (payload.nonce !== req.session.nonce) throw new Error('nonce mismatch')
+```
+
+The audience check is the one people skip, and it matters: an ID token
+issued to a *different* app by the same provider is validly signed. Without
+checking `aud`, any app that can get a user to log in could replay that
+user's ID token to yours.
+
+## The API's side: checking access tokens
+
+So far this has been the client's view. The resource server — your API —
+has its own job on every request:
+
+1. **Verify the token.** For JWT access tokens, check the signature
+   against the authorization server's published keys, plus `iss`, `exp`
+   and — critically — `aud`, which must name *this* API. For opaque
+   tokens, ask the authorization server's introspection endpoint (and
+   cache the answer briefly).
+2. **Check the scopes** against the operation: a token with
+   `calendar.read` must not be able to create events.
+3. **Authorize the user** behind the token for the specific resource:
+   `sub` 123 may read calendar 123's events, not calendar 456's. Scopes say
+   what the *app* may do; your own rules still decide what the *user* may
+   do.
+
+```javascript
+app.post('/calendars/:id/events', requireToken({ audience: 'calendar-api' }), (req, res) => {
+  if (!req.token.scope.split(' ').includes('calendar.write')) return res.status(403).end()
+  if (!canWrite(req.token.sub, req.params.id)) return res.status(404).end()
+  // …
+})
+```
+
+Returning `404` rather than `403` for a resource the user can't see avoids
+confirming that it exists.
+
+## Debugging a failed flow
+
+When "Sign in with…" breaks, the error is almost always in one of a few
+places:
+
+- **`redirect_uri_mismatch`** — the URI in the request doesn't exactly
+  match a registered one. Trailing slashes, `http` vs `https`, and
+  `localhost` vs `127.0.0.1` all count.
+- **`invalid_grant` at the token endpoint** — the code expired, was already
+  used (a double-submitted callback), or the `code_verifier` doesn't match
+  the challenge (the verifier was lost between redirects — check where you
+  stored it).
+- **State mismatch** — the session that stored `state` didn't survive the
+  round trip, often because the session cookie is `SameSite=Strict` and so
+  isn't sent on the cross-site redirect back. `Lax` is the right setting
+  for this cookie.
+- **Token rejected by the API** — wrong audience, an expired token that
+  wasn't refreshed, or a missing scope. Decode the token (it's often a JWT)
+  and compare its claims with what the API expects.
+
 ## Flows to avoid
 
 - **Implicit flow**: returned the access token directly in the redirect URL,
@@ -86,6 +280,32 @@ the access token expires soon after.
   exchanges it for a token, defeating the purpose. Deprecated.
 - **Client credentials** is fine, but it's for machine-to-machine access
   with no user involved — a backend service calling another API as itself.
+
+## Other flows worth knowing
+
+**Device authorization flow** covers devices without a usable browser — a
+smart TV, a CLI tool. The device shows a short code and a URL; you open the
+URL on your phone, enter the code and approve; meanwhile the device polls
+the token endpoint until approval arrives. It's what "go to
+example.com/activate and enter ABCD-EFGH" screens are doing, and it's how
+many command-line tools log in.
+
+## Mistakes that keep showing up
+
+- **Missing or unchecked `state`** — the login CSRF described above.
+- **Loose redirect URI matching** — wildcards or prefix matching let an
+  attacker send codes to a page they control on your domain, or chain an
+  open redirect. Register exact URIs.
+- **Accepting tokens meant for someone else** — not checking `aud` on ID
+  tokens, or accepting any validly signed access token at your API without
+  checking its audience and scopes.
+- **Using the access token as proof of identity in the client** — it's for
+  the API. Identity comes from the ID token, or from asking the provider's
+  userinfo endpoint.
+- **Over-broad scopes** — asking for full mailbox access to read one
+  label. Users notice, and a leaked token does far more damage.
+- **Long-lived access tokens** to avoid implementing refresh. Short access
+  tokens plus rotating refresh tokens is the whole point of the design.
 
 ## OAuth is authorization; OpenID Connect adds login
 
@@ -107,3 +327,11 @@ redirect URLs (no wildcards), request minimal scopes, and keep tokens off
 the browser where you can — a backend-for-frontend that holds tokens and
 gives the browser an `HttpOnly` [session cookie](/blog/cookies-and-sessions)
 is the most robust shape for web apps.
+
+One more idea worth knowing as it spreads: **sender-constrained tokens**.
+A normal bearer token works for whoever holds it, so a leaked token is as
+good as a stolen key. With DPoP (or mutual-TLS-bound tokens), the token is
+bound to a key pair the client holds, and every API request carries a
+fresh proof signed with that key. A token copied out of a log or a
+compromised proxy is useless without the private key. It's extra machinery,
+and worth it for high-value APIs such as banking.

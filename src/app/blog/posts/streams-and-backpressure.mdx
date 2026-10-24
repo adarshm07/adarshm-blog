@@ -52,7 +52,31 @@ readable.on('data', (chunk) => {
 
 `highWaterMark` is the threshold (16KB for byte streams, 16 objects for
 object streams) and `drain` fires once the buffer empties. That's the whole
-protocol: pause on `false`, resume on `drain`.
+protocol: pause on `false`, resume on `drain`. Raising `highWaterMark` (say to 1MB
+for large file copies) can improve throughput by reducing the number of
+round trips through the loop; it changes how much is buffered, never
+whether the limit is respected.
+
+### The four kinds of stream
+
+Every Node stream is one of four types, and the backpressure rules are the
+same for all of them:
+
+<Table
+  data={{
+    headers: ['type', 'what it is', 'examples'],
+    rows: [
+      ['Readable', 'a source you consume', 'fs.createReadStream, an HTTP request body, a DB cursor'],
+      ['Writable', 'a sink you write to', 'fs.createWriteStream, an HTTP response, an upload'],
+      ['Duplex', 'readable and writable, independently', 'a TCP socket'],
+      ['Transform', 'a Duplex whose output is computed from its input', 'zlib.createGzip, a CSV parser'],
+    ],
+  }}
+/>
+
+Streams carry bytes (Buffers or strings) by default; `objectMode: true`
+lets them carry arbitrary JavaScript values, and changes what
+`highWaterMark` counts — objects instead of bytes.
 
 ## Don't write that by hand
 
@@ -102,6 +126,114 @@ The `await` inside the loop is what applies the pressure: the generator
 can't produce the next value until the consumer asks for it, and that pull
 propagates all the way back to the file read.
 
+### Writing a Transform
+
+When a generator isn't enough — you need a reusable stage with options,
+or you're building a library — subclass `Transform`. A line splitter that
+handles multi-byte characters correctly:
+
+```javascript
+import { Transform } from 'node:stream';
+import { StringDecoder } from 'node:string_decoder';
+
+class LineSplitter extends Transform {
+  constructor() {
+    super({ readableObjectMode: true });     // bytes in, strings out
+    this.decoder = new StringDecoder('utf8');
+    this.tail = '';
+  }
+  _transform(chunk, _enc, done) {
+    const text = this.tail + this.decoder.write(chunk);
+    const lines = text.split('\n');
+    this.tail = lines.pop();
+    for (const line of lines) this.push(line);
+    done();
+  }
+  _flush(done) {
+    const rest = this.tail + this.decoder.end();
+    if (rest) this.push(rest);
+    done();
+  }
+}
+```
+
+The `StringDecoder` matters: a chunk boundary can fall in the middle of a
+multi-byte UTF-8 character, and calling `chunk.toString()` on each chunk
+would corrupt it. `_flush` emits whatever is left when the input ends.
+Backpressure is handled for you — `push` returns `false` when the readable
+side is full, and Node stops calling `_transform` until it drains.
+
+### Bounded concurrency, without losing backpressure
+
+Processing one record at a time is safe but slow when each record is a
+network call. Process a few at a time instead — but never an unbounded
+number:
+
+```javascript
+async function processWithLimit(source, limit, fn) {
+  const inFlight = new Set();
+  for await (const item of source) {
+    const p = fn(item).finally(() => inFlight.delete(p));
+    inFlight.add(p);
+    if (inFlight.size >= limit) await Promise.race(inFlight);   // wait for a slot
+  }
+  await Promise.all(inFlight);
+}
+
+await processWithLimit(records, 4, (r) => db.insert(r));
+```
+
+The loop stops pulling from the source whenever four inserts are pending,
+so memory is bounded by four records plus the stream's buffers, while
+throughput is up to four times higher. (In real code, also stop on the
+first rejection rather than letting `Promise.race` throw past pending
+work.)
+
+## Streaming an HTTP response
+
+The most common place backpressure matters in a web service is a large
+response — an export, a report, a big JSON list. Building it in memory and
+calling `res.json()` works until the data grows. Stream it instead:
+
+```javascript
+import { pipeline } from 'node:stream/promises';
+import { Transform } from 'node:stream';
+
+app.get('/export/orders.ndjson', async (req, res) => {
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  const rows = db.queryStream('SELECT * FROM orders ORDER BY id');  // a cursor
+  const toNdjson = new Transform({
+    writableObjectMode: true,
+    transform(row, _enc, done) { done(null, JSON.stringify(row) + '\n'); },
+  });
+  try {
+    await pipeline(rows, toNdjson, res);
+  } catch (err) {
+    // client went away, or the query failed — pipeline already cleaned up
+    req.log.warn({ err }, 'export aborted');
+  }
+});
+```
+
+The database cursor fetches rows in batches as the response drains, so a
+slow client on a mobile connection holds a few hundred rows in memory, not
+a million. And if the client disconnects halfway, writing to `res` fails,
+`pipeline` destroys every stage — closing the cursor and releasing the
+database connection — instead of the query running to completion for
+nobody. That cleanup is easy to forget and expensive to leak; see
+[connection pooling](/blog/connection-pooling).
+
+### Cancelling from outside
+
+`pipeline` also accepts an `AbortSignal`, which stops everything cleanly
+on a timeout or user cancellation:
+
+```javascript
+await pipeline(source, transform, destination, { signal: AbortSignal.timeout(30_000) });
+```
+
+See [AbortController and cancellation](/blog/abortcontroller-and-cancellation).
+
 ## Web Streams: the same idea, made explicit
 
 In browsers and modern Node, the WHATWG Streams API puts the buffer in the
@@ -130,6 +262,43 @@ capacity, so a correctly written source never over-produces.
 The two worlds interoperate: `Readable.toWeb()` and `Readable.fromWeb()`
 convert in both directions, backpressure preserved.
 
+Web Streams also chain with `pipeThrough`, and the platform ships useful
+transforms. Decompressing and decoding a large download as it arrives, in
+the browser, without holding the whole file:
+
+```javascript
+const res = await fetch('/logs/today.log.gz');
+const lines = res.body
+  .pipeThrough(new DecompressionStream('gzip'))
+  .pipeThrough(new TextDecoderStream());
+
+for await (const text of lines) {      // async-iterable in modern runtimes
+  appendToView(text);
+}
+```
+
+Each stage pulls from the one before only when it has room, so a slow
+`appendToView` slows the download itself — the same backpressure, across
+the network.
+
+## Seeing the problem before production does
+
+Memory bugs from missing backpressure only appear with large inputs, so
+test with large inputs, and watch the right number:
+
+```javascript
+setInterval(() => {
+  const { rss, heapUsed, external, arrayBuffers } = process.memoryUsage();
+  console.log({ rssMB: rss >> 20, heapMB: heapUsed >> 20,
+                buffersMB: (external + arrayBuffers) >> 20 });
+}, 1000);
+```
+
+Stream buffers mostly live outside the JavaScript heap, as `Buffer`
+memory, so `heapUsed` can look flat while RSS climbs. A correct pipeline
+shows RSS rising briefly, then levelling off regardless of input size. If
+it keeps growing with the input, something in the chain isn't waiting.
+
 ## The patterns that break it
 
 **`for await` with unawaited work.** Kicking off promises inside the loop
@@ -150,11 +319,53 @@ the entire point. If the pipeline ends in an array, it isn't streaming.
 
 **Unbounded internal queues.** Any queue you add between stages —
 `highWaterMark: Infinity`, a plain array, an unbounded channel — is a place
-for memory to accumulate. Bound every queue.
+for memory to accumulate. Bound every queue, and make the bound something you chose on purpose.
 
 **Transforms that grow.** A transform that turns one 1KB row into a 1MB
 document shifts the bottleneck downstream. Backpressure still works, but
 your `highWaterMark` of "16 objects" now means 16MB.
+
+## Backpressure is everywhere
+
+Once you recognise the pattern, you see it at every layer of a system —
+and most outages caused by "a slow consumer" are a missing link in this
+chain:
+
+- **TCP** has it built in: the receiver advertises a window of how much it
+  can accept, and the sender stops when the window is full. That's what
+  ultimately slows a Node `write()` to a socket.
+- **HTTP/2** adds per-stream flow control on top, so one slow stream
+  doesn't consume the whole connection's buffer.
+- **WebSockets** in browsers expose it as `socket.bufferedAmount`. Code
+  that sends in a loop without checking it buffers everything in the tab's
+  memory when the network is slow:
+
+```javascript
+function sendWithBackpressure(ws, messages) {
+  const next = () => {
+    while (messages.length && ws.bufferedAmount < 1_000_000) ws.send(messages.shift());
+    if (messages.length) setTimeout(next, 50);   // wait for the buffer to drain
+  };
+  next();
+}
+```
+
+- **Job queues** apply it by bounding the queue or rejecting new jobs when
+  it's full, rather than accepting work faster than workers can finish
+  it. An unbounded queue just moves the out-of-memory error to the broker.
+- **Services under load** apply it by returning `429` or `503` with a
+  `Retry-After` — telling callers to slow down — which is
+  [load shedding](/blog/load-shedding-and-graceful-degradation) and
+  [rate limiting](/blog/rate-limiting-algorithms) seen as backpressure.
+- **Message logs** like Kafka make consumers pull at their own pace, so a
+  slow consumer simply lags rather than overflowing anything — see
+  [message queues vs event logs](/blog/message-queues-vs-event-logs).
+
+The common thread is the same question at every layer: when the consumer
+can't keep up, does the producer find out? If the signal is lost anywhere
+in the chain — one unawaited promise, one unbounded queue, one handler that
+ignores a `false` — the layers above it have no idea anything is wrong
+until memory runs out.
 
 ## The rule
 
@@ -164,4 +375,6 @@ question: *what happens when the consumer falls behind?* If the answer is
 "it crashes, eventually, on an input larger than the one you tested".
 
 Reach for `pipeline` and async iteration, keep every queue bounded, and
-never ignore the return value of `write()`.
+never ignore the return value of `write()`. Then test with an input ten times larger
+than you expect, and watch RSS: a flat line is the proof that every stage
+is listening.

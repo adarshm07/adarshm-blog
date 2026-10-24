@@ -40,6 +40,32 @@ Before going to the network, the browser looks for shortcuts: a cached DNS
 answer, an already-open connection to the same server, or a cached copy of
 the page itself. Most "the second visit is faster" effects come from here.
 
+### Work that starts before you press Enter
+
+Browsers try hard to finish some of the trip before you ask for it:
+
+- **Address-bar prediction.** As you type, the browser may resolve DNS and
+  even open a connection to the site it predicts you'll pick, so pressing
+  Enter skips straight to the request.
+- **Resource hints from pages.** A site can tell the browser what it will
+  need next:
+
+```html
+<link rel="preconnect" href="https://api.example.com">   <!-- DNS + TCP + TLS now -->
+<link rel="dns-prefetch" href="https://cdn.example.com"> <!-- just DNS -->
+<link rel="preload" href="/fonts/inter.woff2" as="font" crossorigin>
+```
+
+- **Speculative loading.** Pages can ask the browser to prefetch or even
+  fully prerender a likely next page (via speculation rules), so following
+  the link shows it almost instantly.
+- **The back/forward cache.** Going back to a page you just left can
+  restore it from memory — no network trip at all.
+
+These explain a lot of "why was that so fast?" moments, and they're the
+first tools to reach for when a page that's otherwise efficient still
+feels slow to start.
+
 ## 3. DNS: name → address
 
 Networks route by IP address, not by name. The browser asks DNS to turn
@@ -70,7 +96,10 @@ holds for this site, and which formats it accepts.
 The request might pass through a CDN, a load balancer, and finally an
 application server that runs code, queries a database, and builds the HTML.
 The response comes back with a status code (`200 OK`), headers, and the
-HTML body.
+HTML body. For a server-rendered page the HTML arrives ready to show;
+for a single-page app it's a thin shell, and the real content only
+appears after JavaScript downloads, runs and fetches data — one reason
+SPAs can be slower to first meaningful paint.
 
 ## 7. Parse, fetch more, render
 
@@ -80,6 +109,158 @@ request — usually dozens of them, reusing the same connection. Then it
 calculates styles, lays out every box, paints pixels, and runs your
 JavaScript.
 → [The browser rendering pipeline](/blog/rendering-pipeline-reflow-repaint)
+
+## Going one level deeper
+
+The seven steps are the answer most people give. Interviewers then pick
+one and ask "and how does *that* work?". Here's the next level down for
+each.
+
+### The connection, packet by packet
+
+TCP opens with a three-way handshake: the client sends `SYN`, the server
+replies `SYN-ACK`, the client sends `ACK`. One round trip before any data
+can flow.
+
+TLS 1.3 then needs one more round trip. In the client's first message
+(`ClientHello`) it sends:
+
+- **SNI** (server name indication) — the hostname it wants, so a server
+  hosting many sites on one IP knows which certificate to present.
+- **ALPN** — the application protocols it speaks (`h2`, `http/1.1`), so
+  HTTP/2 can be agreed during the handshake without another round trip.
+- **Key shares** — its half of a key exchange, guessed in advance so the
+  server can finish the exchange in its first reply.
+
+The server replies with its key share, its certificate chain, and proof it
+holds the certificate's private key. The browser checks that the chain
+leads to a trusted root, that the certificate covers `example.com`, and
+that it hasn't expired. From then on, everything is encrypted.
+
+On a 50 ms round trip, that's 100 ms of handshakes before the first HTTP
+byte — which is why reusing connections and HTTP/3's combined handshake
+matter so much.
+
+### The request, on the wire
+
+With HTTP/2, the request isn't text any more; it's a set of compressed
+binary frames on a stream within the connection. Conceptually it's still:
+
+```http
+GET / HTTP/2
+Host: example.com
+Accept: text/html,application/xhtml+xml
+Accept-Encoding: br, gzip
+Accept-Language: en-IN,en;q=0.9
+Cookie: session=…
+```
+
+`Accept-Encoding` lets the server send a compressed body — see
+[compression](/blog/http-compression-gzip-brotli). Cookies ride along
+automatically for this site, which is how the server knows who you are —
+see [browser state](/blog/cookies-and-sessions).
+
+### HTTP/1.1, HTTP/2, HTTP/3
+
+Which version is negotiated changes how the dozens of follow-up requests
+behave. HTTP/1.1 handles one request at a time per connection, so browsers
+open up to six connections per host and requests still queue. HTTP/2
+multiplexes many requests as interleaved streams on one connection, which
+removes the queueing — but because it runs on TCP, one lost packet stalls
+every stream until it's retransmitted. HTTP/3 runs on QUIC over UDP, where
+streams are independent, so a lost packet only delays its own stream, and
+the transport and encryption handshakes are combined. On a good network
+the difference is small; on lossy mobile networks it's large. See
+[HTTP/2 vs HTTP/3](/blog/http2-vs-http3).
+
+### The server side
+
+Behind the single address there's usually a pipeline:
+
+1. **A CDN edge** close to the user, which may answer from its cache
+   without ever contacting your servers — see [CDNs](/blog/cdn-explained).
+2. **A load balancer**, which picks a healthy application server — see
+   [load balancing](/blog/load-balancing-strategies).
+3. **The application**, which authenticates the request, queries caches
+   and databases, and renders HTML or returns JSON.
+
+The response headers matter as much as the body: `Cache-Control` decides
+whether the browser and CDN may reuse it
+([HTTP caching headers](/blog/http-caching-headers)), `Content-Encoding`
+says how it's compressed, `Set-Cookie` updates session state, and security
+headers like `Strict-Transport-Security` and `Content-Security-Policy`
+tighten what the page may do.
+
+### Rendering, in order
+
+The browser doesn't wait for the whole HTML to arrive. It parses as bytes
+stream in:
+
+- **HTML → DOM** incrementally. A **preload scanner** looks ahead for
+  resources (stylesheets, scripts, images) and starts fetching them early.
+- **CSS → CSSOM.** Stylesheets block rendering: the browser won't paint
+  until it knows the styles, or the page would flash unstyled.
+- **Scripts** without `async` or `defer` block the parser: it stops, fetches
+  and runs the script, then continues — because the script might change
+  the document. `defer` runs scripts after parsing, in order; `async` runs
+  each as soon as it arrives.
+- **Render tree → layout → paint → composite**: combine DOM and CSSOM,
+  compute every box's position and size, draw pixels, and assemble layers
+  on the GPU.
+
+The moment something meaningful appears is the
+[Largest Contentful Paint](/blog/core-web-vitals); how much things jump
+around afterwards is layout shift. Both are shaped by the order above.
+
+## Security checks along the way
+
+A page load is also a sequence of security decisions, each a common
+follow-up question:
+
+- **HSTS** forces HTTPS before any request leaves the machine.
+- **Certificate validation** proves the server is who it claims to be.
+- **Cookies** are sent only if their `Secure`, `SameSite` and `Domain`
+  rules allow it.
+- **Mixed content** — an `http://` script on an `https://` page — is
+  blocked.
+- **CORS** decides whether scripts on this page may read responses from
+  other origins — see [CORS](/blog/cors-explained).
+- **CSP** limits which scripts and resources the page may load at all — see
+  [XSS and CSP](/blog/xss-and-content-security-policy).
+
+## A timeline with numbers
+
+A first visit to a page served from a single region, 60 ms round trip
+away, without a CDN:
+
+<Table data={{
+  headers: ["Time (ms)", "What's happening"],
+  rows: [
+    ["0–40", "DNS lookup (resolver cache miss)"],
+    ["40–100", "TCP handshake (1 round trip)"],
+    ["100–160", "TLS 1.3 handshake (1 round trip)"],
+    ["160–220", "Request sent, server starts responding (1 round trip)"],
+    ["220–300", "Server work: app logic and a database query"],
+    ["300–400", "HTML arrives and parsing starts; CSS and JS requested"],
+    ["400–550", "CSS and critical JS download on the same connection"],
+    ["550–700", "Style, layout, first paint; images still loading"]
+  ]
+}} />
+
+Roughly half of that is waiting for round trips rather than moving data.
+Put a CDN 10 ms away and the handshakes and first byte shrink to a fraction;
+on a repeat visit, the DNS answer, the connection and most assets are
+already cached, and the page can paint in a couple of hundred milliseconds.
+
+## Seeing it yourself
+
+Open DevTools, go to the Network tab, tick "Disable cache", reload, and
+hover over the first request's waterfall bar. The timing breakdown shows
+exactly these phases: **Queueing**, **DNS Lookup**, **Initial connection**,
+**SSL**, **Request sent**, **Waiting (TTFB)** and **Content Download**. A
+long TTFB is server time or distance; long connection phases mean no reuse
+or a distant server; a long download is size. The answer to "why is this
+page slow?" usually starts there.
 
 ## Where the time goes
 
@@ -101,9 +282,28 @@ to the server matters more than bandwidth for most page loads. That's the
 whole reason CDNs exist: put a copy of the site near the user, and every
 round trip gets shorter.
 
+## Answering it in an interview
+
+The question is open-ended on purpose; the interviewer wants to see how
+you structure a big topic and where your depth is. A shape that works:
+
+1. **Give the whole map in thirty seconds**: parse, cache, DNS, connect,
+   request, server, render.
+2. **Ask where to go deeper**, or pick the area closest to the role — the
+   network stack for backend roles, rendering and performance for frontend
+   roles.
+3. **Go one level down with real details**: the TLS handshake's contents,
+   render-blocking CSS, connection reuse.
+4. **Connect it to practice**: "this is why we preconnect to our API
+   domain", "this is why that script is `defer`".
+
+Depth in one area plus an accurate map of the rest beats a long, shallow
+recital of every step.
+
 ## The one-sentence version
 
 The browser turns the name into an address (DNS), opens a secure
 connection (TCP + TLS), asks for the page (HTTP), and turns the HTML it
 gets back into pixels (rendering) — and caching at every step is what
-makes it fast.
+makes it fast. Everything else in web performance is a variation on
+removing round trips and doing less work in each one.

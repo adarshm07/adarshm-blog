@@ -74,32 +74,17 @@ The output is `start`, `end`, `promise`, `timeout`, because:
 The split matters because the two queues have different priorities, so it's
 worth knowing which APIs feed which queue:
 
-<table>
-  <thead>
-    <tr>
-      <th>Task queue (one per loop turn)</th>
-      <th>Microtask queue (drained fully)</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>setTimeout / setInterval callbacks</td>
-      <td>.then / .catch / .finally callbacks</td>
-    </tr>
-    <tr>
-      <td>DOM events (click, scroll, input)</td>
-      <td>Continuation after every await</td>
-    </tr>
-    <tr>
-      <td>Network / I/O callbacks</td>
-      <td>queueMicrotask(fn)</td>
-    </tr>
-    <tr>
-      <td>setImmediate (Node)</td>
-      <td>process.nextTick (Node, even earlier)</td>
-    </tr>
-  </tbody>
-</table>
+<Table
+  data={{
+    headers: ['Task queue (one per loop turn)', 'Microtask queue (drained fully)'],
+    rows: [
+      ['setTimeout / setInterval callbacks', '.then / .catch / .finally callbacks'],
+      ['DOM events (click, scroll, input)', 'Continuation after every await'],
+      ['Network / I/O callbacks', 'queueMicrotask(fn)'],
+      ['setImmediate (Node)', 'process.nextTick (Node, even earlier)'],
+    ],
+  }}
+/>
 
 The "drained fully" part has a sharp edge: because the loop empties the
 entire microtask queue before moving on — including microtasks queued *by*
@@ -174,6 +159,192 @@ finishes (and its microtasks drain), but never in the middle of one. If you
 update the DOM twice in the same synchronous block, the user only ever sees
 the final state — the intermediate frame never had a chance to paint.
 
+## A harder puzzle
+
+Once the basic rule is solid, this one tests it:
+
+```javascript
+console.log(1);
+
+setTimeout(() => {
+  console.log(2);
+  Promise.resolve().then(() => console.log(3));
+}, 0);
+
+Promise.resolve().then(() => {
+  console.log(4);
+  setTimeout(() => console.log(5), 0);
+});
+
+queueMicrotask(() => console.log(6));
+
+(async () => {
+  console.log(7);
+  await null;
+  console.log(8);
+})();
+
+console.log(9);
+```
+
+Replay the queues:
+
+1. Synchronous code: `1`, then the async function runs up to its `await`
+   (`7`), then `9`. Queued so far — tasks: [timeout A]; microtasks:
+   [then-4, micro-6, after-await-8].
+2. Drain microtasks in order: `4` (which schedules timeout B), `6`, `8`.
+3. Take one task, timeout A: `2`, which queues a microtask; drain it: `3`.
+4. Take the next task, timeout B: `5`.
+
+Output: `1 7 9 4 6 8 2 3 5`. The `3` printing before `5` is the rule in
+action — microtasks queued *during* a task run before the next task, even
+one that was scheduled earlier.
+
+## Where rendering and requestAnimationFrame fit
+
+In a browser, one turn of the loop looks roughly like this:
+
+1. Run one task.
+2. Drain all microtasks.
+3. If it's time to render (typically about every 16 ms on a 60 Hz
+   display): run `requestAnimationFrame` callbacks, then compute style,
+   layout and paint.
+4. Repeat.
+
+That's why `requestAnimationFrame` is the right place for visual updates:
+it runs once per frame, just before the browser paints, so a change made
+there is shown in the very next frame and never wasted on a frame that
+isn't drawn. A `setTimeout(fn, 16)` loop drifts out of step with the
+display and can run twice in one frame or skip one. See
+[requestAnimationFrame and smooth animation](/blog/request-animation-frame-and-smooth-animation)
+and [the rendering pipeline](/blog/rendering-pipeline-reflow-repaint).
+
+## Node's event loop has phases
+
+Node's loop (provided by libuv) is the same idea with more structure.
+Each turn moves through phases, each with its own queue:
+
+<Table
+  data={{
+    headers: ['phase', 'runs'],
+    rows: [
+      ['timers', 'expired setTimeout / setInterval callbacks'],
+      ['pending callbacks', 'some deferred system-level I/O callbacks'],
+      ['poll', 'new I/O events — most of your callbacks run here; waits here when idle'],
+      ['check', 'setImmediate callbacks'],
+      ['close callbacks', "close events, e.g. a socket's 'close'"],
+    ],
+  }}
+/>
+
+Between every callback, Node drains two microtask-like queues: first
+everything queued with `process.nextTick`, then promise microtasks. That
+makes `nextTick` even higher priority than promises — and just as able to
+starve the loop if used recursively.
+
+Two consequences come up often:
+
+```javascript
+setTimeout(() => console.log('timeout'), 0);
+setImmediate(() => console.log('immediate'));
+// From the main module: order is not guaranteed — it depends on
+// whether 1 ms has elapsed when the loop first checks timers.
+
+fs.readFile(__filename, () => {
+  setTimeout(() => console.log('timeout'), 0);
+  setImmediate(() => console.log('immediate'));
+});
+// Inside an I/O callback: always 'immediate' first, because the
+// check phase comes right after poll, before timers come round again.
+```
+
+## Blocking the loop on the server
+
+In a browser, a blocked loop freezes one user's tab. In Node, it freezes
+*every* request the process is handling. The usual culprits:
+
+- `JSON.parse` / `JSON.stringify` on multi-megabyte payloads.
+- Synchronous APIs left in request paths: `fs.readFileSync`,
+  `crypto.pbkdf2Sync`, `zlib.gzipSync`.
+- Regular expressions with catastrophic backtracking on user input — see
+  [regex backtracking and ReDoS](/blog/regex-backtracking-and-redos).
+- Large loops over in-memory data — sorting a million items per request.
+
+The asynchronous versions of `fs`, `crypto` and `zlib` hand work to libuv's
+thread pool, freeing the loop. For your own CPU-heavy code, use
+`worker_threads` (Node) or [Web Workers](/blog/web-workers-off-the-main-thread)
+(browsers), or split the work into chunks that yield between them.
+
+### Measuring it
+
+You can't fix what you can't see. Node exposes event-loop delay directly:
+
+```javascript
+import { monitorEventLoopDelay } from 'node:perf_hooks';
+
+const h = monitorEventLoopDelay({ resolution: 20 });
+h.enable();
+setInterval(() => {
+  console.log('event loop p99 delay (ms):', h.percentile(99) / 1e6);
+  h.reset();
+}, 10_000);
+```
+
+A healthy server shows a p99 of a few milliseconds. Spikes to hundreds of
+milliseconds mean something is blocking, and every request in flight is
+waiting on it. In the browser, the Performance panel marks **long tasks**
+(over 50 ms) in red, and the Long Animation Frames API reports them from
+real users.
+
+## Follow-up questions, answered
+
+**"Is JavaScript really single-threaded?"** Your JavaScript runs on one
+thread per realm — the page's main thread, or one per worker. The runtime
+around it is not: the browser's network stack, Node's libuv thread pool
+and the operating system do the waiting and much of the I/O in parallel.
+Single-threaded *execution*, multi-threaded *platform*.
+
+**"Why doesn't `await` block the thread?"** Because it doesn't wait in
+place. It returns control to the caller, and the rest of the function is
+registered as a callback to run as a microtask when the promise settles.
+The thread is free in the meantime — see
+[async/await under the hood](/blog/async-await-under-the-hood).
+
+**"What's the difference between `setTimeout(fn, 0)` and
+`queueMicrotask(fn)`?"** The microtask runs before any rendering or other
+task — still within the current turn. The timeout runs at the earliest in
+a later turn, after the browser has had a chance to render and handle
+input. Use microtasks for "right after this code, before anything else";
+use a task when you want to yield to the browser.
+
+**"Why does my UI update only after a long function finishes?"** Rendering
+happens between tasks. DOM changes made during one long task are batched
+and painted afterwards. To show progress during long work, split it into
+tasks — or move it to a worker.
+
+**"What's `scheduler.yield()`?"** A newer browser API that pauses an async
+function, lets the browser handle pending input and rendering, then
+resumes — with priority over other queued tasks, unlike a plain
+`setTimeout`. It's the cleanest way to break up long work on the main
+thread where supported:
+
+```javascript
+async function processAll(items) {
+  for (const [i, item] of items.entries()) {
+    process(item);
+    if (i % 100 === 0 && globalThis.scheduler?.yield) await scheduler.yield();
+  }
+}
+```
+
+**"Do promises run in parallel?"** No — the *waiting* overlaps, the
+JavaScript doesn't. `Promise.all([fetchA(), fetchB()])` starts both
+requests before awaiting either, so the network work happens concurrently,
+but their `.then` callbacks still run one at a time on the single thread.
+Concurrency of I/O, not parallelism of code — which is exactly why the
+event loop model is enough to reason about it. See
+[promises in depth](/blog/javascript-promises-in-depth).
+
 ## Wrap-up
 
 The whole model fits in one sentence: *run the stack dry, drain every
@@ -181,4 +352,7 @@ microtask, take one task, repeat*. From that single rule you can derive why
 `promise` beats `timeout`, why an async function starts synchronously, why
 recursive microtasks freeze a page while recursive timers don't, and why a
 busy loop kills rendering. Next time an ordering puzzle shows up in a code
-review or an interview, don't memorize the answer — replay the queues.
+review or an interview, don't memorize the answer — replay the queues. And
+when a page stutters or a Node server's latency spikes for no visible
+reason, measure the loop before anything else: a blocked loop explains more
+mysterious slowness than any other single cause.
