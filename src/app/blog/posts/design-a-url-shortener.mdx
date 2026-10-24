@@ -82,6 +82,87 @@ Any of these works. Say which you picked and why. Counter blocks are the most
 common interview answer because they scale without collisions; random keys
 are the simplest to operate.
 
+### How long should the key be?
+
+Base 62 (`a–z`, `A–Z`, `0–9`) gives 62 choices per character:
+
+<Table
+  data={{
+    headers: ['length', 'possible keys', 'enough for'],
+    rows: [
+      ['6', '~57 billion', '~47 years at 100M links/month — tight once you add random-key collisions'],
+      ['7', '~3.5 trillion', 'effectively forever at this scale'],
+      ['8', '~218 trillion', 'only if keys are random and you want collisions vanishingly rare'],
+    ],
+  }}
+/>
+
+With random keys, what matters is how full the space is. At 6 billion links
+(five years of traffic) in a 3.5-trillion space, the chance a new random key
+collides is about 0.17% — one retry in every ~600 inserts. That's fine. At
+6 characters it would be over 10%, and every tenth create would need a
+second round trip.
+
+### Counter blocks in code
+
+The block allocator is a single row in a database (or a key in ZooKeeper or
+etcd) that each app server bumps atomically:
+
+```sql
+-- one row; each server claims the next million IDs
+UPDATE id_blocks
+SET next_start = next_start + 1000000
+WHERE name = 'links'
+RETURNING next_start - 1000000 AS block_start;
+```
+
+```javascript
+const ALPHABET =
+  '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+function toBase62(n) {
+  let s = '';
+  do {
+    s = ALPHABET[n % 62] + s;
+    n = Math.floor(n / 62);
+  } while (n > 0);
+  return s.padStart(7, '0');
+}
+
+class KeyAllocator {
+  constructor(db) { this.db = db; this.next = 0; this.end = 0; }
+
+  async nextKey() {
+    if (this.next >= this.end) {
+      const { block_start } = await this.db.one(CLAIM_BLOCK_SQL);
+      this.next = Number(block_start);
+      this.end = this.next + 1_000_000;
+    }
+    // Permute before encoding so consecutive IDs don't give
+    // consecutive, guessable keys.
+    return toBase62(permute(this.next++));
+  }
+}
+```
+
+The coordination service is touched once per million links, so it's never
+the bottleneck. If a server crashes mid-block, the unused IDs are simply
+lost — with 3.5 trillion keys, nobody will miss them.
+
+For `permute`, any bijection on the ID range works: multiply by a large
+odd constant modulo 62⁷, or run a small Feistel network. It isn't
+encryption, just enough to stop someone walking the key space by adding
+one.
+
+### Custom aliases
+
+A custom alias like `sho.rt/launch` shares the same `key` column, so the
+primary key's uniqueness constraint handles conflicts for free. Two rules
+keep it safe: reserve aliases that collide with your own routes (`/api`,
+`/login`, `/links`), and keep custom aliases in a character set or length
+that generated keys never use — otherwise a user can claim the alias your
+counter is about to produce.
+
 ## 5. Data model
 
 One table, keyed by the short key:
