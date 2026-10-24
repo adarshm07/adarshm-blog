@@ -61,6 +61,25 @@ the simple, robust version many systems use is **"power of two choices"**:
 pick two servers at random, send to the less loaded one. Nearly optimal
 load distribution, no global state, no herd behavior.
 
+```javascript
+function pickServer(servers) {
+  const a = servers[Math.floor(Math.random() * servers.length)];
+  let b = servers[Math.floor(Math.random() * servers.length)];
+  if (servers.length > 1) {
+    while (b === a) b = servers[Math.floor(Math.random() * servers.length)];
+  }
+  return a.inFlight <= b.inFlight ? a : b;
+}
+```
+
+Why not just "always the least loaded server"? Because with many balancer
+instances each acting on slightly stale load numbers, they all pick the
+same momentarily-idle server at once and overload it — a herd. Random
+sampling breaks the synchronisation, and comparing just two candidates
+already removes most of the imbalance that pure random choice leaves
+behind. The maximum load gap shrinks dramatically going from one random
+choice to two; going from two to three helps far less.
+
 ### Hash-based routing
 
 Hash something about the request — usually client IP or a session key —
@@ -80,42 +99,18 @@ tiers and stateful backends.
 
 ## The comparison
 
-<table>
-  <thead>
-    <tr>
-      <th>Strategy</th>
-      <th>Best when</th>
-      <th>Weakness</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>Round robin</td>
-      <td>uniform servers, uniform requests</td>
-      <td>blind to actual load</td>
-    </tr>
-    <tr>
-      <td>Weighted RR</td>
-      <td>mixed hardware, canary rollouts</td>
-      <td>weights are static guesses</td>
-    </tr>
-    <tr>
-      <td>Least connections</td>
-      <td>variable request cost (most APIs)</td>
-      <td>needs connection state</td>
-    </tr>
-    <tr>
-      <td>Latency-aware / P2C</td>
-      <td>detecting degraded-but-alive servers</td>
-      <td>more moving parts</td>
-    </tr>
-    <tr>
-      <td>Hash / consistent hash</td>
-      <td>per-client state, cache locality</td>
-      <td>hot keys create hot servers</td>
-    </tr>
-  </tbody>
-</table>
+<Table
+  data={{
+    headers: ['Strategy', 'Best when', 'Weakness'],
+    rows: [
+      ['Round robin', 'uniform servers, uniform requests', 'blind to actual load'],
+      ['Weighted RR', 'mixed hardware, canary rollouts', 'weights are static guesses'],
+      ['Least connections', 'variable request cost (most APIs)', 'needs connection state'],
+      ['Latency-aware / P2C', 'detecting degraded-but-alive servers', 'more moving parts'],
+      ['Hash / consistent hash', 'per-client state, cache locality', 'hot keys create hot servers'],
+    ],
+  }}
+/>
 
 ## L4 vs L7: what the balancer can see
 
@@ -150,9 +145,138 @@ server can handle *any* request. Then every strategy above works, servers
 become disposable, and autoscaling actually helps. This is why "keep state
 out of app servers" is close to the first commandment of horizontal
 scaling; sticky sessions are the escape hatch for legacy apps, not the
-design goal. (Long-lived websockets are the honest exception — a
+design goal. If you do need affinity for performance rather than
+correctness — keeping a user's requests near their warm cache — use
+consistent hashing on a user ID with bounded loads, so affinity is a
+preference the balancer can override, not a promise that breaks when a
+server dies. (Long-lived websockets are the honest exception — a
 connection physically lives on one server, so you design a pub/sub layer
 behind them instead.)
+
+## Putting it together: one config
+
+Most of the ideas above are a line or two of configuration. An NGINX
+upstream for a stateless API pool might look like:
+
+```nginx
+upstream api {
+    least_conn;                                  # variable-cost requests
+    server 10.0.1.11:3000 max_fails=3 fail_timeout=10s;
+    server 10.0.1.12:3000 max_fails=3 fail_timeout=10s;
+    server 10.0.1.13:3000 weight=2;              # bigger box
+    server 10.0.1.20:3000 weight=1 backup;       # only when others are down
+    keepalive 64;                                # reuse upstream connections
+}
+
+server {
+    location /api/ {
+        proxy_pass http://api;
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 10s;
+        proxy_next_upstream error timeout http_502 http_503;
+        proxy_next_upstream_tries 2;             # one retry, on another server
+    }
+}
+```
+
+Reading it top to bottom: least-connections for uneven request costs,
+passive health checking (`max_fails`), a weight for heterogeneous
+hardware, a backup server, upstream keep-alive so every request doesn't
+open a new TCP connection, explicit timeouts, and a bounded retry on a
+different server for connection-level failures. Note that
+`proxy_next_upstream` retries by default only for idempotent methods —
+NGINX won't resend a `POST` unless told to, which is the safe behaviour.
+
+Two things this config deliberately doesn't do: it doesn't pin sessions,
+because the API servers are stateless, and it doesn't hash requests,
+because there's no per-server cache worth preserving. Every line is a
+decision; leaving a feature out is one too.
+
+## Behaviour during change: deploys, failures, new servers
+
+Algorithms decide the steady state. Most incidents happen during change,
+and a few balancer features matter more than the algorithm choice there.
+
+**Connection draining.** When a server is removed — for a deploy or a
+scale-in — the balancer stops sending *new* requests but lets in-flight
+ones finish, up to a timeout. Without it, every deploy produces a burst of
+errors. The server side has to cooperate: on `SIGTERM`, fail the readiness
+check, keep serving for the drain period, then exit.
+
+```javascript
+process.on('SIGTERM', () => {
+  ready = false;                       // /readyz starts returning 503
+  setTimeout(() => server.close(() => process.exit(0)), 15_000);
+});
+```
+
+See [health checks: liveness and readiness](/blog/health-checks-liveness-readiness)
+for why those two endpoints must be different.
+
+**Slow start.** A freshly started server has cold caches, an unwarmed JIT
+and no open database connections. Least-connections sees it at zero and
+floods it. Slow start ramps a new server's weight up over 30–60 seconds so
+it warms up gradually.
+
+**Outlier detection.** Health checks run every few seconds against one
+endpoint; real traffic tells you more, sooner. Envoy-style outlier
+detection ejects a server temporarily after, say, five consecutive 5xx
+responses, and brings it back after a cool-off — catching a server that
+passes `/healthz` but fails real requests.
+
+**Retries at the balancer.** An L7 balancer can retry a failed request on
+a different server, hiding a single bad instance from users. Two rules
+keep that safe: only retry idempotent requests (or those carrying an
+[idempotency key](/blog/idempotency-keys)), and cap retries with a budget —
+say, retries may add at most 10% extra load — so a widespread failure
+doesn't double the traffic hitting a struggling pool. See
+[retries, backoff and jitter](/blog/retries-backoff-and-jitter).
+
+**Panic thresholds.** If health checks start failing on most servers at
+once, the problem is probably the health check or a shared dependency,
+not every server simultaneously. Some balancers stop ejecting below a
+threshold (say 50% healthy) and spread traffic across all servers, on the
+basis that degraded service beats routing everything to the few survivors
+and taking them down too.
+
+## Beyond one balancer
+
+The balancer itself is a single point of failure unless it's redundant.
+Typical layouts:
+
+- **An active-passive pair** sharing a virtual IP; if the active one dies,
+  the passive takes over the address in seconds.
+- **Managed cloud balancers** (ALB, Azure Load Balancer, OCI Load
+  Balancer), which are distributed systems themselves and scale
+  automatically.
+- **DNS or anycast in front** for multiple regions: global traffic
+  management returns the address of the nearest healthy region, or anycast
+  announces one IP from many locations and lets network routing pick the
+  nearest. Either way, regional balancers then do the fine-grained work.
+
+**Client-side load balancing** removes the central box entirely for
+service-to-service traffic. Each client keeps a list of healthy instances
+(from a service registry or DNS) and picks one per request, often with
+power of two choices. That's what gRPC clients and service meshes do: the
+"balancer" is a library or a sidecar proxy next to every service, so
+there's no extra hop and no shared bottleneck.
+
+## What to measure
+
+- **Per-server request rate and in-flight requests** — is load actually
+  even? A flat line for one server and spikes for another usually means
+  stickiness or connection pinning.
+- **Per-server latency percentiles** — the server whose p99 is triple the
+  others is the one to eject.
+- **Healthy host count** — alert when it drops, before it reaches the
+  panic threshold.
+- **5xx generated by the balancer vs by backends** — a 502 or 504 from the
+  balancer means it couldn't reach or wait for a backend, which is a
+  different problem from the backend returning errors.
+- **Connection churn** — new upstream connections per second. A high rate
+  usually means keep-alive is off or misconfigured, and every request is
+  paying for a TCP (and maybe TLS) handshake it didn't need — see the
+  [TLS handshake](/blog/https-and-tls-handshake) for what that costs.
 
 ## Wrap-up
 

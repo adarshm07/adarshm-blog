@@ -1,7 +1,7 @@
 ---
 title: "Caching Strategies: Cache-Aside, Write-Through, and Write-Back"
 publishedAt: "2026-07-18"
-summary: "Adding a cache in front of a database is easy. Deciding when the cache gets populated and how writes stay consistent with the source of truth is where cache-aside, write-through, and write-back diverge — each trading latency against staleness risk differently."
+summary: "Adding a cache in front of a database is easy. Deciding when the cache gets populated and how writes stay consistent with the source of truth is where cache-aside, write-through, write-back and refresh-ahead diverge. Plus the stale-read race in cache-aside, TTLs, eviction policies, cache layers, and how to tell whether a cache is working."
 tags: "System Design"
 ---
 
@@ -12,6 +12,33 @@ to that question produce genuinely different systems, not just
 implementation details. The three dominant strategies — cache-aside,
 write-through, and write-back — each make a different trade between
 write latency, read latency, and the risk of serving stale data.
+
+## Why caches work at all
+
+A cache helps only because access is skewed. If every item were read
+equally often, a cache holding 10% of the data would serve about 10% of
+reads. Real traffic is nothing like that: a small set of hot items — the
+home page, today's posts, popular products — gets most of the reads. That
+skew is what lets a cache holding a few percent of the data absorb 90% or
+more of the traffic.
+
+The payoff is easy to put in numbers. With a 1 ms cache and a 20 ms
+database:
+
+<Table
+  data={{
+    headers: ['hit rate', 'average read latency', 'database reads (of 10,000/s)'],
+    rows: [
+      ['0%', '20 ms', '10,000/s'],
+      ['80%', '~5 ms', '2,000/s'],
+      ['95%', '~2 ms', '500/s'],
+      ['99%', '~1.2 ms', '100/s'],
+    ],
+  }}
+/>
+
+The last column is usually the real reason for a cache: going from 95% to
+99% cuts database load by another 5×. Hit rate is the number to watch.
 
 ## Cache-aside (lazy loading): the application drives the cache
 
@@ -41,8 +68,8 @@ writing the new value directly into the cache after a database update —
 is a race-condition trap: two concurrent writes can interleave such that
 the cache ends up holding the *older* value even though the database has
 the newer one. Deleting the key and letting the next read repopulate it
-from the database sidesteps that race entirely, at the cost of one extra
-cache miss.
+from the database sidesteps that race, at the cost of one extra cache
+miss.
 
 - **Pro:** only requested data ever enters the cache — no wasted memory on
   data nobody reads. Cache failure degrades gracefully to "every request
@@ -51,6 +78,50 @@ cache miss.
   latency), and there's a window between a write and the next read where
   a naive read-through-cache-only client could serve stale data if
   invalidation is missed or delayed.
+
+### The race that delete-on-write doesn't fix
+
+Deleting on write removes the write-write race, but a read-write race
+remains:
+
+1. Reader misses the cache and reads `v1` from the database.
+2. Writer updates the database to `v2` and deletes the cache key.
+3. Reader, slower, now writes its `v1` into the cache.
+
+The cache holds `v1` until the TTL expires. It's rare — the reader has to
+be slower than an entire write — but at high traffic, rare things happen
+every day. Defences, from cheapest:
+
+- **A TTL on everything.** It bounds how long any stale value can live.
+  This alone is enough for most data.
+- **Delayed second delete.** The writer deletes again a second or so
+  later, cleaning up anything a slow reader wrote in between.
+- **Versioned writes.** Store a version with each value, and only write to
+  the cache if the version is newer than what's there (`SET` only if
+  greater, via a small Lua script in Redis).
+- **Leases.** On a miss, the cache hands the reader a token; a delete
+  invalidates outstanding tokens, so the slow reader's late `SET` is
+  rejected. Memcached at large scale popularised this.
+
+### Invalidation from the database itself
+
+Every write path having to remember `cache.delete` is fragile — one
+forgotten admin script and the cache is wrong. An alternative is to drive
+invalidation from the database's change stream (change data capture): a
+consumer reads committed changes and deletes the matching keys. Writes
+can't forget, and invalidation happens only after commit. The cost is a
+little extra delay and another moving part. It's the same idea as the
+[outbox pattern](/blog/dual-writes-and-the-outbox-pattern): don't trust two
+separate writes to stay in sync.
+
+## Read-through: the cache loads for you
+
+Read-through is cache-aside moved into a library or the cache itself: the
+application only ever calls `cache.get(key)`, and on a miss the cache calls
+a loader function to fetch from the database. The behaviour is the same as
+cache-aside; the difference is that the loading logic lives in one place
+instead of every caller, which makes it the natural place to add
+stampede protection.
 
 ## Write-through: the cache is updated in lockstep with the database
 
@@ -72,6 +143,10 @@ async function updateUserWriteThrough(id, changes) {
   write plus database write) instead of one, and data that's written but
   never read still occupies cache space — write-through caches everything
   that's written, not just what's requested.
+
+Write-through is still exposed to the write-write race if two writers
+update the same key concurrently and their cache writes land out of
+order. Versioned writes fix that, as above.
 
 ## Write-back (write-behind): the cache absorbs writes, the database catches up later
 
@@ -97,44 +172,97 @@ async function updateUserWriteBack(id, changes) {
   when the cache has its own durability (persistence, replication) or the
   data can tolerate loss.
 
-## Comparing the three
+A view counter is the textbook good fit: losing a few seconds of
+increments is harmless, and coalescing a million `+1`s into one `UPDATE`
+a second is a huge saving.
 
-<table>
-  <thead>
-    <tr>
-      <th></th>
-      <th>Cache-aside</th>
-      <th>Write-through</th>
-      <th>Write-back</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>Write latency</td>
-      <td>Fast (cache untouched on write)</td>
-      <td>Slow (cache + DB, synchronously)</td>
-      <td>Fastest (cache only, DB deferred)</td>
-    </tr>
-    <tr>
-      <td>Read-after-write consistency</td>
-      <td>Risk of stale read if invalidation lags</td>
-      <td>Always fresh</td>
-      <td>Always fresh (reads hit the cache)</td>
-    </tr>
-    <tr>
-      <td>Data loss risk</td>
-      <td>None — DB is always the source of truth</td>
-      <td>None — DB updated synchronously</td>
-      <td>Real, if the cache fails before flushing</td>
-    </tr>
-    <tr>
-      <td>Wasted cache space</td>
-      <td>None — only requested keys cached</td>
-      <td>Yes — everything written gets cached</td>
-      <td>Yes — everything written gets cached</td>
-    </tr>
-  </tbody>
-</table>
+## Refresh-ahead: never let hot keys expire
+
+For keys that are read constantly, the moment of expiry is a hazard: the
+next request pays the full database latency, and if many requests arrive
+together, they all do. Refresh-ahead reloads a key in the background
+*before* it expires — for example, when a read finds less than 20% of the
+TTL remaining. Readers keep getting the cached value; the refresh happens
+off the request path.
+
+The trade-off is wasted refreshes for keys that weren't going to be read
+again. Use it for a known-hot set (configuration, home page fragments),
+not for everything.
+
+## Comparing them
+
+<Table
+  data={{
+    headers: ['', 'Cache-aside / read-through', 'Write-through', 'Write-back'],
+    rows: [
+      ['Write latency', 'Fast (cache only invalidated)', 'Slow (cache + DB, synchronously)', 'Fastest (cache only, DB deferred)'],
+      ['Read-after-write', 'Small stale window possible', 'Fresh', 'Fresh (reads hit the cache)'],
+      ['Data loss risk', 'None — DB is the source of truth', 'None — DB updated synchronously', 'Real, if the cache fails before flushing'],
+      ['Cache contents', 'Only what was read', 'Everything written', 'Everything written'],
+      ['Survives cache outage', 'Yes — slower', 'Writes fail or skip cache', 'No — unflushed writes lost'],
+    ],
+  }}
+/>
+
+## TTLs and eviction
+
+**TTL** answers "how stale may this be?" and is a product decision as much
+as a technical one. A user's display name can be minutes stale; a price in
+a checkout flow cannot. Two practical rules:
+
+- **Add jitter.** If a batch job warms 100,000 keys with the same TTL, they
+  all expire in the same second. A random ±10% spreads expiry out.
+- **Cache misses briefly.** Cache "not found" for a short TTL (negative
+  caching), or a client hammering nonexistent IDs sends every request to
+  the database.
+
+**Eviction** answers "what goes when memory is full?":
+
+- **LRU** (least recently used) evicts what hasn't been touched longest —
+  a good default. See [LRU cache from scratch](/blog/lru-cache-from-scratch).
+- **LFU** (least frequently used) keeps items that are popular over time,
+  and resists one big scan pushing everything useful out.
+- **TTL-based** eviction removes the soonest-to-expire first.
+
+Redis exposes these as `maxmemory-policy` (`allkeys-lru`, `allkeys-lfu`,
+`volatile-ttl`, and others). Choose deliberately: the default in many
+setups is `noeviction`, which makes writes fail when memory fills up.
+
+## Where caches live
+
+A request can hit several caches before reaching the database, and each
+layer has a different scope:
+
+- **Browser** — per user, controlled by
+  [HTTP caching headers](/blog/http-caching-headers).
+- **CDN** — per region, for public responses and assets; see
+  [CDNs](/blog/cdn-explained).
+- **In-process** — a small map inside each app server. Fastest possible,
+  but every server has its own copy, so invalidation has to reach all of
+  them; keep TTLs short.
+- **Distributed cache** (Redis, Memcached) — shared by all app servers; the
+  usual home for cache-aside.
+- **Database buffer pool** — the database caching its own pages in memory.
+  Often why a "cold" query is slow once and fast afterwards.
+
+A common pattern for very hot keys is two tiers: a tiny in-process cache
+with a TTL of a few seconds in front of the distributed cache. It removes
+the network hop for the hottest items and protects the cache node that
+owns them.
+
+## When the cache hurts
+
+- **Stampedes.** A hot key expires and thousands of requests miss at once,
+  all querying the database. Fix with request coalescing (one loader per
+  key), refresh-ahead, or stale-while-revalidate — see
+  [cache stampedes](/blog/cache-stampede-and-thundering-herd).
+- **Cold starts.** After a deploy or a cache restart, the hit rate is zero
+  and the database takes full load. Warm critical keys before taking
+  traffic, or ramp traffic gradually.
+- **Hidden dependency.** If the database can no longer handle traffic
+  without the cache, the cache isn't an optimisation any more — it's
+  critical infrastructure, and needs replication and capacity planning
+  like any database.
 
 ## Picking one
 
@@ -147,10 +275,11 @@ async function updateUserWriteBack(id, changes) {
   data where "I just saved this and it shows the old value" is a visible
   bug.
 - **Write-back** is reserved for cases where write throughput is the
-  bottleneck and the cache itself is durable enough to trust — CPU cache
-  layers, some storage engines, and systems explicitly built with
-  replication or a write-ahead log underneath the cache tier to eliminate
-  the data-loss risk.
+  bottleneck and the cache itself is durable enough to trust — counters,
+  some storage engines, and systems explicitly built with replication or a
+  write-ahead log underneath the cache tier to eliminate the data-loss
+  risk.
+- **Refresh-ahead** is an add-on for a known-hot set of keys.
 
 They're also not mutually exclusive within one system — it's common to
 use cache-aside for most entities and write-through specifically for the
@@ -164,6 +293,5 @@ database on a write." Cache-aside keeps writes cheap and the cache lean at
 the cost of occasional stale reads; write-through keeps the cache always
 fresh at the cost of slower writes; write-back makes writes nearly free by
 deferring the database entirely, at the cost of real data-loss risk if the
-cache fails first. None of the three is universally "correct" — the right
-one depends on whether your system can tolerate stale reads, slow writes,
-or occasional loss, in that order of severity.
+cache fails first. Whichever you choose, put a TTL on everything, watch the
+hit rate, and plan for the day the cache is empty.

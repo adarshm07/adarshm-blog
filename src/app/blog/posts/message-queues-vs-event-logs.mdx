@@ -60,6 +60,15 @@ dead-letter queue. In a log there is no per-message ack — an offset is a
 single number, so a poison message means either blocking the partition or
 committing past it and handling the failure yourself.
 
+How redelivery works is worth knowing precisely. In SQS, receiving a
+message doesn't remove it — it hides it for a **visibility timeout**. If
+the consumer deletes it before the timeout, it's done; if the consumer
+crashes or takes too long, the message reappears for someone else. Set
+the timeout comfortably above your worst-case processing time, or extend
+it while working; otherwise a slow-but-healthy consumer and a second
+consumer will both process the same message. RabbitMQ does the same with
+unacknowledged messages when a consumer's connection drops.
+
 **Simpler operations.** No partitions, no consumer group rebalancing, no
 retention sizing. For "send the welcome email", that simplicity is the
 correct answer.
@@ -111,6 +120,93 @@ most eight consumers doing useful work in a group; a ninth sits idle. And
 increasing the partition count later changes the key-to-partition mapping,
 which breaks ordering across the change — so size it with room to grow.
 
+### Sizing partitions
+
+A rough method: measure how many messages a second one consumer instance
+can process, divide your peak rate by that, and double it for headroom
+and growth. If one consumer handles 500 messages a second and peak is
+4,000, you need at least 8 consumers working in parallel — so 16
+partitions. Don't overshoot into the thousands per topic "just in case";
+every partition costs memory, file handles and rebalancing time on the
+brokers.
+
+## Consumer groups and rebalancing
+
+In a log, "a set of consumers sharing the work" is a **consumer group**.
+The broker assigns each partition to exactly one member of the group, and
+the group commits one offset per partition. A second group reading the
+same topic gets its own assignment and its own offsets — that's how fan-out
+works without copying data.
+
+When a consumer joins, leaves, or stops sending heartbeats, the group
+**rebalances**: partitions are reassigned. Two consequences matter in
+practice:
+
+- **Processing pauses** for the group during a classic rebalance. Deploying
+  20 consumer instances one by one can trigger 20 rebalances. Newer
+  protocols (incremental cooperative rebalancing) move only the partitions
+  that need to move, and static membership lets a restarting consumer
+  reclaim its partitions without a rebalance at all.
+- **Uncommitted work is redone.** A partition moved mid-batch is picked up
+  by its new owner from the last committed offset, so the batch is
+  processed again. Another reason consumers must be idempotent.
+
+A consumer that takes too long on one batch — longer than the
+`max.poll.interval` — is presumed dead and kicked out, triggering a
+rebalance, after which it's still processing a batch it no longer owns.
+Keep batches small enough to finish comfortably within that interval.
+
+## Poison messages in a log
+
+A queue has an answer for a message that always fails: redeliver it a few
+times, then move it to a dead-letter queue. A log has no per-message
+state, so you build the equivalent:
+
+```javascript
+await consumer.run({
+  eachMessage: async ({ topic, partition, message }) => {
+    try {
+      await handle(message);
+    } catch (err) {
+      if (isRetryable(err) && attempts(message) < 3) {
+        // park it on a retry topic, consumed later with a delay
+        await producer.send({
+          topic: `${topic}.retry`,
+          messages: [{ key: message.key, value: message.value,
+                       headers: { ...message.headers, attempts: String(attempts(message) + 1) } }],
+        });
+      } else {
+        await producer.send({ topic: `${topic}.dlq`, messages: [message] });
+      }
+      // either way, commit past it so the partition keeps moving
+    }
+  },
+});
+```
+
+The trade-off is explicit: moving a failed message to a retry topic lets
+the partition continue, but it also breaks ordering for that key — a later
+event for the same order can be processed before the retried one. If
+per-key order matters, the alternative is to block that partition and
+retry in place, accepting that one bad message stalls everything behind
+it. Choose per topic, deliberately.
+
+## Retention and compaction
+
+A log keeps messages by **time or size** — seven days, or 500 GB per
+partition — after which old segments are deleted, whether or not anyone
+read them. Retention is your replay window: if a bug is noticed after the
+data is gone, replay can't help. Size it to cover at least your realistic
+"time to notice and fix" plus a margin.
+
+**Log compaction** is the other mode: instead of deleting by age, keep
+only the **latest message for each key**. A compacted topic of
+`userId → profile` becomes a durable, replayable snapshot of current
+state — a new service can read it from the start and build a full copy of
+every user's latest profile. Compaction is how logs double as the
+backbone for [event sourcing and CQRS](/blog/event-sourcing-and-cqrs)
+read models and for change data capture.
+
 ## Delivery semantics, honestly
 
 Both systems advertise "at least once" by default, and both mean it:
@@ -125,6 +221,70 @@ another database, that guarantee ends at the boundary.
 The durable answer is the same in both systems: make consumers idempotent.
 Key writes by event ID, use upserts instead of inserts, record processed IDs.
 Idempotency is cheaper to build than exactly-once delivery is to guarantee.
+
+When the consumer writes to a relational database, the cleanest version
+records the event ID in the same transaction as the effect:
+
+```javascript
+async function onOrderPaid(event) {
+  await db.tx(async (t) => {
+    const fresh = await t.result(
+      `INSERT INTO processed_events (event_id) VALUES ($1)
+       ON CONFLICT DO NOTHING`, [event.id]);
+    if (fresh.rowCount === 0) return;             // seen it — skip
+    await t.none(
+      `UPDATE orders SET status = 'paid' WHERE id = $1`, [event.orderId]);
+  });
+}
+```
+
+Either both the effect and the "processed" marker commit, or neither does.
+A redelivered event finds its ID already recorded and does nothing. The
+producer side has the mirror-image problem — writing to the database and
+publishing the event without one getting lost — and the
+[outbox pattern](/blog/dual-writes-and-the-outbox-pattern) solves it the
+same way.
+
+## Backpressure
+
+What happens when consumers fall behind is different in each model, and
+it matters for capacity planning:
+
+- **A queue** grows. Most brokers keep messages in memory and on disk, and
+  a very deep queue can slow the broker itself — RabbitMQ in particular
+  degrades when queues hold millions of messages. Producers may get
+  throttled or rejected.
+- **A log** doesn't care how far behind a consumer is: messages are
+  sequential files on disk either way, and a lagging consumer reads them
+  later. The risk is different — fall behind by more than the retention
+  period and the oldest unread messages are deleted before you get to
+  them.
+
+So queue backlogs are an operational emergency sooner, and log backlogs
+are a data-loss risk later. Alert on queue depth growth for one, and on
+consumer lag as a fraction of retention for the other.
+
+## The tools, mapped
+
+<Table
+  data={{
+    headers: ['tool', 'model', 'notes'],
+    rows: [
+      ['Amazon SQS', 'queue', 'fully managed; visibility timeout; FIFO variant with group IDs'],
+      ['RabbitMQ', 'queue (plus streams)', 'flexible routing via exchanges; priorities; per-message acks'],
+      ['BullMQ / Redis lists', 'queue', 'job queues for Node; delays, retries, rate limits built in'],
+      ['Apache Kafka', 'log', 'partitions, consumer groups, compaction, transactions'],
+      ['Amazon Kinesis', 'log', 'managed shards; shorter default retention'],
+      ['Redis Streams', 'log', 'consumer groups with per-message acks — a hybrid'],
+      ['Apache Pulsar', 'log + queue', 'log storage with shared (queue-like) subscriptions'],
+    ],
+  }}
+/>
+
+The hybrids are worth noticing. Redis Streams and Pulsar keep a log but
+add per-message acknowledgement for consumers that want queue semantics.
+The two models aren't rival products so much as two ends of a design
+space, and newer systems let you pick per subscription.
 
 ## Choosing
 
