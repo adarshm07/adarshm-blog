@@ -9,7 +9,8 @@ A huge fraction of array and string problems that *look* like they need
 nested loops actually don't. Two related patterns — **two pointers** and
 the **sliding window** — collapse that quadratic work into a single pass by
 never throwing away information you already computed. Once you recognize
-the shape, you'll see them everywhere.
+the shape, you'll see them everywhere. This post covers both, with templates you
+can reuse for each flavour.
 
 ## The problem with the naive approach
 
@@ -55,7 +56,9 @@ function maxSum(arr, k) {
 ```
 
 One pass, `O(n)` time, `O(1)` space. The window carries its state forward
-instead of rebuilding it.
+instead of rebuilding it. For n = 100,000 and k = 1,000, that's the difference
+between about a hundred million additions and a couple of hundred
+thousand.
 
 ### Fixed vs. dynamic windows
 
@@ -82,7 +85,91 @@ function longestUnique(s) {
 ```
 
 Each character is added once and removed at most once, so even with the
-inner `while` this is still `O(n)` — the pointers only ever move forward.
+inner `while` this is still `O(n)` — the pointers only ever move forward. This
+"amortised" argument — count total pointer moves, not loop nesting — is
+how to analyse every window solution.
+
+### The dynamic-window template
+
+Most variable-window problems fit one template. Only three lines change
+from problem to problem — what to add, when the window is invalid, and
+what to remove:
+
+```javascript
+function slidingWindow(items) {
+  let left = 0, best = 0;
+  const state = new Map();                 // whatever describes the window
+
+  for (let right = 0; right < items.length; right++) {
+    add(state, items[right]);              // 1. extend the window
+
+    while (!isValid(state)) {              // 2. shrink until valid again
+      remove(state, items[left]);          // 3. drop from the left
+      left++;
+    }
+
+    best = Math.max(best, right - left + 1);   // record the answer
+  }
+  return best;
+}
+```
+
+For "longest substring with at most k distinct characters", `state` is a
+count per character, `isValid` is `state.size <= k`, and `remove`
+decrements a count and deletes the key at zero. For "longest subarray with
+sum at most S" (non-negative numbers), `state` is a running sum. Once you
+can fill in those three blanks, you've solved the problem.
+
+### Shortest window: minimum window substring
+
+"Longest valid window" grows and shrinks only when forced. "Shortest valid
+window" flips it: shrink *as long as* the window stays valid, recording the
+answer at each step. The classic is *find the smallest substring of `s`
+that contains every character of `t`*:
+
+```javascript
+function minWindow(s, t) {
+  const need = new Map();
+  for (const ch of t) need.set(ch, (need.get(ch) ?? 0) + 1);
+  let missing = t.length, left = 0, best = [0, Infinity];
+
+  for (let right = 0; right < s.length; right++) {
+    const ch = s[right];
+    if (need.has(ch)) {
+      if (need.get(ch) > 0) missing--;
+      need.set(ch, need.get(ch) - 1);      // may go negative: surplus
+    }
+    while (missing === 0) {                // valid: try to shrink
+      if (right - left < best[1] - best[0]) best = [left, right];
+      const out = s[left++];
+      if (need.has(out)) {
+        need.set(out, need.get(out) + 1);
+        if (need.get(out) > 0) missing++;  // now short of this character
+      }
+    }
+  }
+  return best[1] === Infinity ? '' : s.slice(best[0], best[1] + 1);
+}
+
+minWindow('ADOBECODEBANC', 'ABC');   // 'BANC'
+```
+
+`missing` counts characters still needed, so checking validity is O(1)
+instead of comparing two maps. Negative counts in `need` represent
+surplus copies, which is what lets the left edge move past extra
+characters without breaking the window. Still O(n): each pointer only
+moves forward.
+
+### When the window doesn't work
+
+Sliding windows rely on a property that's easy to miss: **extending the
+window can only make the condition worse (or better) in one direction**.
+With non-negative numbers, adding an element can only increase a sum, so
+"shrink until the sum is at most S" is valid. With negative numbers, a
+longer window might have a *smaller* sum, and shrinking from the left might
+not fix anything. "Subarray sum equals k" with negatives is a
+[prefix sums](/blog/prefix-sums-and-difference-arrays) problem with a hash
+map, not a window.
 
 ## Two pointers
 
@@ -109,34 +196,138 @@ Because the array is sorted, each comparison lets us *rule out* an entire
 row or column of the pair space — `O(n)` instead of the `O(n²)` of checking
 all pairs.
 
+Why is moving the pointers safe — how do we know we didn't skip the
+answer? Suppose `arr[lo] + arr[hi]` is too small. Every pair using
+`arr[lo]` with any index below `hi` is even smaller (the array is sorted),
+so `arr[lo]` can't be part of any answer: discarding it loses nothing. The
+symmetric argument covers moving `hi`. Each step eliminates one element
+for good, which is why the loop runs at most n times.
+
+### Three numbers: 3Sum
+
+Extending to triplets that sum to zero is the converging pattern inside a
+loop: fix one number, then run two pointers over the rest.
+
+```javascript
+function threeSum(nums) {
+  nums.sort((a, b) => a - b);
+  const out = [];
+  for (let i = 0; i < nums.length - 2; i++) {
+    if (i > 0 && nums[i] === nums[i - 1]) continue;      // skip duplicate anchors
+    let lo = i + 1, hi = nums.length - 1;
+    while (lo < hi) {
+      const sum = nums[i] + nums[lo] + nums[hi];
+      if (sum < 0) lo++;
+      else if (sum > 0) hi--;
+      else {
+        out.push([nums[i], nums[lo], nums[hi]]);
+        while (lo < hi && nums[lo] === nums[lo + 1]) lo++;   // skip duplicates
+        while (lo < hi && nums[hi] === nums[hi - 1]) hi--;
+        lo++; hi--;
+      }
+    }
+  }
+  return out;
+}
+```
+
+O(n²) — down from O(n³) for brute force — and the sort makes duplicate
+handling a matter of skipping equal neighbours.
+
+### Container with most water
+
+Given heights of vertical lines, pick two that, with the x-axis, hold the
+most water. The area of a pair is `width × min(height)`. Start with the
+widest pair and move inward — but which pointer?
+
+```javascript
+function maxArea(h) {
+  let lo = 0, hi = h.length - 1, best = 0;
+  while (lo < hi) {
+    best = Math.max(best, (hi - lo) * Math.min(h[lo], h[hi]));
+    if (h[lo] < h[hi]) lo++; else hi--;    // move the shorter side
+  }
+  return best;
+}
+```
+
+Dry run on `[1, 8, 6, 2, 5, 4, 8, 3, 7]`:
+
+<Table
+  data={{
+    headers: ['lo', 'hi', 'heights', 'area', 'best', 'move'],
+    rows: [
+      ['0', '8', '1, 7', '8 × 1 = 8', '8', 'lo (1 is shorter)'],
+      ['1', '8', '8, 7', '7 × 7 = 49', '49', 'hi (7 is shorter)'],
+      ['1', '7', '8, 3', '6 × 3 = 18', '49', 'hi'],
+      ['1', '6', '8, 8', '5 × 8 = 40', '49', 'hi (tie)'],
+      ['1', '5', '8, 4', '4 × 4 = 16', '49', 'hi'],
+      ['…', '…', '…', 'all smaller', '49', 'until they meet'],
+    ],
+  }}
+/>
+
+The reason to move the shorter side: the area is capped by the shorter
+line. Keeping it and moving the taller one inward can only shrink the
+width while the height stays capped — never better. So the shorter line
+has already been paired with its best possible partner, and can be
+discarded. That "this element can't be in any better answer" argument is
+the proof behind every converging two-pointer solution.
+
+### Read and write pointers
+
+The third flavour moves two pointers in the same direction at different
+speeds: a **read** pointer scans every element, a **write** pointer marks
+where the next kept element goes. Removing duplicates from a sorted array
+in place:
+
+```javascript
+function dedupeSorted(arr) {
+  let write = 0;
+  for (let read = 0; read < arr.length; read++) {
+    if (read === 0 || arr[read] !== arr[read - 1]) arr[write++] = arr[read];
+  }
+  arr.length = write;
+  return arr;
+}
+```
+
+O(n) time and O(1) extra space — the same pattern partitions an array
+around a pivot in [quick sort](/blog/sorting-algorithms-explained), and moves
+all zeros to the end. When the two pointers move at 1× and 2× speed
+through a linked list, it becomes the
+[tortoise and hare](/blog/linked-lists-and-cycle-detection) cycle check.
+
 ## How to spot them
 
-<table>
-  <thead>
-    <tr>
-      <th>Signal in the problem</th>
-      <th>Reach for</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>"subarray / substring of size k" or "contiguous"</td>
-      <td>Sliding window</td>
-    </tr>
-    <tr>
-      <td>"longest / shortest window satisfying a condition"</td>
-      <td>Dynamic sliding window</td>
-    </tr>
-    <tr>
-      <td>Sorted array, find a pair / triplet</td>
-      <td>Converging two pointers</td>
-    </tr>
-    <tr>
-      <td>In-place partition, dedupe, or reverse</td>
-      <td>Two pointers (read + write)</td>
-    </tr>
-  </tbody>
-</table>
+<Table
+  data={{
+    headers: ['Signal in the problem', 'Reach for'],
+    rows: [
+      ['"subarray / substring of size k" or "contiguous"', 'Sliding window'],
+      ['"longest / shortest window satisfying a condition"', 'Dynamic sliding window'],
+      ['Sorted array, find a pair / triplet', 'Converging two pointers'],
+      ['In-place partition, dedupe, or reverse', 'Two pointers (read + write)'],
+      ['Linked list: middle, cycle, k-th from end', 'Fast and slow pointers'],
+    ],
+  }}
+/>
+
+## Practice, in order
+
+1. Maximum sum of a size-k subarray — fixed window.
+2. Longest substring without repeating characters — dynamic window.
+3. Longest substring with at most k distinct characters — dynamic window
+   with counts.
+4. Minimum window substring — shrink-while-valid.
+5. Two sum on a sorted array, then 3Sum — converging pointers.
+6. Container with most water — converging, moving the shorter side.
+7. Remove duplicates in place, move zeros — read/write pointers.
+8. [Sliding window maximum](/blog/sliding-window-maximum) — a window whose
+   state needs a monotonic deque rather than a running total.
+
+For each, say before coding which flavour it is and what the window's
+state is. That decision is the whole problem; the loop is a template.
 
 ## Wrap-up
 
@@ -145,3 +336,10 @@ window updates its state incrementally as it moves; two converging pointers
 use sorted order to discard half the possibilities each step. Both trade a
 nested loop for a single forward sweep — the difference between code that
 scales and code that times out.
+
+When you meet a new array or string problem, run through three questions
+in order: is it about a contiguous range (window)? Is the input sorted, or
+can I sort it without losing what's asked (converging pointers)? Am I
+rewriting the array in place (read/write)? One of the three fits a
+surprising share of the problems you'll see — and if none does, that's a
+strong hint to reach for a hash map, a heap or prefix sums instead.

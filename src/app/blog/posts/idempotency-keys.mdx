@@ -112,7 +112,9 @@ in one atomic step.
 
 **Fingerprint the request.** If a client bug reuses a key for a different
 payload, replaying the old response silently does the wrong thing. Store a
-hash of the body and reject mismatches.
+hash of the body and reject mismatches. Hash a canonical form — keys
+sorted, whitespace removed — so the same payload serialised by two client
+versions doesn't look different.
 
 **Decide what "in progress" means after a crash.** If the server dies
 between claiming the key and finishing, the record sits in `in_progress`
@@ -134,7 +136,177 @@ Only store responses the server would give again.
 
 **Expire keys.** Stripe keeps them for 24 hours. Pick a window longer than
 any client's retry horizon, then delete — the table otherwise grows
-forever.
+forever. Partitioning the table by day makes cleanup a cheap
+`DROP TABLE` of yesterday's partition instead of a slow `DELETE` that
+competes with live traffic; a background job that deletes in small
+batches works too.
+
+## Two retries at once, step by step
+
+The most common misunderstanding is that retries arrive one after another.
+On mobile networks they often overlap: the first attempt is still running
+when the client times out and sends the second. Trace both through the
+handler:
+
+1. Attempt 1 runs `INSERT ... ON CONFLICT DO NOTHING` and claims the key.
+2. Attempt 2 runs the same insert a millisecond later. The unique index
+   rejects it; `rowCount` is 0.
+3. Attempt 2 reads the row: `status = 'in_progress'`. It returns `409`.
+4. Attempt 1 charges the card, updates the row to `done`, returns `201`
+   — to a client that has already given up on it.
+5. The client, having seen a `409`, waits and retries. Attempt 3 finds
+   `done` and replays the stored `201`.
+
+The charge happened exactly once, and the client ends up with the right
+answer. That `409` should carry a `Retry-After`, so clients wait a sensible
+interval instead of hammering the endpoint while the first attempt
+finishes.
+
+## Making the work resumable
+
+The "stuck in progress" problem has a better fix than timeouts: break the
+request into **atomic phases** and record which phase completed. Each
+phase is a local database transaction; external calls sit between them
+and use their own idempotency keys.
+
+```javascript
+async function handleCharge(key, req) {
+  let rec = await keys.claimOrLoad(key, req);           // as before
+
+  if (rec.phase === 'started') {
+    await db.tx(async (t) => {
+      const order = await t.one(
+        'INSERT INTO charges (key, amount, status) VALUES ($1, $2, $3) RETURNING id',
+        [key, req.amount, 'pending']);
+      await keys.setPhase(t, key, 'charge_created', { chargeId: order.id });
+    });
+    rec = await keys.load(key);
+  }
+
+  if (rec.phase === 'charge_created') {
+    // external call; the provider dedupes on our derived key
+    const result = await provider.charge(req, { idempotencyKey: `${key}:provider` });
+    await db.tx(async (t) => {
+      await t.none('UPDATE charges SET status = $2, provider_id = $3 WHERE id = $1',
+        [rec.data.chargeId, 'succeeded', result.id]);
+      await keys.finish(t, key, 201, { id: rec.data.chargeId, status: 'succeeded' });
+    });
+  }
+  return keys.response(key);
+}
+```
+
+A crash anywhere leaves the key at the last completed phase. The next
+retry — or a background sweeper — picks up from there instead of starting
+over or giving up. Stripe has described building its own API this way,
+with the phases called recovery points.
+
+## Scope, storage and lifetime
+
+**Scope keys to the caller.** Store `(account_id, key)`, not just `key`. A
+UUID collision across customers is astronomically unlikely, but a client
+bug that sends the same hard-coded key for everyone is not — and without
+scoping, one customer could receive another customer's stored response.
+
+**Store the response you'd send.** Status code, body, and any headers the
+client relies on, such as `Location`. Keep it small; if a response is
+large, store a reference and rebuild it.
+
+**Choose where the table lives.** If the side effect is in a relational
+database, keep the keys table in the *same* database, so the key and the
+effect commit together. Redis is a reasonable home only for the
+"in progress" claim with a TTL, when the durable record is elsewhere.
+
+**Pick a retention window and say so.** Document it in the API: "keys are
+remembered for 24 hours". After that, the same key is treated as new.
+
+## A reusable middleware
+
+Once one endpoint needs this, others will. In Express, the pattern fits
+in a middleware that wraps any mutating route:
+
+```javascript
+function idempotent({ ttlHours = 24 } = {}) {
+  return async (req, res, next) => {
+    const key = req.get('Idempotency-Key');
+    if (!key) return next();                       // or 400 if you require it
+    const scoped = `${req.user.accountId}:${key}`;
+    const hash = sha256(req.method + req.path + JSON.stringify(req.body));
+
+    const existing = await keys.claim(scoped, hash, ttlHours);
+    if (existing?.mismatch) return res.status(422).json({ error: 'key reused' });
+    if (existing?.inProgress) return res.status(409).set('Retry-After', '1').end();
+    if (existing?.response) {
+      return res.status(existing.response.status).json(existing.response.body);
+    }
+
+    const originalJson = res.json.bind(res);
+    res.json = async (body) => {
+      if (res.statusCode < 500) await keys.finish(scoped, res.statusCode, body);
+      else await keys.release(scoped);             // let the client retry 5xx
+      return originalJson(body);
+    };
+    next();
+  };
+}
+
+app.post('/v1/charges', idempotent(), chargeHandler);
+```
+
+Note the method and path in the fingerprint: reusing a key across two
+different endpoints is a client bug and should be rejected, not replayed.
+There is also an IETF draft standardising the `Idempotency-Key` header
+for HTTP APIs; following its conventions makes your API behave the way
+client libraries increasingly expect.
+
+## Generating keys on the client
+
+The server can only dedupe what the client labels correctly:
+
+- **Generate the key when the user acts**, not when the request is sent.
+  The "Pay" button click creates the key; every retry of that click
+  reuses it.
+- **Persist it for long-running flows.** If the app might be killed and
+  restarted mid-payment, store the key with the pending operation so the
+  retry after restart uses the same one.
+- **Derive it from the operation when you can.** A job that charges a
+  subscription for a billing period can use `sub_123:2026-10` as its key,
+  which survives any number of restarts without storing anything.
+- **Never create it inside the retry loop.** A fresh key per attempt turns
+  every retry into a new charge.
+
+## Testing it
+
+The tests that matter all involve duplicates and timing:
+
+- Send the same request twice sequentially: one effect, identical
+  responses.
+- Send it twice concurrently: one effect, one `201`, one `409` (or both
+  `201` after the retry).
+- Same key, different body: `422`, no effect.
+- Kill the server between claiming the key and finishing: the next retry
+  completes the work exactly once.
+- Make the downstream fail with a `503`: the key is released, and a retry
+  can still succeed.
+
+## Common mistakes
+
+<Table
+  data={{
+    headers: ['mistake', 'what happens', 'fix'],
+    rows: [
+      ['check-then-insert instead of insert-or-conflict', 'two concurrent retries both proceed', 'claim the key with a unique constraint'],
+      ['key generated per attempt', 'every retry is a new operation', 'generate once per user action'],
+      ['caching 5xx responses', 'a transient failure becomes permanent for that key', 'store only deterministic outcomes'],
+      ['no request fingerprint', 'a reused key silently replays the wrong result', 'hash method, path and body; 422 on mismatch'],
+      ['keys not scoped to the account', 'a buggy client can read another account’s response', 'key by (account, key)'],
+      ['keys table in a different database from the effect', 'crash between the two leaves them inconsistent', 'same database, same transaction'],
+    ],
+  }}
+/>
+
+Every row in that table has shipped in a real payments API at some point.
+None of them shows up in a test that sends one request at a time.
 
 ## Idempotency beyond HTTP
 
@@ -154,3 +326,7 @@ The same shape shows up anywhere delivery is at-least-once:
 Networks guarantee at-least-once at best. Exactly-once *effects* aren't
 something the network gives you; they're something you build on the
 receiving end — and an idempotency key is the smallest version of that.
+Pair it with [retries, backoff and jitter](/blog/retries-backoff-and-jitter)
+on the client and an [outbox](/blog/dual-writes-and-the-outbox-pattern) on
+the server, and "the request timed out" stops being a question anyone has
+to answer by hand.

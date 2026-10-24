@@ -73,7 +73,9 @@ The same overlap explains the arithmetic of cluster sizes:
 }} />
 
 That's why clusters use odd sizes: a fourth server adds cost without
-tolerating another failure.
+tolerating another failure. And bigger isn't better past five or seven —
+every extra server is another replica each write must reach before a
+majority is assembled.
 
 ## Replication
 
@@ -91,6 +93,81 @@ If a follower's log has diverged — say it missed messages while
 partitioned — the leader walks back to the last entry they agree on and
 overwrites the rest.
 
+### The consistency check
+
+How does the leader find "the last entry they agree on"? Every
+`AppendEntries` carries the index and term of the entry just before the new
+ones — `prevLogIndex` and `prevLogTerm`. A follower accepts the message
+only if its own log has an entry at `prevLogIndex` with that same term:
+
+```javascript
+function onAppendEntries(req) {
+  if (req.term < currentTerm) return { success: false, term: currentTerm };
+  becomeFollower(req.term, req.leaderId);              // valid leader; reset timer
+
+  const prev = log[req.prevLogIndex];
+  if (req.prevLogIndex > 0 && (!prev || prev.term !== req.prevLogTerm)) {
+    return { success: false, term: currentTerm };      // leader will back up and retry
+  }
+  // truncate only at the first real conflict, then append what's missing
+  req.entries.forEach((entry, i) => {
+    const idx = req.prevLogIndex + 1 + i;
+    if (log[idx] && log[idx].term !== entry.term) log.length = idx;
+    if (!log[idx]) log[idx] = entry;
+  });
+  const lastNew = req.prevLogIndex + req.entries.length;
+  if (req.leaderCommit > commitIndex) commitIndex = Math.min(req.leaderCommit, lastNew);
+  return { success: true, term: currentTerm };
+}
+```
+
+(Truncating only on a real conflict matters: a delayed, older
+`AppendEntries` arriving late must not chop off entries a newer message
+already added.)
+
+On failure, the leader decrements its guess for that follower and tries
+again, until they match. This gives Raft its **log matching property**: if
+two logs have an entry with the same index and term, they're identical up
+to that point. One check at the boundary guarantees the whole prefix.
+
+### The vote, in code
+
+The voting rules are just as small:
+
+```javascript
+function onRequestVote(req) {
+  if (req.term > currentTerm) becomeFollower(req.term);
+  const upToDate =
+    req.lastLogTerm > lastLogTerm() ||
+    (req.lastLogTerm === lastLogTerm() && req.lastLogIndex >= lastLogIndex());
+
+  if (req.term === currentTerm && (votedFor === null || votedFor === req.candidateId) && upToDate) {
+    votedFor = req.candidateId;
+    persist();                        // currentTerm and votedFor must survive a crash
+    resetElectionTimer();
+    return { voteGranted: true, term: currentTerm };
+  }
+  return { voteGranted: false, term: currentTerm };
+}
+```
+
+The `persist()` line is easy to miss and essential. A server that votes,
+crashes and restarts without remembering its vote could vote again in the
+same term — and two leaders in one term is exactly what Raft exists to
+prevent.
+
+### A subtle commit rule
+
+A new leader may hold entries from earlier terms that were replicated to a
+majority but never marked committed. It might seem safe to commit them as
+soon as they're on a majority — and it isn't: the Raft paper shows a
+sequence of crashes where such an entry is later overwritten. The rule is
+that a leader only commits entries **from its own term** by counting
+replicas; earlier entries become committed indirectly, when an entry from
+the current term after them commits. That's why new leaders commonly
+append a no-op entry as soon as they're elected: it commits quickly and
+carries everything before it along.
+
 ## Stale leaders
 
 A leader that was cut off by a network partition may not know it's been
@@ -100,6 +177,64 @@ term**, and any server seeing a higher term immediately steps down to
 follower. Terms work as a logical clock that makes old leaders harmless —
 the same idea as the fencing tokens in
 [distributed locks](/blog/distributed-locks-and-fencing).
+
+## Reads are trickier than they look
+
+Writes go through the log, so they're safe. Reads are a trap: a leader
+that answers a read from its own state might be a stale leader that
+doesn't know it's been replaced, and return data that's already been
+overwritten. Options, from safest to fastest:
+
+- **Put reads in the log.** Correct, but every read costs a full
+  replication round.
+- **ReadIndex.** The leader records its current commit index, confirms it
+  is still leader with one round of heartbeats to a majority, waits until
+  it has applied up to that index, then answers. One round trip, no log
+  write. etcd uses this for linearizable reads.
+- **Leader leases.** The leader assumes no one else can be elected for a
+  bounded time after a successful heartbeat round, and serves reads
+  locally within that window. Fastest, but correct only if clocks don't
+  drift beyond the margin.
+- **Follower reads.** Serve from any replica, accepting staleness. Fine
+  for many workloads, and explicitly not linearizable.
+
+## Keeping the cluster healthy
+
+A few refinements matter in production more than the core algorithm does:
+
+- **Pre-vote.** A server cut off from the cluster keeps timing out and
+  incrementing its term. When it reconnects, its high term forces the
+  healthy leader to step down — an unnecessary election. With pre-vote, a
+  server first asks "would you vote for me?" without changing its term,
+  and only starts a real election if a majority says yes.
+- **Snapshots.** The log can't grow forever. Each server periodically
+  snapshots its state machine and discards the log before that point. A
+  follower that's too far behind is sent the snapshot instead of the
+  missing entries.
+- **Membership changes.** Adding or removing servers changes what
+  "majority" means, and switching all servers at once could briefly allow
+  two majorities. Raft changes membership one server at a time (or with
+  joint consensus, where both old and new configurations must agree), so
+  every possible majority overlaps.
+- **Timeout tuning.** The election timeout must be much longer than a
+  heartbeat round trip, or healthy leaders get deposed by noise. In a
+  single data centre, heartbeats around 100 ms and election timeouts of a
+  second or so are common; across zones, scale them up with the latency.
+
+<Table data={{
+  headers: ["Symptom", "Likely cause"],
+  rows: [
+    ["Frequent leader changes", "Election timeout too close to network or disk latency; overloaded leader"],
+    ["Writes stall with all servers up", "Slow disk on a majority — every commit waits for fsync"],
+    ["Cluster unavailable after losing 2 of 5", "Not a bug: 3 remain, still a majority — check client endpoints"],
+    ["Follower permanently behind", "Needs a snapshot; network or disk too slow to catch up"]
+  ]
+}} />
+
+Disk latency deserves the emphasis: every server must durably write each
+entry before acknowledging it, so a consensus cluster is only as fast as
+the `fsync` on the median server. That's why etcd's documentation is so
+insistent about SSDs.
 
 ## What it costs
 
@@ -113,10 +248,47 @@ the same idea as the fencing tokens in
 - **The leader is a bottleneck** for writes. Large systems run many small
   Raft groups, each owning a range of the data.
 
+## Raft, Paxos and the rest
+
+Raft wasn't the first consensus algorithm. **Paxos** came decades earlier
+and is provably correct, but it's famously hard to understand and leaves
+much of a practical system — leader election, log management, membership
+— to the implementer. Raft's contribution was decomposition: leader
+election, log replication and safety as separate, explainable pieces, with
+one strong leader doing most of the work. The guarantees are equivalent;
+the difference is how many engineers can implement and debug it.
+
+Other variants trade simplicity for throughput or latency: Multi-Paxos
+(Paxos with a stable leader, close to Raft in practice), EPaxos (no single
+leader, so nearby clients commit faster), and ZooKeeper's Zab (similar to
+Raft, predating it). For almost every engineer, the choice isn't which
+algorithm to implement — it's which battle-tested system to use.
+
+## Where you'll meet it
+
+- **Kubernetes** stores all cluster state in etcd. When the control plane
+  is slow or can't elect a leader, it's often etcd's disk or network
+  latency underneath.
+- **Service discovery and configuration** in Consul and etcd, and leader
+  election for your own services — a lease on an etcd key is a common way
+  to pick one active instance of a scheduler.
+- **Distributed SQL** — CockroachDB, TiKV/TiDB and YugabyteDB split data
+  into ranges and run a Raft group per range, which is how they scale
+  writes past a single leader.
+- **Kafka** replaced ZooKeeper with KRaft, its own Raft-based controller
+  quorum, for cluster metadata.
+
+In each case the same behaviour shows through: writes need a majority,
+the cluster pauses rather than diverges when it loses one, and latency is
+set by the slowest server in the fastest majority.
+
 ## The takeaway
 
 Raft keeps a cluster consistent with three ideas: one leader per term,
 elected by a majority with randomized timeouts; writes committed only once
 a majority has them; and terms that make any out-of-date leader step down.
 You'll rarely implement it — but etcd, Kubernetes and your database's
-replication behave the way they do because of it.
+replication behave the way they do because of it. When a cluster refuses
+writes after losing a majority, elects leaders too often, or slows down
+with a sluggish disk, those three ideas explain why — and point straight
+at the fix.

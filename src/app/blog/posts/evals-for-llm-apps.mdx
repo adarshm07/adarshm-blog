@@ -179,6 +179,108 @@ always a change in quality.
   order, fixed fixtures, stubbed tools. If the tool the agent calls returns
   different data every run, you are measuring your fixtures.
 
+### How many cases is enough to tell?
+
+Twenty cases are enough to start, and not enough to separate two prompts
+that are close. The uncertainty on a pass rate shrinks with the square
+root of the number of cases. As a rough guide, at around an 80% pass rate:
+
+<Table
+  data={{
+    headers: ['cases', 'approx. 95% margin of error', 'can reliably detect'],
+    rows: [
+      ['20', '± 18 points', 'only large changes'],
+      ['50', '± 11 points', 'changes of 15–20 points'],
+      ['200', '± 6 points', 'changes of ~8 points'],
+      ['1,000', '± 2.5 points', 'small changes'],
+    ],
+  }}
+/>
+
+Two ways to do better without thousands of cases. **Compare on the same
+cases** — look at the cases that flipped between versions rather than at
+two independent pass rates; paired differences are far less noisy.
+And **grow the set from failures**: every production bug becomes a case, so
+the set gets bigger exactly where your system is weakest.
+
+## Judges have biases
+
+A model grading model output inherits systematic biases you need to design
+around:
+
+- **Position bias.** In "which of these two answers is better?", judges
+  favour one position. Run each comparison twice with the order swapped,
+  and count it only if both runs agree.
+- **Length bias.** Longer answers tend to be rated higher, even when the
+  extra length is padding. Put "concise" in the rubric when it matters, and
+  check whether your score improvements are just verbosity.
+- **Self-preference.** A judge may favour outputs that read like its own.
+  Where it matters, validate against human labels, or use a different
+  model family to judge.
+- **Leniency drift.** Small rubric wording changes move scores. Treat the
+  judge prompt as versioned code and re-validate against your hand-graded
+  set whenever it changes.
+
+**Pairwise comparison** is often easier for a judge than absolute scoring:
+"is A or B better for this rubric?" is a more stable question than "rate
+this from 1 to 10". It's well suited to choosing between two prompt or
+model versions; absolute pass/fail suits tracking a single system over time.
+
+## Evaluating agents and RAG
+
+Multi-step systems need checks at more than one point, because a correct
+final answer can hide a wasteful or risky path, and a wrong one can come
+from any stage.
+
+**For agents**, grade the trajectory as well as the outcome:
+
+- Did it reach the right final state? (Check the state — the issue
+  created, the file changed — not just the agent's claim that it did.)
+- Did it call any tool it shouldn't have, or skip a required confirmation?
+- How many turns and tokens did it use? A regression from five tool calls
+  to fifteen is a real cost even if the answer is unchanged.
+
+Stub the tools with fixed fixtures so runs are comparable, and keep a
+couple of end-to-end runs against real systems as a smoke test. See
+[the agent loop](/blog/the-agent-loop).
+
+**For RAG**, score retrieval and generation separately — recall@k on
+labelled question-to-chunk pairs, then answer quality given the right
+chunks — as described in [RAG retrieval](/blog/rag-retrieval-explained).
+Add a **faithfulness** check: does every claim in the answer appear in the
+retrieved sources? A judge with the sources and the answer can grade that
+far more reliably than it can grade correctness in general.
+
+## Evals in CI
+
+Once the runner exists, put it where changes happen:
+
+- **On every pull request** that touches prompts, tool definitions, model
+  settings or retrieval code, run the dev set and post the result —
+  score, cost, and the list of flipped cases — as a PR comment.
+- **Gate on regressions, not on a score.** "No case that passed on `main`
+  may fail here without a note" catches real breakage; a fixed threshold
+  invites tuning to the threshold.
+- **Run the held-out set** before releases and model upgrades, not on
+  every commit.
+- **Cache model responses** by (prompt version, input) for unchanged
+  cases, so a PR that only touches one tool's description doesn't pay to
+  re-run everything.
+
+## Online: evals after launch
+
+The offline set tells you a change is safe. Production tells you whether
+the cases you chose still look like real traffic. Close the loop:
+
+- **Sample live traffic** — say 1% of conversations — and run the same
+  judges on it. Trends in that score catch drift your fixed set can't:
+  new kinds of questions, a product change, a data source going stale.
+- **Collect explicit signals**: thumbs up/down, "regenerate" clicks,
+  escalations to a human. They're noisy individually and valuable in
+  aggregate.
+- **Promote interesting production cases** into the offline set,
+  especially failures. That's how the eval set stays representative.
+
 ## What to measure besides correctness
 
 Once correctness is tracked, the same harness answers questions you'd

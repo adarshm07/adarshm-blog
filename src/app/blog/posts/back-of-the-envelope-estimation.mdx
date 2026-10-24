@@ -76,6 +76,199 @@ An estimate is useful only if it changes the design. From the walkthrough:
 Bandwidth is worth a line too: 4,000 reads a second × 500 bytes is 2 MB/s.
 Negligible — and saying so is part of the answer.
 
+The full design built on these numbers is in the
+[URL shortener case study](/blog/design-a-url-shortener).
+
+## Four more worked examples
+
+The same method, on systems with very different shapes. Each one ends at
+the number that matters most — it's rarely the same one twice.
+
+### A chat app
+
+50 million daily users, 40 messages each a day, 200 bytes a message.
+
+- Messages: 50M × 40 = 2 × 10⁹/day → ÷ 10⁵ = **~20,000/s**, peak maybe 3×.
+- Storage: 2 × 10⁹ × 200 B = 400 GB/day → **~150 TB/year**, ×3 for
+  replication.
+- Connections: if 40% are online at peak, **20 million open sockets**. At
+  ~200,000 per gateway, that's about 100 gateways.
+
+**The number that matters**: open connections. Message throughput is
+moderate; holding 20 million long-lived sockets is what shapes the
+architecture. See the [chat system](/blog/design-a-chat-system).
+
+### Photo sharing
+
+10 million uploads a day, 2 MB each after compression, three resized
+copies adding another ~1 MB, 500 million feed views a day showing ~10
+photos each.
+
+- Upload storage: 10⁷ × 3 MB = 30 TB/day → **~11 PB/year**.
+- Upload bandwidth: 30 TB ÷ 10⁵ s = **300 MB/s** inbound.
+- Image views: 5 × 10⁹/day → **~50,000/s**; at ~200 KB a thumbnail-sized
+  image, that's **10 GB/s** outbound.
+
+**The number that matters**: 10 GB/s out. No origin should serve that;
+it's a [CDN](/blog/cdn-explained) problem. And petabytes a year means
+object storage with tiering — recent photos hot, old ones cold — not
+servers with disks.
+
+### Video streaming
+
+1 million concurrent viewers at peak, average bitrate 5 Mbit/s.
+
+- Egress: 10⁶ × 5 Mbit/s = 5 Tbit/s.
+- Per edge server pushing ~40 Gbit/s: **~125 servers**' worth of capacity,
+  spread across many locations near viewers.
+
+**The number that matters**: 5 Tbit/s is beyond any single data centre's
+comfortable egress, so the design is defined by edge caching and adaptive
+bitrate, not by the application servers at all.
+
+### A news feed
+
+200 million daily users opening the feed 10 times a day; 50 million posts
+a day; 200 followers on average.
+
+- Reads: 2 × 10⁹/day → **~20,000/s**.
+- Fan-out writes if you push each post to every follower: 50M × 200 =
+  10¹⁰/day → **~100,000/s**.
+- Feed storage at 800 IDs × 8 bytes per user: 2 × 10⁸ × 6.4 KB ≈ **1.3 TB**.
+
+**The number that matters**: fan-out writes outnumber reads 5:1 — but each
+is tiny and asynchronous, which is why push still wins. The tail (accounts
+with millions of followers) is what breaks it; see the
+[news feed](/blog/design-a-news-feed).
+
+## From requests per second to servers
+
+Once you have a peak rate, the server count is one division — if you know
+what one server can do. Two ways to estimate that:
+
+**From CPU time.** If a request takes 5 ms of CPU, one core handles ~200 a
+second; a 16-core server, ~3,000. At 12,000 a second peak, that's 4
+servers — plan 6–8 for headroom and failures.
+
+**From concurrency, with Little's law.** The average number of requests
+in flight equals arrival rate × time each spends in the system:
+
+```
+in-flight = throughput × latency
+12,000 req/s × 0.05 s = 600 concurrent requests
+```
+
+Little's law is the most useful formula in capacity planning because it
+connects three numbers you usually have two of. It tells you how many
+database connections you need (rate × query time — see
+[connection pooling](/blog/connection-pooling)), how many worker threads,
+or how many messages sit in a queue.
+
+**Then add headroom.** Run servers at 50–70% of measured capacity at
+peak, not 100% — latency climbs steeply as utilisation approaches 100%,
+because queues form. And add N+1 or N+2 so losing a machine (or a whole
+zone) doesn't overload the rest.
+
+## Storage, properly
+
+Raw data size is the start of a storage estimate, not the end:
+
+<Table
+  data={{
+    headers: ['factor', 'typical multiplier', 'why'],
+    rows: [
+      ['replication', '×3', 'three copies for durability and availability'],
+      ['indexes', '×1.2–2', 'every secondary index is another copy of some columns'],
+      ['overhead', '×1.1–1.5', 'row headers, page fill factor, fragmentation'],
+      ['headroom', '×1.5', 'never run disks above ~70% full'],
+      ['backups', '+1× or more', 'depends on retention and snapshot strategy'],
+    ],
+  }}
+/>
+
+Multiply them together and 3 TB of "data" can mean 15–20 TB of provisioned
+disk. That's exactly the kind of gap that turns "fits on one machine" into
+"doesn't", so do the multiplication out loud.
+
+## Sizing a cache
+
+"Put a cache in front" invites the next question: how big? Two inputs
+decide it.
+
+**The hot set.** Traffic is rarely uniform — a small fraction of items gets
+most of the reads. A common working assumption is that ~20% of items get
+~80% of traffic; for social content the skew is often far steeper. Cache
+the hot fraction of *recent* data, not all of it:
+
+```
+URL shortener: 40 new links/s × 86,400 s × 500 B ≈ 1.7 GB of new links a day
+keep the last ~20 days hot → ~35 GB
+```
+
+**The hit rate you need.** Work backwards from what the database can take.
+If the database comfortably handles 2,000 reads a second and peak traffic
+is 12,000, the cache must absorb at least 10,000 — an 83% hit rate, with a
+margin on top. If your hot-set estimate can't plausibly deliver that, you
+need read replicas as well as a cache.
+
+Then check the cache's own limits: ~35 GB fits one node's memory, and
+12,000 operations a second is a small fraction of what one cache node can
+serve. One primary plus a replica, for availability rather than capacity.
+
+## Estimating queues
+
+For anything asynchronous — fan-out, emails, video transcoding — the
+question is whether workers keep up, and how far behind they fall in a
+burst.
+
+- **Steady state**: workers must process faster than jobs arrive, with
+  margin. If each job takes 200 ms and 600 arrive a second, you need at
+  least 600 × 0.2 = 120 concurrent workers — Little's law again.
+- **Bursts**: if a campaign enqueues 10 million jobs and workers drain
+  2,000 a second, the backlog takes 5,000 seconds — about 80 minutes. Is
+  that acceptable for this job type? If not, add workers, or prioritise
+  so urgent jobs skip the line.
+- **Queue storage**: 10 million jobs × 1 KB = 10 GB sitting in the broker.
+  Fine for a log like Kafka; worth checking for an in-memory broker.
+
+## An interview script
+
+In an interview, estimation should take two or three minutes and leave a
+small table on the whiteboard that the rest of the design refers back to.
+A shape that works:
+
+1. **Ask or state the scale**: daily active users, actions per user per
+   day, read/write ratio, object sizes, retention. Write them down.
+2. **Compute writes per second and reads per second**, average and peak.
+3. **Compute storage** for the retention period, then mention the
+   multipliers.
+4. **Compute bandwidth** if large objects are involved; skip it with one
+   sentence if they aren't.
+5. **Say what each number implies**: "40 writes a second — one database";
+   "12,000 reads a second — cache plus a few app servers"; "10 GB/s out —
+   this is a CDN design".
+
+Then move on. Returning to the table later ("we said 35 GB hot, so one
+cache node") is what makes the estimates look like engineering rather than
+ritual.
+
+## Common mistakes
+
+- **Mixing bits and bytes.** Network speeds are in bits (Gbit/s), storage
+  in bytes. A 1 Gbit/s link moves ~125 MB/s, not 1 GB/s. A factor of 8 is
+  enough to change a design.
+- **Using daily averages for capacity.** Traffic follows people's days:
+  peak hours can be 3× the average, and launches or live events 10× or
+  more.
+- **Ignoring the read/write ratio.** "1,000 requests a second" hides
+  whether that's 990 reads or 990 writes — two completely different
+  systems.
+- **Forgetting the fan-out.** One user action often becomes many internal
+  requests: a page view might call ten services, and a post might write to
+  a thousand feeds. Estimate the internal rate, not just the external one.
+- **False precision.** "We need 37.4 servers" sounds rigorous and isn't.
+  "Tens of servers" is the honest answer, and it's enough to decide.
+
 ## Habits that keep it honest
 
 - **State assumptions before computing**, and write them where the
@@ -93,6 +286,16 @@ Negligible — and saying so is part of the answer.
   several times.
 - **Sanity-check against something known.** If your estimate says a chat
   app for a small company needs 500 servers, an assumption is wrong.
+
+## Numbers age; ratios don't
+
+Hardware keeps getting faster, so specific figures — requests per core,
+cache-node throughput, SSD latency — drift over the years. The *ratios*
+between them hold up much better: memory is roughly a thousand times faster
+than an SSD read, which is far faster than a network round trip, which is
+far faster than crossing an ocean. Designs are decided by those ratios.
+When a precise number matters, measure it on your own hardware with your
+own workload, and use the estimate only to decide what's worth measuring.
 
 ## Try it
 

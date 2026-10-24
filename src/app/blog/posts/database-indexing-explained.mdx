@@ -1,7 +1,7 @@
 ---
 title: "Database Indexing: Why Your Query Is Slow (and How B-Trees Fix It)"
 publishedAt: "2026-07-13"
-summary: "What an index physically is, how B-trees make lookups logarithmic, composite index ordering, covering indexes, and the query patterns that silently refuse to use your index."
+summary: "What an index physically is, how B-trees make lookups logarithmic, composite index ordering, covering and partial indexes, reading EXPLAIN ANALYZE, index types beyond the B-tree, adding indexes safely in production, and the query patterns that silently refuse to use your index."
 tags: "System Design"
 ---
 
@@ -24,6 +24,12 @@ They use a **B-tree** (B+ tree, in practice): a search tree where each
 node is a disk page holding hundreds of keys, so the tree stays extremely
 shallow. Ten million rows fit in a tree three or four levels deep — a
 lookup touches three or four pages instead of thousands.
+
+Why so shallow? A typical page is 8 KB. With ~16-byte keys plus pointers,
+one internal page holds a few hundred entries. Three levels of fan-out 300
+is 300³ = 27 million leaf entries. The top one or two levels are read so
+often that they're always in memory, so a lookup usually costs one or two
+actual disk reads.
 
 ```sql
 CREATE INDEX idx_users_email ON users (email);
@@ -49,6 +55,18 @@ So the discipline is: index what your queries filter, join, and sort on —
 and nothing else. Unused indexes are pure tax; every serious database
 exposes stats (`pg_stat_user_indexes` in Postgres) showing which indexes
 haven't been touched in months.
+
+```sql
+-- indexes never used since stats were last reset, biggest first
+SELECT relname AS table, indexrelname AS index,
+       pg_size_pretty(pg_relation_size(indexrelid)) AS size
+FROM pg_stat_user_indexes
+WHERE idx_scan = 0
+ORDER BY pg_relation_size(indexrelid) DESC;
+```
+
+Check replicas too before dropping anything — an index unused on the
+primary may be serving reporting queries on a replica.
 
 ## Composite indexes: order is everything
 
@@ -76,6 +94,35 @@ alone. Two corollaries worth pinning:
 - An index on `(a, b)` makes a separate index on `(a)` redundant — but not
   one on `(b)`.
 
+### Sorting and pagination
+
+The same index can also satisfy the sort. "This user's 20 most recent
+orders" is:
+
+```sql
+SELECT * FROM orders
+WHERE user_id = 42
+ORDER BY created_at DESC
+LIMIT 20;
+```
+
+With `(user_id, created_at)`, the database jumps to user 42's section and
+reads 20 entries backwards — no sort, no matter how many orders the user
+has. Without it, the database fetches all of the user's orders and sorts
+them to keep 20. The difference grows with the data, which is why list
+endpoints get slow gradually and then suddenly. Pair this with
+[cursor pagination](/blog/cursor-vs-offset-pagination) so page 500 is as
+cheap as page 1.
+
+### One composite index or two single ones?
+
+Given separate indexes on `user_id` and `status`, Postgres can combine
+them with a **bitmap scan**: build a bitmap of matching row locations from
+each index, AND them, then visit the table. It works, and it's flexible,
+but it's usually slower than one composite index designed for the query,
+and it can't provide ordering. Design composite indexes for your hot
+queries; let bitmap combinations handle the long tail.
+
 ## Covering indexes: skip the table entirely
 
 Normally an index lookup finds the pointer, then visits the table for the
@@ -91,59 +138,144 @@ SELECT created_at, total FROM orders WHERE user_id = 42;
 ```
 
 For hot read paths (dashboards, list endpoints) this is often the single
-biggest lever after the index itself.
+biggest lever after the index itself. In Postgres, index-only scans also
+depend on the visibility map being current — a recently vacuumed table
+gets the full benefit.
+
+### Don't forget foreign keys
+
+Postgres doesn't index foreign key columns automatically. Deleting a
+customer then has to check every row of `orders` for a matching
+`customer_id` — a full scan per delete, and joins from customer to orders
+scan too. If you join or cascade on a foreign key, index it.
+
+## Partial and expression indexes
+
+Two features that make indexes smaller and more targeted:
+
+**Partial indexes** index only rows matching a condition:
+
+```sql
+-- 99% of jobs are 'done'; the queue only ever looks for pending ones
+CREATE INDEX idx_jobs_pending ON jobs (run_at) WHERE status = 'pending';
+```
+
+The index holds 1% of the rows, stays in memory, and is cheap to update.
+It's also the neat way to enforce conditional uniqueness —
+`CREATE UNIQUE INDEX ... ON users (email) WHERE deleted_at IS NULL` lets a
+deleted account's email be reused.
+
+**Expression indexes** index the result of a function, so queries that
+filter on that expression can use it:
+
+```sql
+CREATE INDEX idx_users_email_lower ON users (lower(email));
+SELECT * FROM users WHERE lower(email) = lower($1);   -- uses the index
+```
 
 ## Why the database ignores your index
 
 The most useful debugging skill here is recognizing the query shapes that
 *look* indexed but aren't:
 
-<table>
-  <thead>
-    <tr>
-      <th>Query pattern</th>
-      <th>Problem</th>
-      <th>Fix</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>WHERE lower(email) = ?</td>
-      <td>function hides the sorted values</td>
-      <td>index lower(email) — an expression index</td>
-    </tr>
-    <tr>
-      <td>WHERE status != 'done'</td>
-      <td>negation matches most of the table</td>
-      <td>rethink; partial index on the rare value</td>
-    </tr>
-    <tr>
-      <td>WHERE name LIKE '%son'</td>
-      <td>no leftmost prefix to descend by</td>
-      <td>full-text or trigram index</td>
-    </tr>
-    <tr>
-      <td>WHERE age + 1 = 30</td>
-      <td>arithmetic on the column</td>
-      <td>rewrite as age = 29</td>
-    </tr>
-    <tr>
-      <td>Tiny table / low-selectivity column</td>
-      <td>scan is genuinely cheaper</td>
-      <td>nothing — this is correct behavior</td>
-    </tr>
-  </tbody>
-</table>
+<Table
+  data={{
+    headers: ['Query pattern', 'Problem', 'Fix'],
+    rows: [
+      ['WHERE lower(email) = ?', 'function hides the sorted values', 'index lower(email) — an expression index'],
+      ["WHERE status != 'done'", 'negation matches most of the table', 'rethink; partial index on the rare value'],
+      ["WHERE name LIKE '%son'", 'no leftmost prefix to descend by', 'full-text or trigram index'],
+      ['WHERE age + 1 = 30', 'arithmetic on the column', 'rewrite as age = 29'],
+      ["WHERE user_id = '42' (text vs bigint)", 'implicit cast on the column side', 'pass the right type from the app'],
+      ['WHERE a = 1 OR b = 2', 'one index can’t serve both branches', 'separate indexes + bitmap OR, or UNION'],
+      ['Tiny table / low-selectivity column', 'scan is genuinely cheaper', 'nothing — this is correct behavior'],
+    ],
+  }}
+/>
 
 The last row matters: the query planner uses statistics to *choose*
 between index and scan, and for a column like `is_active` where 95% of
 rows match, the scan wins honestly. Indexes pay off in proportion to
-**selectivity** — how small a slice of the table the filter keeps.
+**selectivity** — how small a slice of the table the filter keeps. As a
+rough rule, once a filter matches more than a few percent of a large
+table, reading the table sequentially beats jumping around via the index.
 
-The tool for all of this is `EXPLAIN ANALYZE`. Reading its output —
-`Seq Scan` where you expected `Index Scan`, row estimates wildly off,
-sorts that shouldn't exist — is the highest-leverage database skill an
-application developer can build.
+## Reading EXPLAIN ANALYZE
+
+The tool for all of this is `EXPLAIN ANALYZE`, which runs the query and
+reports what the planner chose and what actually happened:
+
+```
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM orders WHERE user_id = 42 ORDER BY created_at DESC LIMIT 20;
+
+Limit  (cost=0.43..61.20 rows=20) (actual time=0.031..0.058 rows=20 loops=1)
+  Buffers: shared hit=24
+  ->  Index Scan Backward using idx_orders_user_date on orders
+        (cost=0.43..9120.11 rows=3002) (actual time=0.030..0.054 rows=20 loops=1)
+        Index Cond: (user_id = 42)
+Planning Time: 0.110 ms
+Execution Time: 0.079 ms
+```
+
+What to look for:
+
+- **The scan type.** `Seq Scan` on a big table where you expected an index
+  is the first red flag. `Index Scan Backward` here means the index also
+  provided the ordering.
+- **Estimated vs actual rows.** `rows=3002` estimated against a real count
+  of 30 or 300,000 means stale statistics — run `ANALYZE` on the table —
+  or a correlation the planner can't see.
+- **Sort nodes.** A `Sort` with `Sort Method: external merge` means it
+  spilled to disk; an index matching the `ORDER BY` removes it entirely.
+- **Buffers.** `shared hit` pages came from memory, `read` came from disk.
+  A fast query in testing that reads thousands of pages will be slow on a
+  cold cache in production.
+
+Reading this output is the highest-leverage database skill an application
+developer can build. Pair it with `pg_stat_statements`, which ranks queries
+by total time across the whole workload — the slowest query isn't always
+the one costing the most.
+
+## Beyond the B-tree
+
+B-trees handle equality, ranges and sorting on ordinary values. Other
+index types exist for data a sorted tree can't help with:
+
+<Table
+  data={{
+    headers: ['index type', 'good for', 'example'],
+    rows: [
+      ['B-tree', 'equality, ranges, sorting', 'emails, timestamps, IDs'],
+      ['Hash', 'equality only', 'rarely worth it over a B-tree'],
+      ['GIN (inverted)', 'values containing many elements', 'JSONB keys, arrays, full-text search'],
+      ['GiST / SP-GiST', 'geometric and range overlap', 'locations, time ranges, nearest-neighbour'],
+      ['BRIN', 'huge tables physically ordered by the column', 'append-only logs by timestamp'],
+      ['Vector (HNSW, IVF)', 'approximate nearest neighbour', 'embeddings for semantic search'],
+    ],
+  }}
+/>
+
+GIN is the same idea as a search engine's
+[inverted index](/blog/inverted-index-and-full-text-search). BRIN stores
+only the min and max per block range, so it's tiny — a few kilobytes for a
+huge table — and excellent when rows arrive in timestamp order.
+
+## Adding indexes in production
+
+`CREATE INDEX` on a large, busy table takes a lock that blocks writes for
+the duration of the build — minutes to hours. In Postgres, use:
+
+```sql
+CREATE INDEX CONCURRENTLY idx_orders_user_date ON orders (user_id, created_at);
+```
+
+It builds without blocking writes, at the cost of taking longer and doing
+two passes. If it fails partway, it leaves an `INVALID` index behind that
+must be dropped and retried. MySQL's InnoDB supports online index builds
+for most index types too. Either way, schedule large builds for quiet
+hours and watch replication lag while they run — the index build is
+replicated as well.
 
 ## A word on primary keys and row storage
 
@@ -155,13 +287,16 @@ access path you have, and a fat primary key (like a random UUID) bloats
 sequential ids or UUIDv7 are kinder to InnoDB than random UUIDv4.
 Postgres tables are heaps instead, so the same concerns show up
 differently (index bloat, `VACUUM`), but the B-tree mental model holds in
-both.
+both. Random keys hurt any B-tree for the same reason: each insert lands
+on a random leaf page, so the working set is the whole index instead of
+its right-hand edge. See [unique ID generation](/blog/unique-id-generation-snowflake).
 
 ## Wrap-up
 
 An index is a sorted B-tree copy of chosen columns: logarithmic lookups,
 free ordering, cheap ranges — paid for on every write. Composite indexes
 follow the leftmost-prefix rule (equality columns first, then ranges),
-covering indexes let hot queries skip the table, and functions or leading
-wildcards on an indexed column quietly disable it. When in doubt, ask the
-database itself: `EXPLAIN ANALYZE` never lies.
+covering indexes let hot queries skip the table, partial indexes keep
+indexes small, and functions or leading wildcards on an indexed column
+quietly disable it. Build them concurrently, drop the ones nobody uses,
+and when in doubt, ask the database itself: `EXPLAIN ANALYZE` never lies.

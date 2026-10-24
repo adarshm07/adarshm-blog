@@ -24,7 +24,9 @@ Ask before designing. A reasonable scope:
 - Pricing rules will change (hourly, weekend flat rate, first hour free).
 
 Out of scope, said out loud: reservations, payment processing details,
-license plate recognition, multiple lots.
+license plate recognition, multiple lots. Writing these down takes a minute and gives
+you something to point at when the interviewer later asks for one of them
+as an extension — you've already shown where it would plug in.
 
 ## 2. Find the entities
 
@@ -70,6 +72,7 @@ class ParkingSpot {
   private occupied = false
   constructor(readonly id: string, readonly size: Size) {}
   fits(v: Vehicle) { return this.size >= v.size }
+  isFree() { return !this.occupied }
   tryReserve(): boolean {            // must be atomic — see below
     if (this.occupied) return false
     this.occupied = true
@@ -109,6 +112,7 @@ class ParkingLot {
     const ticket = this.active.get(ticketId)
     if (!ticket) throw new UnknownTicketError(ticketId)
     const fee = this.pricing.fee(ticket, now)
+    ticket.close()                   // throws if already closed
     ticket.spot.release()
     this.active.delete(ticketId)
     return fee
@@ -120,6 +124,125 @@ Notice what `ParkingLot` doesn't know: which spot is "best", or how fees are
 computed. Both come in through the constructor — plain
 [dependency injection](/blog/dependency-injection) — so tests can pass a
 fixed allocator and a fake clock.
+
+### The supporting classes
+
+The rest of the model is deliberately small:
+
+```typescript
+class Vehicle {
+  constructor(readonly plate: string, readonly size: Size) {}
+}
+
+class Level {
+  constructor(readonly number: number, readonly spots: ParkingSpot[]) {}
+  freeCount(size: Size) {
+    return this.spots.filter((s) => s.size === size && s.isFree()).length
+  }
+}
+
+enum TicketStatus { ACTIVE, PAID, LOST }
+
+class Ticket {
+  status = TicketStatus.ACTIVE
+  constructor(
+    readonly id: string,
+    readonly vehicle: Vehicle,
+    readonly spot: ParkingSpot,
+    readonly entryTime: Date,
+  ) {}
+  close() {
+    if (this.status !== TicketStatus.ACTIVE) throw new Error('ticket already closed')
+    this.status = TicketStatus.PAID
+  }
+}
+```
+
+The `Ticket` guards its own transitions: closing a closed ticket throws,
+so a double "leave" can't free a spot twice. It's a tiny
+[state machine](/blog/state-pattern-and-state-machines), and making the
+invalid transition impossible in the class is better than checking for it
+in every caller.
+
+### Two allocators
+
+The allocator decides *which order* to try spots in. Two common policies:
+
+```typescript
+// Smallest spot that fits, lowest level first — keeps large spots
+// free for large vehicles.
+class BestFitAllocator implements SpotAllocator {
+  *candidates(levels: Level[], v: Vehicle) {
+    for (let size = v.size; size <= Size.LARGE; size++) {
+      for (const level of levels) {
+        for (const spot of level.spots) {
+          if (spot.size === size && spot.isFree()) yield spot
+        }
+      }
+    }
+  }
+}
+
+// Closest to a given entrance — needs distances precomputed per gate.
+class NearestToGateAllocator implements SpotAllocator {
+  constructor(private distances: Map<string, number>) {}
+  *candidates(levels: Level[], v: Vehicle) {
+    const free = levels.flatMap((l) => l.spots)
+      .filter((s) => s.fits(v) && s.isFree())
+      .sort((a, b) => this.distances.get(a.id)! - this.distances.get(b.id)!)
+    yield* free
+  }
+}
+```
+
+Returning an iterable rather than a single spot is a small design choice
+with a big payoff: if the first candidate is taken by a concurrent arrival
+between suggestion and reservation, `park` simply tries the next one. The
+allocator never needs to know about the race.
+
+At scale, scanning every spot on every arrival is wasteful. Keep a set of
+free spot IDs per (level, size), updated on reserve and release, and the
+best-fit allocator becomes a few set lookups. Interviewers like hearing
+that you'd start simple and know where the hot path would need an index.
+
+### Pricing, composed
+
+`PricingPolicy` implementations stay small when each rule is its own
+class, and rules are combined with decorators:
+
+```typescript
+class HourlyPricing implements PricingPolicy {
+  constructor(private ratePerHour: Record<Size, number>) {}
+  fee(t: Ticket, exit: Date) {
+    const hours = Math.ceil((exit.getTime() - t.entryTime.getTime()) / 3_600_000)
+    return hours * this.ratePerHour[t.vehicle.size]
+  }
+}
+
+class FirstHourFree implements PricingPolicy {
+  constructor(private inner: PricingPolicy) {}
+  fee(t: Ticket, exit: Date) {
+    const oneHourLater = new Date(t.entryTime.getTime() + 3_600_000)
+    return exit <= oneHourLater ? 0 : this.inner.fee(t, exit)
+  }
+}
+
+class DailyCap implements PricingPolicy {
+  constructor(private inner: PricingPolicy, private cap: number) {}
+  fee(t: Ticket, exit: Date) {
+    return Math.min(this.cap, this.inner.fee(t, exit))
+  }
+}
+
+const pricing = new DailyCap(new FirstHourFree(new HourlyPricing(RATES)), 500)
+```
+
+A new rule — weekend flat rate, a discount for EVs — is a new class and a
+different line of composition. Nothing in `ParkingLot` changes, which is
+the [open–closed principle](/blog/solid-principles) doing its job.
+(`DailyCap` as written caps the whole stay; a "per day" cap for multi-day
+stays would split the stay by calendar day first — exactly the kind of
+clarifying question to ask.)
 
 ## 5. Concurrency
 
@@ -134,7 +257,10 @@ Two cars arriving at two gates can pick the same free spot. The check
 
 The allocator's candidates are just suggestions. `tryReserve` is the source
 of truth. Mentioning this race unprompted is one of the clearest signals of
-a strong answer.
+a strong answer. In JavaScript's single-threaded runtime the
+in-memory version is safe as written, because nothing interleaves between
+the check and the set — but say that explicitly, and say what changes the
+moment the state moves to a shared database.
 
 ## 6. Extensions to discuss
 
@@ -146,6 +272,119 @@ a strong answer.
   release, or publish events that a display board
   [observes](/blog/observer-pattern).
 - **Lost ticket**: look up by plate, charge a maximum fee.
+
+## The class diagram, in words
+
+Interviewers usually want a diagram. The relationships, stated precisely:
+
+```
+ParkingLot ◆──── 1..* Level ◆──── 1..* ParkingSpot
+ParkingLot ────> SpotAllocator  «interface»  ◁── BestFitAllocator, NearestToGateAllocator
+ParkingLot ────> PricingPolicy  «interface»  ◁── HourlyPricing, FirstHourFree, DailyCap
+ParkingLot ◆──── 0..* Ticket (active)
+Ticket ────> Vehicle,  Ticket ────> ParkingSpot
+```
+
+Filled diamonds are composition (the lot owns levels and active tickets;
+they don't outlive it). Plain arrows are associations or dependencies on
+interfaces. Open triangles are "implements". Being able to say *why* each
+line is the kind it is — "a spot can't exist without its level, so that's
+composition" — matters more than drawing UML notation perfectly.
+
+## Persisting it
+
+An in-memory model is what interviews ask for, but the follow-up is often
+"how would you store this?". The tables mirror the classes, with the
+concurrency rule moved into the database:
+
+```sql
+CREATE TABLE spots (
+  id        text PRIMARY KEY,
+  level     int  NOT NULL,
+  size      smallint NOT NULL,         -- 0 small, 1 medium, 2 large
+  ticket_id uuid UNIQUE                -- NULL when free
+);
+
+CREATE TABLE tickets (
+  id         uuid PRIMARY KEY,
+  plate      text NOT NULL,
+  size       smallint NOT NULL,
+  spot_id    text NOT NULL REFERENCES spots(id),
+  entry_time timestamptz NOT NULL,
+  exit_time  timestamptz,
+  fee        numeric,
+  status     text NOT NULL DEFAULT 'ACTIVE'
+);
+
+-- one active ticket per plate: a car can't be parked twice
+CREATE UNIQUE INDEX one_active_ticket ON tickets (plate) WHERE status = 'ACTIVE';
+```
+
+Reserving a spot becomes the conditional update from the concurrency
+section (`... SET ticket_id = $1 WHERE id = $2 AND ticket_id IS NULL`),
+inside the same transaction that inserts the ticket. The partial unique
+index enforces a business rule — one active ticket per plate — that the
+in-memory version didn't even have, with no application code. That's a
+good point to raise: some invariants are cheaper and safer in the schema.
+
+## 7. Testing the design
+
+The design choices pay off in tests. Because the clock, allocator and
+pricing are injected, the important behaviours are short, deterministic
+tests:
+
+```typescript
+test('a car takes a large spot when medium spots are full', () => {
+  const level = new Level(1, [spot('M1', Size.MEDIUM, { occupied: true }), spot('L1', Size.LARGE)])
+  const lot = new ParkingLot([level], new BestFitAllocator(), freePricing)
+  expect(lot.park(car()).spot.id).toBe('L1')
+})
+
+test('first hour is free, then hourly', () => {
+  const t = ticketAt('2026-10-17T10:00')
+  expect(pricing.fee(t, at('2026-10-17T10:59'))).toBe(0)
+  expect(pricing.fee(t, at('2026-10-17T12:30'))).toBe(3 * RATES[Size.MEDIUM])
+})
+
+test('leaving twice does not free the spot twice', () => {
+  const ticket = lot.park(car())
+  lot.leave(ticket.id)
+  expect(() => lot.leave(ticket.id)).toThrow()
+})
+```
+
+None of these needs a real clock, a database or a sleep — a sign the
+responsibilities are in the right places.
+
+## 8. Mistakes that cost points
+
+- **A `ParkingLot` god class** that knows spot sizes, pricing rules and
+  display logic. Push each concern to the class that owns the data.
+- **A deep vehicle hierarchy** (`Car`, `Bike`, `Truck`, `ElectricCar`…)
+  where the subclasses differ only by a constant.
+- **Pricing as a `switch` on vehicle type** inside `leave`. Every new rule
+  edits the same method.
+- **Ignoring the race** between two gates choosing the same spot.
+- **Singletons everywhere.** `ParkingLot.getInstance()` is a common reflex,
+  and it makes testing with different configurations harder. If there's
+  one lot per process, create one and pass it in.
+
+## 9. Questions the interviewer may add
+
+- **"Support reservations."** A spot gains a `RESERVED` state with an
+  expiry; `tryReserve` respects it; a sweeper releases expired holds.
+- **"Multiple entrances and exits."** Gates hold a reference to the lot
+  and an allocator configured with their own distances. The concurrency
+  section is what makes this safe.
+- **"Payment methods."** Another strategy — `PaymentProcessor` — called in
+  `leave`, with the ticket marked paid only after payment succeeds.
+- **"Scale to many lots."** `ParkingLot` instances keyed by lot ID behind a
+  service; the class design doesn't change, the persistence does.
+- **"Show free spots on a board at each entrance."** Spots publish
+  `reserved` and `released` events; each board subscribes and keeps its own
+  counts. The lot doesn't know boards exist — the
+  [observer pattern](/blog/observer-pattern), and a natural answer to
+  "how would you add this without touching `ParkingLot`?".
 
 ## Practise it
 

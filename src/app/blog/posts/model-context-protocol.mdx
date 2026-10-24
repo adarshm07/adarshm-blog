@@ -69,6 +69,109 @@ A tool that fails returns a result with `isError: true` and an explanation,
 so the model can see what went wrong and try something else — the same
 pattern as returning errors from ordinary tool calls.
 
+### Discovery and capability negotiation
+
+Between the handshake and the first call, the client asks what the server
+offers:
+
+```
+→ { "jsonrpc": "2.0", "id": 3, "method": "tools/list" }
+← { "jsonrpc": "2.0", "id": 3, "result": { "tools": [{
+      "name": "search_issues",
+      "description": "Search open issues by keyword. Returns up to 10 matches…",
+      "inputSchema": { "type": "object",
+        "properties": { "query": { "type": "string" } },
+        "required": ["query"] } }] } }
+```
+
+The `capabilities` exchanged in `initialize` say which features each side
+supports — tools, resources, prompts, and whether lists can change at
+runtime. A server whose tools change (say, after the user connects another
+account) sends a `notifications/tools/list_changed` notification, and the
+host re-fetches the list. Negotiating capabilities up front is what lets
+old clients and new servers, or the reverse, keep working together as the
+protocol grows.
+
+## The host's side: from MCP tools to model tools
+
+A server never talks to the model. The host does the translation: list the
+server's tools, hand them to the model as ordinary tool definitions, and
+forward any tool calls the model makes back to the server.
+
+```typescript
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import Anthropic from '@anthropic-ai/sdk'
+
+const mcp = new Client({ name: 'my-host', version: '1.0.0' })
+await mcp.connect(new StdioClientTransport({ command: 'node', args: ['issues-server.js'] }))
+
+const { tools } = await mcp.listTools()
+const modelTools = tools.map((t) => ({
+  name: t.name,
+  description: t.description,
+  input_schema: t.inputSchema,          // MCP and the API both use JSON Schema
+}))
+
+// inside the agent loop, when the model asks for a tool:
+const result = await mcp.callTool({ name: block.name, arguments: block.input })
+messages.push({
+  role: 'user',
+  content: [{
+    type: 'tool_result',
+    tool_use_id: block.id,
+    content: result.content,            // text blocks pass straight through
+    is_error: result.isError,
+  }],
+})
+```
+
+That's the whole bridge. Everything else — which servers to connect, which
+tools to show the model, whether to ask the user before a call — is the
+host's policy. A host connected to ten servers can easily expose a hundred
+tools, which costs context on every request and makes the model's choice
+harder; good hosts let users enable servers per task, or pick a relevant
+subset of tools before each call. The loop around this is covered in
+[the agent loop](/blog/the-agent-loop).
+
+Many hosts are configured with a small JSON file naming the servers to
+launch:
+
+```json
+{
+  "mcpServers": {
+    "issues": { "command": "node", "args": ["/path/to/issues-server.js"],
+                "env": { "ISSUES_TOKEN": "…" } }
+  }
+}
+```
+
+## Resources and prompts in code
+
+Tools get the attention, but the other two primitives are just as short to
+offer:
+
+```typescript
+// a resource: the host can list it and read it into context
+server.resource('readme', 'repo://readme', async (uri) => ({
+  contents: [{ uri: uri.href, mimeType: 'text/markdown', text: await readReadme() }],
+}))
+
+// a prompt: shows up to the user as a reusable command
+server.prompt('triage', { issue: z.string() }, ({ issue }) => ({
+  messages: [{
+    role: 'user',
+    content: { type: 'text', text: `Triage issue ${issue}: label it, estimate effort, suggest an owner.` },
+  }],
+}))
+```
+
+The difference is *who decides*. The model decides to call a tool. The
+application or user decides to attach a resource. The user decides to run
+a prompt. Putting a capability under the right primitive keeps control
+where it belongs: a large file the user wants in context is a resource,
+not a tool the model may or may not think to call.
+
 ## A small server
 
 With the official TypeScript SDK, a server with one tool is a few lines:
@@ -101,6 +204,55 @@ As with any tool, the **description is the interface**. The model chooses
 tools from their names and descriptions alone, so say what the tool does,
 what it returns, and when to use it.
 
+## Designing a good server
+
+The protocol is the easy part. What makes a server useful is the same
+thing that makes any tool useful to a model:
+
+- **Shape tools around tasks, not endpoints.** Wrapping every REST endpoint
+  one-to-one gives the model forty low-level tools and leaves it to chain
+  six calls for one job. `find_customer_orders(email)` beats
+  `get_customer_by_email` plus `list_orders(customer_id)`.
+- **Return what the model needs, compactly.** A tool that dumps 50 KB of
+  JSON uses context the model needs for reasoning. Return the relevant
+  fields, summarise long text, and paginate with a cursor the model can
+  pass back.
+- **Write errors for the model.** "No issue #4120. Did you mean #412?" lets
+  it recover; a stack trace doesn't.
+- **Make destructive tools obvious.** Name them clearly (`delete_branch`,
+  not `cleanup`) and say what they change in the description, so hosts and
+  users can decide which need confirmation. The spec lets servers annotate
+  tools with hints such as read-only or destructive, which hosts can use
+  for that.
+- **Keep secrets on the server.** Credentials come from the server's
+  environment or its OAuth flow, never from tool arguments the model fills
+  in.
+
+### Testing a server
+
+The MCP Inspector (`npx @modelcontextprotocol/inspector node issues-server.js`)
+connects to a server and lets you list and call its tools, read resources
+and run prompts by hand — the quickest way to check schemas and outputs
+before involving a model. Then test with a real host on realistic tasks:
+whether the model picks the right tool from its description is something
+only a model can tell you, and it's worth measuring the way you'd
+[evaluate any LLM feature](/blog/evals-for-llm-apps).
+
+## Transports in a little more detail
+
+- **stdio**: the host starts the server as a child process and exchanges
+  newline-delimited JSON-RPC messages over stdin and stdout. Nothing is
+  exposed on the network, which makes it the simplest and safest choice
+  for local tools. The one rule that trips people up: the server must
+  never print anything else to stdout — logs go to stderr, or they corrupt
+  the protocol stream.
+- **Streamable HTTP**: the client sends JSON-RPC messages as HTTP `POST`s
+  to one endpoint; the server answers with plain JSON or upgrades the
+  response to a server-sent event stream when it has several messages to
+  send (progress updates, then a result). A session ID header ties
+  requests together. This is the transport for servers run as shared
+  services — one deployment, many users, each authenticated with OAuth.
+
 ## Security: a server is code you're trusting
 
 MCP makes it easy to give a model real capabilities, which makes the usual
@@ -124,6 +276,25 @@ risks sharper:
   [authorization code flow with PKCE](/blog/oauth-2-and-pkce) — so a
   server acts with your permissions, not a shared key.
 
+## MCP, tool calling and plain APIs
+
+<Table
+  data={{
+    headers: ['', 'Tool calling in your app', 'MCP server', 'REST / OpenAPI'],
+    rows: [
+      ['Who calls it', 'Your agent loop', 'Any MCP host', 'Any program'],
+      ['Discovery', 'Hard-coded definitions', 'tools/list at runtime', 'Docs or a spec file'],
+      ['Written for', 'One model integration', 'Models, via many hosts', 'Developers'],
+      ['Auth', 'Your app’s credentials', 'Per user, via OAuth for remote servers', 'Usually API keys or OAuth'],
+      ['Beyond tools', '—', 'Resources, prompts, sampling', '—'],
+    ],
+  }}
+/>
+
+MCP doesn't replace APIs: most servers are thin layers over an existing
+API, adding model-friendly tool shapes and descriptions. It replaces the
+per-app glue code between a model and that API.
+
 ## When to use MCP
 
 - **You're building a service** that AI apps should be able to use: ship an
@@ -133,3 +304,7 @@ risks sharper:
 - **You have one app and three internal functions**: plain tool definitions
   in your own [agent loop](/blog/the-agent-loop) are simpler. MCP pays off
   when integrations are shared across apps.
+- **You're wiring your team's internal systems into a coding agent**: a
+  small internal MCP server — deploy logs, feature flags, the on-call
+  rota — gives every engineer's agent the same capabilities with the same
+  permissions model, instead of everyone pasting context by hand.

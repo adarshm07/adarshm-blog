@@ -1,7 +1,7 @@
 ---
 title: "The CAP Theorem and Eventual Consistency, Explained"
 publishedAt: "2026-07-18"
-summary: "Every distributed database quietly picks a side in a trade-off it can't escape: when the network partitions, you serve either possibly-stale data or an error. CAP theorem names that choice — and explains why 'eventual consistency' is a deliberate design, not a bug."
+summary: "Every distributed database quietly picks a side in a trade-off it can't escape: when the network partitions, you serve either possibly-stale data or an error. What CAP actually says, PACELC and the latency cost the rest of the time, the spectrum of consistency models, quorums, and how eventually consistent replicas converge."
 tags: "System Design"
 ---
 
@@ -11,6 +11,10 @@ implies it has all three. It can't. The **CAP theorem** states that a
 distributed system can guarantee at most two of the three simultaneously,
 and in practice, one of those three isn't optional, which reduces the real
 choice to just one axis.
+
+That one axis is still only part of the story. Most of the time there's no
+partition at all, and the trade-off you actually feel day to day is
+between consistency and *latency*. This post covers both.
 
 ## The three properties
 
@@ -22,6 +26,14 @@ choice to just one axis.
 - **Partition tolerance (P):** the system keeps operating even when
   network failures split it into groups of nodes that can't communicate
   with each other.
+
+The "C" in CAP is not the "C" in ACID. ACID consistency means a
+transaction moves the database from one valid state to another — constraints
+hold. CAP consistency is about *replicas agreeing*: formally,
+**linearizability**, meaning the system behaves as if there were a single
+copy of the data and every operation took effect at one instant between
+its start and end. Mixing the two up is the most common source of confused
+CAP arguments.
 
 ## Why P isn't actually optional
 
@@ -46,45 +58,97 @@ available — the trade-off only bites during the partition itself. CAP is
 a statement about what you're forced to give up under failure, not a
 permanent handicap.
 
+### A partition, step by step
+
+Three replicas of a bank balance, `A`, `B` and `C`, with `C` cut off from
+the other two by a failed link. A client connected to `C` asks to withdraw
+₹500.
+
+- **CP behaviour:** `C` knows it can't reach a majority. It can't be sure
+  `A` and `B` haven't already processed a withdrawal, so it refuses:
+  "service unavailable, try again". Clients that can reach `A` or `B` carry
+  on normally, because those two still form a majority.
+- **AP behaviour:** `C` accepts the withdrawal and records it locally.
+  Meanwhile a client on `A` withdraws ₹500 too. When the link heals, the
+  replicas discover two withdrawals from a balance that only covered one.
+  Now the system needs a conflict rule — and for money, no automatic rule
+  is good.
+
+The example shows why CP isn't "worse": for a minority side of a
+partition, an error is the honest answer.
+
+## PACELC: the trade-off when nothing is broken
+
+CAP only describes behaviour *during* a partition. The PACELC formulation
+adds the other half: **if** there's a Partition, choose Availability or
+Consistency; **else**, choose Latency or Consistency.
+
+The "else" half is the one you live with every day. Keeping replicas
+strongly consistent means a write isn't acknowledged until several
+replicas — possibly in different zones or regions — confirm it. That costs
+round trips. Serving reads from the nearest replica without checking the
+others is fast, but may be stale.
+
+<Table
+  data={{
+    headers: ['system', 'during a partition', 'otherwise'],
+    rows: [
+      ['Postgres with synchronous replica', 'PC — writes block without the replica', 'EC — every write waits for it'],
+      ['Postgres with async replicas', 'PA for reads from replicas', 'EL — fast, replicas may lag'],
+      ['Cassandra / DynamoDB (default)', 'PA', 'EL'],
+      ['Cassandra at QUORUM', 'PC for those operations', 'EC'],
+      ['etcd / ZooKeeper / Spanner', 'PC', 'EC'],
+    ],
+  }}
+/>
+
+PACELC explains why "we use an AP database" usually means "we wanted low
+latency", not "we planned for partitions".
+
 ## What real databases choose
 
-<table>
-  <thead>
-    <tr>
-      <th>System</th>
-      <th>Typical choice</th>
-      <th>Behavior during a partition</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>Traditional RDBMS (single primary)</td>
-      <td>CP-leaning</td>
-      <td>Writes fail or block if the primary is unreachable</td>
-    </tr>
-    <tr>
-      <td>etcd, ZooKeeper, Consul</td>
-      <td>CP</td>
-      <td>Refuses writes without quorum — correctness over uptime, by design (they're used for coordination)</td>
-    </tr>
-    <tr>
-      <td>Cassandra, DynamoDB</td>
-      <td>AP (tunable)</td>
-      <td>Every reachable node answers; conflicts resolved later</td>
-    </tr>
-    <tr>
-      <td>MongoDB (default)</td>
-      <td>CP-leaning</td>
-      <td>Reads/writes route through the primary; secondaries can lag</td>
-    </tr>
-  </tbody>
-</table>
+<Table
+  data={{
+    headers: ['System', 'Typical choice', 'Behaviour during a partition'],
+    rows: [
+      ['Traditional RDBMS (single primary)', 'CP-leaning', 'Writes fail or block if the primary is unreachable'],
+      ['etcd, ZooKeeper, Consul', 'CP', 'Refuses writes without quorum — correctness over uptime, by design (they’re used for coordination)'],
+      ['Cassandra, DynamoDB', 'AP (tunable)', 'Every reachable node answers; conflicts resolved later'],
+      ['MongoDB (default)', 'CP-leaning', 'Reads/writes route through the primary; secondaries can lag'],
+    ],
+  }}
+/>
 
 Many modern databases don't hardcode the choice — they expose it as a
 tunable per-operation setting. Cassandra's consistency level (`ONE`,
 `QUORUM`, `ALL`) and DynamoDB's choice between eventually-consistent and
 strongly-consistent reads let *you* pick the trade-off per query instead
 of the database imposing one globally.
+
+## Quorums: tuning the dial
+
+With N replicas, a write waits for W acknowledgements and a read asks R
+replicas and takes the newest answer. If **R + W > N**, every read set
+overlaps every write set in at least one replica, so a read sees the
+latest acknowledged write.
+
+<Table
+  data={{
+    headers: ['N, W, R', 'R + W > N?', 'behaviour'],
+    rows: [
+      ['3, 2, 2', 'yes', 'the usual QUORUM setting: survives one node down for both reads and writes'],
+      ['3, 3, 1', 'yes', 'fast reads, but any one node down blocks writes'],
+      ['3, 1, 3', 'yes', 'fast writes, but any one node down blocks reads'],
+      ['3, 1, 1', 'no', 'fastest and most available; reads can be stale'],
+    ],
+  }}
+/>
+
+Quorum overlap is necessary but not sufficient for linearizability — with
+concurrent writes and failed writes partially applied, a quorum system can
+still return surprising results without extra machinery like read repair
+on every read. The [quorum reads and writes](/blog/quorum-reads-and-writes)
+post goes into those edge cases.
 
 ## Eventual consistency: AP's actual promise
 
@@ -110,6 +174,49 @@ The system remains **available** (both nodes answered) but was not
 **consistent** (they answered differently) during the partition — exactly
 the AP trade being made explicit.
 
+### How replicas actually converge
+
+"Eventually" is implemented by a few concrete mechanisms, usually all at
+once:
+
+- **Hinted handoff:** when a replica is down, another node accepts the
+  write on its behalf with a note — a hint — and forwards it when the
+  replica comes back.
+- **Read repair:** when a read asks several replicas and they disagree, the
+  coordinator sends the newest value to the stale ones.
+- **Anti-entropy:** a background process compares replicas and fixes
+  differences. Comparing every row would be too expensive, so replicas
+  exchange **Merkle trees** — hashes of ranges of data — and only drill
+  into ranges whose hashes differ.
+- **Gossip:** nodes share membership and state with random peers, so
+  information spreads through the cluster in logarithmic time — see
+  [gossip protocols](/blog/gossip-protocols-and-failure-detection).
+
+## The spectrum between strong and eventual
+
+"Strong" and "eventual" are two ends of a range. Several useful guarantees
+sit in between, and they're often what an application really needs:
+
+<Table
+  data={{
+    headers: ['model', 'guarantee', 'typical use'],
+    rows: [
+      ['Linearizable', 'acts like one copy; reads see the latest write', 'locks, leader election, balances'],
+      ['Sequential', 'everyone sees operations in the same order', 'replicated logs'],
+      ['Causal', 'if A caused B, everyone sees A before B', 'comments and replies, chat'],
+      ['Read-your-writes', 'you always see your own updates', 'profile edits, posting'],
+      ['Monotonic reads', 'you never see time go backwards', 'paging through a feed'],
+      ['Eventual', 'replicas converge if writes stop', 'counters, caches, catalogues'],
+    ],
+  }}
+/>
+
+Many "eventual consistency bugs" are really missing session guarantees. A
+user who edits their profile and sees the old version after refresh has
+hit a read-your-writes problem, which can be fixed without making the
+whole system strongly consistent — see
+[read-your-writes and replication lag](/blog/read-your-writes-and-replication-lag).
+
 ## Resolving conflicts once the partition heals
 
 Eventually-consistent systems need a rule for what happens when two
@@ -122,13 +229,32 @@ value. Common approaches:
 - **Vector clocks:** track causality per replica so the system can detect
   *"these two writes were genuinely concurrent, not one following the
   other"* and surface the conflict instead of guessing — this is how
-  Amazon's original Dynamo paper handled shopping cart merges.
+  Amazon's original Dynamo paper handled shopping cart merges. See
+  [Lamport and vector clocks](/blog/lamport-and-vector-clocks).
 - **CRDTs (Conflict-free Replicated Data Types):** data structures
   specifically designed so that merging two divergent replicas always
   produces a well-defined, consistent result with no manual conflict
   resolution — a counter that only increments, or a set that only grows,
   can always be merged unambiguously regardless of the order updates
   arrive in.
+
+A grow-only counter shows how simple a CRDT can be. Each replica counts
+its own increments; the value is the sum; merging takes the per-replica
+maximum:
+
+```javascript
+// state: { [replicaId]: count }
+const increment = (s, id) => ({ ...s, [id]: (s[id] ?? 0) + 1 });
+const value = (s) => Object.values(s).reduce((a, b) => a + b, 0);
+const merge = (a, b) => {
+  const out = { ...a };
+  for (const [id, n] of Object.entries(b)) out[id] = Math.max(out[id] ?? 0, n);
+  return out;
+};
+```
+
+Merge is commutative, associative and idempotent, so replicas can exchange
+state in any order, any number of times, and still agree.
 
 ## Choosing CP or AP for your own system
 
@@ -143,6 +269,25 @@ what an outage costs:
   is a far better user experience than an error page during a network
   blip.
 
+And it doesn't have to be one choice per system. An e-commerce site can
+keep the catalogue and recommendations AP, and the stock count and
+payment ledger CP — each piece of data gets the guarantee its failure mode
+needs.
+
+## Common misreadings
+
+- **"CA systems exist."** Only if the network never partitions, which
+  means a single machine. A single-node database is "CA" in the trivial
+  sense that there's nothing to partition — and it's unavailable whenever
+  that node is.
+- **"AP means inconsistent."** It means inconsistent *during partitions
+  and replication lag*, which may be milliseconds. Most of the time AP
+  systems return the latest data.
+- **"CP means unavailable."** Only the minority side of a partition is
+  unavailable. A CP cluster with a majority intact keeps serving.
+- **"Pick a database by its CAP letter."** Pick by the guarantees each
+  operation needs. Most real databases let you choose per query.
+
 ## Wrap-up
 
 CAP theorem isn't a checklist of features to pursue — it's a statement
@@ -151,6 +296,7 @@ happen. Partition tolerance isn't optional in any real distributed system,
 which leaves one genuine decision: refuse to answer when you can't
 guarantee freshness (CP), or answer anyway and let replicas reconcile
 afterward (AP, backed by eventual consistency and a conflict-resolution
-strategy like LWW, vector clocks, or CRDTs). Neither choice is universally
-right — it depends entirely on whether a stale answer or a failed request
-is the cheaper mistake for your system to make.
+strategy like LWW, vector clocks, or CRDTs). PACELC adds the everyday
+version — consistency costs latency even when nothing is broken. Neither
+choice is universally right; it depends on whether a stale answer or a
+failed request is the cheaper mistake for that piece of data.

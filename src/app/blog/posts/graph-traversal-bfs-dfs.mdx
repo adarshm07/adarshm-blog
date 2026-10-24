@@ -11,6 +11,57 @@ search (BFS)** or **depth-first search (DFS)**. The remarkable thing is how
 similar they are. They differ by a single choice: what container holds the
 nodes you've discovered but not yet processed.
 
+## A dry run on paper
+
+Before any code, trace both traversals by hand on a small graph — it's the
+fastest way to internalise the difference. Edges: `0–1, 0–2, 1–3, 2–3,
+3–4`, starting at 0, neighbours in ascending order.
+
+<Table
+  data={{
+    headers: ['step', 'BFS: take', 'BFS queue after', 'DFS (recursive): visit', 'DFS path (call stack)'],
+    rows: [
+      ['1', '0', '[1, 2]', '0', '0'],
+      ['2', '1', '[2, 3]', '1', '0 → 1'],
+      ['3', '2', '[3]', '3', '0 → 1 → 3'],
+      ['4', '3', '[4]', '2', '0 → 1 → 3 → 2'],
+      ['5', '4', '[]', '4', '0 → 1 → 3 → 4'],
+    ],
+  }}
+/>
+
+BFS visits `0 1 2 3 4` — nodes at distance 1 (1 and 2) before distance 2
+(3) before distance 3 (4). DFS visits `0 1 3 2 4` — it reaches 3 through 1,
+dives to 2 from 3 before ever coming back to 0's other neighbour, then
+backs up to 3 and takes 4. Same graph, same neighbour order, different
+container, different order.
+
+## Representing the graph
+
+Problems rarely hand you a ready-made graph. More often it's a list of
+edges, and the first step is building an **adjacency list** — for each
+node, the list of its neighbours:
+
+```javascript
+function buildGraph(n, edges, directed = false) {
+  const graph = Array.from({ length: n }, () => []);
+  for (const [u, v] of edges) {
+    graph[u].push(v);
+    if (!directed) graph[v].push(u);
+  }
+  return graph;
+}
+
+const graph = buildGraph(5, [[0, 1], [0, 2], [1, 3], [2, 3], [3, 4]]);
+// graph[3] → [1, 2, 4]
+```
+
+An adjacency list uses O(V + E) memory and lets you loop over a node's
+neighbours directly, which is what both traversals need. The alternative,
+an **adjacency matrix** (`matrix[u][v] = true`), answers "is there an edge
+from u to v?" in O(1) but costs O(V²) memory — fine for 500 nodes, hopeless
+for 500,000 sparse ones. Default to the list; most real graphs are sparse.
+
 ## BFS: explore level by level
 
 BFS uses a **queue** (first-in, first-out). You visit a node, enqueue all
@@ -24,9 +75,10 @@ in rings:
 function bfs(graph, start) {
   const visited = new Set([start]);
   const queue = [start];
+  let head = 0;                     // read position: avoids O(n) shift()
 
-  while (queue.length) {
-    const node = queue.shift();     // take from the front
+  while (head < queue.length) {
+    const node = queue[head++];     // take from the front
     visit(node);
     for (const next of graph[node]) {
       if (!visited.has(next)) {
@@ -45,6 +97,49 @@ a node is via a shortest route.
 > Mark nodes visited *when you enqueue them*, not when you dequeue them.
 > Otherwise a node with two neighbours already in the queue gets added
 > twice.
+
+The `head` index is deliberate. `queue.shift()` looks like a queue
+operation but moves every remaining element, making BFS on a large graph
+quadratic. Reading from an index — and letting the array grow — keeps
+each step O(1).
+
+### Getting the path, not just the distance
+
+"How far?" is half the usual question; "which way?" is the other half.
+Record each node's **parent** — the node it was discovered from — and walk
+the parents back from the target:
+
+```javascript
+function shortestPath(graph, start, target) {
+  const parent = new Map([[start, null]]);
+  const queue = [start];
+  for (let head = 0; head < queue.length; head++) {
+    const node = queue[head];
+    if (node === target) break;
+    for (const next of graph[node]) {
+      if (!parent.has(next)) { parent.set(next, node); queue.push(next); }
+    }
+  }
+  if (!parent.has(target)) return null;           // unreachable
+  const path = [];
+  for (let n = target; n !== null; n = parent.get(n)) path.push(n);
+  return path.reverse();
+}
+
+shortestPath(graph, 0, 4);   // [0, 1, 3, 4]
+```
+
+The `parent` map doubles as the visited set — a node has a parent entry
+exactly when it's been discovered — so there's one structure to maintain
+instead of two.
+
+### Many starting points at once
+
+Some problems start from several sources simultaneously: "how many minutes
+until every orange is rotten?", "distance from each cell to the nearest
+exit". Put **all** the sources in the queue before starting. BFS then
+spreads from all of them in lockstep, and the first time it reaches a cell
+is via the nearest source — one traversal instead of one per source.
 
 ## DFS: dive deep, then backtrack
 
@@ -67,41 +162,103 @@ function dfs(graph, node, visited = new Set()) {
 ```
 
 Swap the queue for a stack and BFS *becomes* DFS — that's the whole
-difference. The queue's FIFO order spreads outward; the stack's LIFO order
+difference. (Almost: the iterative version below shows the one
+detail that changes.) The queue's FIFO order spreads outward; the stack's LIFO order
 drives downward.
+
+### Iterative DFS
+
+Recursion depth is limited — JavaScript engines typically allow on the
+order of ten thousand frames — so a long chain of nodes crashes a
+recursive DFS. Use an explicit stack instead:
+
+```javascript
+function dfsIterative(graph, start) {
+  const visited = new Set();
+  const stack = [start];
+  while (stack.length) {
+    const node = stack.pop();                  // take from the top
+    if (visited.has(node)) continue;           // may have been pushed twice
+    visited.add(node);
+    visit(node);
+    for (let i = graph[node].length - 1; i >= 0; i--) {
+      if (!visited.has(graph[node][i])) stack.push(graph[node][i]);
+    }
+  }
+}
+```
+
+Pushing neighbours in reverse makes it visit them in the same order the
+recursive version would. Note the visited check moves to *pop* time here:
+a node can be pushed by two neighbours before it's processed, and checking
+on pop handles that.
+
+### Detecting a cycle in a directed graph
+
+In an undirected graph, meeting an already-visited node (other than the
+parent you came from) means a cycle. Directed graphs need more care,
+because reaching a node that was *finished* earlier through another branch
+isn't a cycle. The standard fix is three colours:
+
+```javascript
+function hasCycle(graph) {
+  const WHITE = 0, GRAY = 1, BLACK = 2;        // unvisited, on the path, done
+  const color = new Array(graph.length).fill(WHITE);
+  const dfs = (u) => {
+    color[u] = GRAY;
+    for (const v of graph[u]) {
+      if (color[v] === GRAY) return true;      // back edge: a cycle
+      if (color[v] === WHITE && dfs(v)) return true;
+    }
+    color[u] = BLACK;
+    return false;
+  };
+  return graph.some((_, u) => color[u] === WHITE && dfs(u));
+}
+```
+
+A gray node is on the current recursion path; reaching one again means the
+path loops back on itself. This same DFS, recording nodes as they turn
+black, produces a [topological order](/blog/topological-sort).
+
+## Grids are graphs
+
+A huge share of interview "graph" problems are grids: islands, mazes,
+flood fill. Each cell is a node; its neighbours are the cells up, down,
+left and right. No adjacency list needed — compute neighbours on the fly:
+
+```javascript
+const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+function neighbours(grid, r, c) {
+  const out = [];
+  for (const [dr, dc] of DIRS) {
+    const nr = r + dr, nc = c + dc;
+    if (nr >= 0 && nr < grid.length && nc >= 0 && nc < grid[0].length) out.push([nr, nc]);
+  }
+  return out;
+}
+```
+
+Use a visited set keyed by `r * cols + c` (or mark cells in place if you
+may modify the grid). BFS from a cell gives shortest step counts; DFS from
+each unvisited land cell counts islands — see
+[flood fill and number of islands](/blog/flood-fill-and-number-of-islands).
 
 ## Which one to use
 
-<table>
-  <thead>
-    <tr>
-      <th>You want…</th>
-      <th>Use</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>Shortest path in an unweighted graph</td>
-      <td>BFS</td>
-    </tr>
-    <tr>
-      <td>"Fewest steps / nearest" anything</td>
-      <td>BFS</td>
-    </tr>
-    <tr>
-      <td>Detecting cycles, topological sort</td>
-      <td>DFS</td>
-    </tr>
-    <tr>
-      <td>Exploring all paths, backtracking</td>
-      <td>DFS</td>
-    </tr>
-    <tr>
-      <td>Graph so deep recursion might overflow</td>
-      <td>BFS (or iterative DFS)</td>
-    </tr>
-  </tbody>
-</table>
+<Table
+  data={{
+    headers: ['You want…', 'Use'],
+    rows: [
+      ['Shortest path in an unweighted graph', 'BFS'],
+      ['"Fewest steps / nearest" anything', 'BFS'],
+      ['Detecting cycles, topological sort', 'DFS'],
+      ['Exploring all paths, backtracking', 'DFS'],
+      ['Graph so deep recursion might overflow', 'BFS (or iterative DFS)'],
+    ],
+  }}
+/>
 
 Both run in **O(V + E)** — every vertex and every edge is touched once. The
 difference is memory shape: BFS's queue can hold an entire level at once
@@ -116,9 +273,86 @@ but a general graph will loop forever without it. When a "why is this
 hanging?" bug shows up in graph code, a missing or mis-timed `visited`
 check is the first thing to look at.
 
+### More bugs worth checking for
+
+- **Building an undirected graph with one direction only** — adding `u → v`
+  but not `v → u`, so half the edges are invisible to the traversal.
+- **Using BFS distances on a weighted graph.** BFS counts edges, not
+  weights; for weighted shortest paths use Dijkstra.
+- **A visited set shared across test cases** or across independent
+  searches, so the second search silently skips nodes.
+- **Recursion on a long path** — a linked-list-shaped graph of 100,000
+  nodes overflows a recursive DFS. Use the iterative version.
+
+## Counting connected components
+
+One more pattern built directly on traversal: start a BFS or DFS from
+every node not yet visited, and count how many times you had to start.
+
+```javascript
+function countComponents(graph) {
+  const visited = new Set();
+  let count = 0;
+  for (let u = 0; u < graph.length; u++) {
+    if (visited.has(u)) continue;
+    count++;
+    const stack = [u];
+    visited.add(u);
+    while (stack.length) {
+      for (const v of graph[stack.pop()]) {
+        if (!visited.has(v)) { visited.add(v); stack.push(v); }
+      }
+    }
+  }
+  return count;
+}
+```
+
+Still O(V + E) overall, because every node is visited exactly once across
+all the starts. For components that change as edges are added over time,
+[union-find](/blog/union-find-disjoint-set) answers the same question
+without re-traversing.
+
+## Graphs you didn't know were graphs
+
+Part of getting good at these problems is noticing the graph hiding in the
+question:
+
+- **Word ladder** ("turn COLD into WARM one letter at a time, through real
+  words"): each word is a node, words one letter apart are neighbours, and
+  the answer is a BFS shortest path.
+- **Course prerequisites**: courses are nodes, "A before B" is a directed
+  edge, and "can I finish them all?" is cycle detection.
+- **Open the lock** (a combination lock with forbidden states): each
+  combination is a node with eight neighbours; BFS gives the fewest turns.
+- **Social distance** ("degrees of separation"): people are nodes,
+  friendships are edges, BFS gives the distance.
+
+In each case the hard part is deciding what a node is and how to generate
+its neighbours. After that, it's the twenty lines above.
+
+## Where to go next
+
+Traversal is the base layer; most graph algorithms are one of these with a
+twist:
+
+- [Flood fill and number of islands](/blog/flood-fill-and-number-of-islands)
+  — DFS/BFS on grids.
+- [Bipartite graphs and two-colouring](/blog/bipartite-graphs-two-coloring)
+  — BFS that alternates colours.
+- [Topological sort](/blog/topological-sort) — DFS finishing order, or
+  BFS on in-degrees.
+- [Dijkstra's shortest paths](/blog/dijkstra-shortest-paths) — BFS with a
+  priority queue, for weighted edges.
+- [A* pathfinding](/blog/a-star-pathfinding) — Dijkstra guided by a
+  heuristic.
+- [Strongly connected components](/blog/strongly-connected-components) —
+  two DFS passes on a directed graph.
+
 ## Wrap-up
 
 BFS and DFS are one algorithm parameterized by a container: a queue gives
 you level-order and shortest paths, a stack gives you deep-first and
 backtracking. Learn them as a pair, remember to mark nodes visited, and a
-whole category of graph problems opens up.
+whole category of graph problems opens up. The rest — Dijkstra, topological sort,
+components — is these twenty lines with one more idea added.

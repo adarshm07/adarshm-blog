@@ -48,6 +48,76 @@ With asynchronous replication that data loss window is real, and the usual
 compromise — *semi-synchronous* replication, where one replica must confirm —
 bounds it without paying the full synchronous cost.
 
+### What actually gets replicated
+
+There are two broad ways a primary ships changes:
+
+- **Physical replication** streams the write-ahead log — byte-level page
+  changes — to replicas. Postgres streaming replication works this way.
+  Replicas are exact copies, cheap to keep in sync, but must run the same
+  major version and replicate everything.
+- **Logical replication** streams row-level changes ("insert this row
+  into `orders`"). It can replicate a subset of tables, cross major
+  versions (which makes zero-downtime upgrades possible), and feed other
+  systems — search indexes, caches, analytics — via change data capture.
+
+Either way, the [write-ahead log](/blog/write-ahead-logging) is the source:
+replication is "apply the same log somewhere else".
+
+### Measuring lag
+
+Lag is a number you should graph, not a theory. In Postgres, on the
+primary:
+
+```sql
+SELECT client_addr,
+       pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) AS bytes_behind,
+       replay_lag
+FROM pg_stat_replication;
+```
+
+Normal lag is usually milliseconds. It spikes during bulk writes, long
+queries on the replica that block replay, and network trouble. Alert on
+it, and have the application stop routing reads to a replica that's more
+than a few seconds behind.
+
+### Failover, carefully
+
+Promoting a replica when the primary dies sounds simple. The hard parts:
+
+- **Detection.** Is the primary dead, or is the monitor's network flaky?
+  Failing over a healthy primary is worse than waiting a few seconds. Use
+  several observers and require agreement.
+- **Choosing the replica.** Pick the one with the most replicated data, to
+  minimise what's lost.
+- **Split brain.** If the old primary is merely partitioned, it may still
+  accept writes from clients that can reach it. Now two primaries diverge.
+  The fix is *fencing*: before promoting, make sure the old primary can't
+  accept writes — revoke its access, shut it down, or have clients check
+  an epoch number. See [distributed locks and
+  fencing](/blog/distributed-locks-and-fencing).
+- **Repointing clients.** Through DNS, a virtual IP, or a proxy that knows
+  the current primary. Connection pools must drop and reconnect.
+
+Managed databases automate most of this, which is a large part of what
+you're paying for.
+
+### Other topologies
+
+Single-leader is the default because it's the easiest to reason about.
+Two alternatives exist for specific needs:
+
+- **Multi-leader** — a primary per region, each accepting writes and
+  replicating to the others. Local write latency everywhere, at the cost
+  of write conflicts when two regions change the same row.
+- **Leaderless** — any replica accepts writes; reads and writes use
+  [quorums](/blog/quorum-reads-and-writes) (Cassandra, DynamoDB). No
+  failover step at all, at the cost of weaker consistency by default.
+
+Both trade conflict handling for availability or latency — the
+[CAP and PACELC](/blog/cap-theorem-and-eventual-consistency) trade-off
+made concrete.
+
 ## When replication runs out
 
 Replication does nothing for two limits:
@@ -82,6 +152,82 @@ Whatever the scheme, the goal is the same: a key you actually query by. If
 your app reads orders by `user_id` but you shard orders by `order_id`, every
 "show me this user's orders" query hits every shard.
 
+### A worked example
+
+An orders service: users browse their own orders, and support looks up
+orders by ID. Shard by `user_id`, because that's what the hot query uses:
+
+```sql
+-- every table that belongs to a user carries user_id and is sharded on it
+CREATE TABLE orders (
+  user_id    bigint NOT NULL,
+  order_id   bigint NOT NULL,      -- time-sortable, globally unique
+  status     text   NOT NULL,
+  total      numeric NOT NULL,
+  created_at timestamptz NOT NULL,
+  PRIMARY KEY (user_id, order_id)
+);
+```
+
+- "This user's orders" → one shard, one index range. Fast.
+- An order and its line items share `user_id`, so they live on the same
+  shard and a transaction across them stays local.
+- "Look up order 12345" without a user → that's the scatter-gather case.
+  Either embed the shard in the ID (some bits of `order_id` encode the
+  user's shard), or keep a small global lookup table from `order_id` to
+  `user_id`.
+
+Embedding routing information in IDs is common for exactly this reason —
+see [Snowflake-style IDs](/blog/unique-id-generation-snowflake).
+
+### Logical shards, physical nodes
+
+Never map keys directly to machines. Hash keys into a fixed, large number
+of **logical shards** — say 1,024 — and map logical shards onto however
+many physical nodes you have:
+
+```
+logical = hash(user_id) % 1024        // never changes
+node    = shardMap[logical]           // changes when you rebalance
+```
+
+Adding a node then means moving some logical shards to it, whole — no key
+is ever rehashed. It's the practical cousin of
+[consistent hashing](/blog/consistent-hashing), and most sharded systems
+(Vitess, Citus, Cassandra's vnodes) use some version of it.
+
+## Moving data without downtime
+
+Eventually a shard has to be split or moved. The safe sequence:
+
+1. **Copy** a snapshot of the logical shard to the new node.
+2. **Catch up** by streaming changes made since the snapshot (logical
+   replication or CDC) until the copy is seconds behind.
+3. **Pause writes** for that logical shard briefly — or route them
+   through a proxy that can hold them.
+4. **Drain** the last changes, verify row counts and checksums.
+5. **Flip** the shard map entry to the new node and resume writes.
+6. **Keep the old copy** read-only for a while, then delete it.
+
+The pause in step 3 is seconds, and only for one logical shard out of
+1,024. That's the payoff of logical shards: rebalancing moves small pieces
+one at a time instead of reshuffling everything.
+
+## Routing
+
+Something has to turn a key into a connection:
+
+- **In the application** — a client library holds the shard map. Fastest,
+  but every service and every language needs the same logic, and the map
+  must be distributed and refreshed.
+- **A proxy layer** — Vitess, Citus, or a custom router sits between the
+  app and the databases. The app sees one database; the proxy routes and
+  can do scatter-gather for queries without a shard key. One more hop, one
+  more system to run.
+- **The database itself** — distributed SQL databases (CockroachDB,
+  Spanner, YugabyteDB) shard and route internally. Least application work,
+  with their own latency and cost profile.
+
 ## Hot keys and hot shards
 
 Hash sharding balances *keys*, not *traffic*. One celebrity account, one
@@ -115,6 +261,29 @@ None of these are fatal, and all of them are work — which is why "can we buy
 a bigger machine, add replicas, cache harder, or archive old rows?" is worth
 exhausting first. A modern single server with fast NVMe storage handles
 workloads that people assumed needed sharding a decade ago.
+
+## Queries that don't include the shard key
+
+Some questions cut across shards no matter how well you choose the key:
+"orders over ₹10,000 placed today", "users with this email". Three ways to
+answer them:
+
+- **Scatter-gather.** Send the query to every shard and merge the results.
+  Fine for rare admin queries; bad on a hot path, because latency is set by
+  the slowest shard and load multiplies by the shard count.
+- **A global secondary index.** A separate table, itself sharded by the
+  indexed value — `email → user_id` sharded by email. Lookups are one hop
+  to the index shard, then one hop to the data shard. The index is updated
+  asynchronously in most systems, so it can briefly lag the data.
+- **A separate read model.** Stream changes into a system built for the
+  query — a search cluster for text, a warehouse for analytics. The
+  primary shards stay optimised for the main access path; everything else
+  is served elsewhere. That's [CQRS](/blog/event-sourcing-and-cqrs) in its
+  most practical form.
+
+Uniqueness across shards — "no two accounts with the same email" — needs
+the second approach: the email index shard is where the unique constraint
+lives, and creating an account writes there first.
 
 ## Combining the two
 

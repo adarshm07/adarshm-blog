@@ -77,6 +77,62 @@ try to update the same row, the second fails with
 read behaves differently for writes. Read your database's documentation
 for the level you use.
 
+## How snapshots work: MVCC
+
+Most databases implement isolation without making readers wait for
+writers, using **multi-version concurrency control**. An update doesn't
+overwrite a row in place; it writes a new version, stamped with the
+transaction that created it, and marks the old version as superseded.
+Each transaction reads the versions that were committed as of its
+snapshot:
+
+- At **read committed**, the snapshot is taken per *statement* — each
+  query sees everything committed before it started.
+- At **repeatable read**, the snapshot is taken once per *transaction* —
+  every query sees the same frozen view.
+
+That's why readers never block writers and writers never block readers.
+It's also why long-running transactions are expensive: old row versions
+can't be cleaned up while some open transaction might still need them. In
+Postgres that shows up as table bloat and a `VACUUM` that can't make
+progress — a session stuck "idle in transaction" for hours can slow down
+the whole database.
+
+## Write skew, concretely
+
+Write skew is the anomaly that survives repeatable read, and it's worth
+seeing in SQL. The rule: at least one doctor must be on call.
+
+```sql
+-- Both Alice and Bob are on call. Both feel unwell, at the same moment.
+
+-- Transaction A (Alice)                -- Transaction B (Bob)
+BEGIN ISOLATION LEVEL REPEATABLE READ;  BEGIN ISOLATION LEVEL REPEATABLE READ;
+SELECT count(*) FROM doctors            SELECT count(*) FROM doctors
+WHERE on_call;          -- 2            WHERE on_call;          -- 2
+UPDATE doctors SET on_call = false      UPDATE doctors SET on_call = false
+WHERE name = 'alice';                   WHERE name = 'bob';
+COMMIT;                                 COMMIT;
+-- Nobody is on call.
+```
+
+Each transaction checked the rule against its snapshot and saw two
+doctors. They updated *different* rows, so there was no write conflict to
+detect. Both commit; the invariant is broken. Fixes:
+
+- **Serializable isolation.** Postgres's serializable level (serializable
+  snapshot isolation) tracks which rows each transaction read and aborts
+  one of the two with a serialization failure.
+- **Lock what you read.** `SELECT ... FROM doctors WHERE on_call FOR UPDATE`
+  makes the second transaction wait for the first, then re-check.
+- **Materialise the conflict.** Put the rule in one row both transactions
+  must update — a `shifts` row with an `on_call_count` and a `CHECK
+  (on_call_count >= 1)` — so the database sees a write-write conflict.
+
+The same shape appears in booking systems (two people booking the last
+seat by inserting into a bookings table) and in "username must be unique"
+checks done in code instead of with a `UNIQUE` constraint.
+
 ## Fixes that work
 
 **1. Let the database do the arithmetic.** The simplest and best fix for
@@ -115,6 +171,130 @@ No locks held while a user thinks; great for web forms.
 complex invariants (like write skew), and **retry on serialization
 failures** — they're expected, not exceptional.
 
+A retry wrapper makes that painless. Postgres reports serialization
+failures as SQLSTATE `40001` and deadlocks as `40P01`; both mean "run the
+whole transaction again":
+
+```javascript
+async function withTx(fn, { attempts = 5 } = {}) {
+  for (let i = 1; ; i++) {
+    try {
+      return await db.tx({ mode: SERIALIZABLE }, fn);
+    } catch (err) {
+      const retryable = err.code === '40001' || err.code === '40P01';
+      if (!retryable || i === attempts) throw err;
+      await sleep(Math.random() * 20 * 2 ** i);     // jittered backoff
+    }
+  }
+}
+```
+
+The function passed in must be safe to run more than once — no emails
+sent or external APIs called inside it. Do side effects after commit, or
+record them in an [outbox](/blog/dual-writes-and-the-outbox-pattern).
+
+### Savepoints for partial rollback
+
+Sometimes one step inside a larger transaction is allowed to fail — trying
+to insert a row that may already exist, say — without abandoning
+everything before it. In Postgres, any error aborts the whole transaction
+unless you set a savepoint first:
+
+```sql
+BEGIN;
+INSERT INTO orders ...;
+SAVEPOINT before_coupon;
+INSERT INTO coupon_uses (coupon, user_id) VALUES ($1, $2);   -- may violate UNIQUE
+-- on error:
+ROLLBACK TO SAVEPOINT before_coupon;
+COMMIT;                       -- the order still commits
+```
+
+Use them sparingly; each savepoint has a cost, and many ORMs create one
+per nested transaction call without telling you.
+
+## Deadlocks
+
+Locking fixes lost updates and introduces a new failure: two transactions
+each holding a lock the other needs.
+
+```
+Transaction A: locks account 1, then wants account 2
+Transaction B: locks account 2, then wants account 1   → deadlock
+```
+
+The database detects the cycle and aborts one of them (Postgres after
+`deadlock_timeout`, one second by default). Prevention is mostly
+discipline: **always lock rows in a consistent order** — for a transfer,
+lock the lower account ID first — and keep transactions short so locks
+are held briefly. Treat the remaining deadlocks like serialization
+failures: retry.
+
+## Row locks for work queues
+
+The same row-locking tools build a simple, reliable job queue inside the
+database:
+
+```sql
+SELECT id, payload FROM jobs
+WHERE status = 'pending'
+ORDER BY run_at
+LIMIT 10
+FOR UPDATE SKIP LOCKED;
+```
+
+`FOR UPDATE` claims the rows; `SKIP LOCKED` makes concurrent workers skip
+rows another worker has already claimed instead of waiting for them. Many
+workers can poll the same table without double-processing and without
+contention. It's the mechanism behind the outbox relay and several
+Postgres-backed queue libraries.
+
+## Same names, different behaviour
+
+The SQL standard defines isolation levels by which anomalies they forbid,
+and each database implements them its own way. The names travel; the
+behaviour doesn't.
+
+- **PostgreSQL** — read committed by default. Repeatable read is snapshot
+  isolation and aborts on concurrent updates to the same row (so lost
+  updates become errors). Serializable is serializable snapshot isolation:
+  optimistic, no extra blocking, and aborts transactions whose combination
+  couldn't have happened serially.
+- **MySQL InnoDB** — repeatable read by default. Plain `SELECT`s read a
+  snapshot, but `UPDATE` and `SELECT ... FOR UPDATE` read the *latest*
+  committed row, so the lost-update pattern with a plain read followed by
+  an update can still lose a write. InnoDB uses **gap locks** on index
+  ranges to block phantoms for locking reads, which can cause surprising
+  lock waits on inserts into nearby key ranges.
+- **SQL Server** — read committed by default, implemented with locks
+  unless `READ_COMMITTED_SNAPSHOT` is turned on, in which case readers use
+  row versions like Postgres. It also offers an explicit `SNAPSHOT` level.
+- **Oracle** — read committed by default with multi-versioning; its
+  "serializable" level is snapshot isolation, so it permits write skew.
+
+The practical lesson: don't reason from the level's name. Reason from the
+specific anomaly you're worried about, and check — ideally with a two-
+connection test — whether your database at your level prevents it.
+
+## Choosing, in practice
+
+<Table data={{
+  headers: ["Situation", "Reach for"],
+  rows: [
+    ["Counters, balances, stock levels", "Atomic UPDATE (balance = balance + x)"],
+    ["Read, decide in code, write one row", "SELECT ... FOR UPDATE, or a version column"],
+    ["Edit forms where users take minutes", "Optimistic concurrency with a version column"],
+    ["Invariants across several rows (write skew)", "Serializable + retries, or a materialised conflict"],
+    ["Uniqueness", "A UNIQUE constraint — never a check in code"],
+    ["Reports that must see one consistent moment", "Repeatable read (a single snapshot), read-only"],
+    ["Many workers claiming jobs", "FOR UPDATE SKIP LOCKED"]
+  ]
+}} />
+
+Most applications never need to change the default level globally. They
+need to use the right tool at the handful of places where concurrent
+writes actually meet.
+
 ## Practical rules
 
 - Keep transactions short. Never hold one open across a network call or
@@ -125,7 +305,28 @@ failures** — they're expected, not exceptional.
   loop — with [backoff](/blog/retries-backoff-and-jitter).
 - Test concurrency explicitly: two connections, interleaved steps. These
   bugs never show up when you click through the app alone.
+- Watch your ORM. A typical "load entity, change a field, save" cycle is a
+  read-modify-write in application code — the lost update, exactly. Use
+  the ORM's optimistic locking (a version column) or an atomic update
+  method for anything contended.
+
+A concurrency test doesn't need special tools — two clients and a promise
+that pauses one of them between steps:
+
+```javascript
+test('two deposits do not lose an update', async () => {
+  await Promise.all([deposit(acct, 50), deposit(acct, 30)]);
+  const { balance } = await db.one('SELECT balance FROM accounts WHERE id = $1', [acct]);
+  expect(balance).toBe(start + 80);
+});
+```
+
+Run it a few hundred times in a loop, or add an artificial delay between
+the read and the write inside `deposit`, and the read-modify-write version
+fails reliably. The atomic `UPDATE` version never does.
 
 The default isolation level protects you from reading garbage. It doesn't
 protect you from overwriting someone else's work — that part is your job,
-and usually a one-line change to the `UPDATE`.
+and usually a one-line change to the `UPDATE`. For the rarer cases where
+the rule spans several rows, reach for serializable and a retry loop, and
+let the database prove the interleaving was safe instead of hoping it was.

@@ -1,7 +1,7 @@
 ---
 title: "System Design Case Study: A News Feed"
 publishedAt: "2026-10-16"
-summary: "How a social feed shows each person the latest posts from everyone they follow: fan-out on write vs. fan-out on read, the celebrity problem and the hybrid that solves it, feed storage, ranking, and pagination."
+summary: "How a social feed shows each person the latest posts from everyone they follow: fan-out on write vs. fan-out on read, the celebrity problem and the hybrid that solves it, feed storage, hydration, ranking, and pagination — with the numbers behind each choice."
 tags: "System Design"
 ---
 
@@ -10,20 +10,56 @@ follow, newest or "best" first, loading instantly and scrolling forever.
 Behind it is one central question: **when do you assemble each person's
 feed — when a post is written, or when the feed is read?**
 
-## Requirements and numbers
+Everything else in the design — the celebrity problem, the hybrid, the
+storage layout — follows from how you answer that.
 
-**Functional**: post text and images; follow accounts; see a feed of
-followed accounts' posts, newest first (ranking later); infinite scroll.
+## 1. Requirements
+
+**Functional**: post text and images; follow and unfollow accounts; see a
+feed of followed accounts' posts, newest first (ranking later); infinite
+scroll; like and reply.
 
 **Non-functional**: the feed loads in under ~200 ms; a new post appears in
-followers' feeds within seconds; reads hugely outnumber writes.
+followers' feeds within seconds; reads hugely outnumber writes; the feed
+may be slightly stale or incomplete, but must never show a post the
+viewer isn't allowed to see.
 
-**Scale**: 200 million daily users, each opening the feed 10 times a day
-(2 billion feed reads a day, ~23,000/s) and posting about once every few
-days (~50 million posts a day, ~600/s). Average 200 followers per account,
-with a long tail up to tens of millions.
+**Out of scope**: search, direct messages, ads (mention that ads are
+usually just another candidate source merged in at ranking time).
 
-## Option 1: fan-out on read (pull)
+## 2. The numbers
+
+200 million daily users, each opening the feed 10 times a day, and about
+50 million posts a day. Average 200 followers per account, with a long
+tail up to tens of millions.
+
+<Table
+  data={{
+    headers: ['quantity', 'estimate', 'what it means'],
+    rows: [
+      ['feed reads', '2B/day → ~23,000/s avg, ~70,000/s peak', 'reads must be a lookup, not a computation'],
+      ['posts', '50M/day → ~600/s', 'writes are rare by comparison'],
+      ['fan-out writes (push)', '600 × 200 followers = ~120,000/s', 'async workers, small writes'],
+      ['feed storage', '200M feeds × 800 IDs × 8 B ≈ 1.3 TB', 'a large but ordinary Redis cluster'],
+      ['post storage', '50M × ~1 KB = ~50 GB/day', 'a partitioned store; media separately'],
+    ],
+  }}
+/>
+
+## 3. APIs
+
+```
+POST /posts                       { text, mediaIds[] }  → { postId }
+POST /users/{id}/follow
+DELETE /users/{id}/follow
+GET  /feed?cursor=...&limit=20    → { posts: [...], nextCursor }
+POST /posts/{id}/likes
+```
+
+The feed endpoint returns hydrated posts — author name, avatar, text,
+media URLs, counts — so the client renders in one round trip.
+
+## 4. Option 1: fan-out on read (pull)
 
 Build the feed when it's requested:
 
@@ -38,7 +74,11 @@ Writes are trivial — one row. Reads are expensive: for someone who follows
 At 23,000 reads a second, that's a lot of repeated work, and latency grows
 with the number of accounts you follow.
 
-## Option 2: fan-out on write (push)
+Once posts are sharded by author, that query becomes a scatter-gather
+across many shards for every page view — and the slowest shard sets the
+response time.
+
+## 5. Option 2: fan-out on write (push)
 
 Do the work once per post instead. When someone posts, push the post's ID
 onto a precomputed feed list for each follower. Reading a feed is then one
@@ -52,7 +92,36 @@ reads a second with predictable latency. Feed lists hold only post IDs (8
 bytes each), capped at a few hundred, so 200 million feeds × 800 IDs × 8
 bytes ≈ 1.3 TB — a large but ordinary Redis cluster.
 
-## The celebrity problem
+The fan-out worker, simplified:
+
+```javascript
+// consumes "post created" events from a log
+async function fanOut({ postId, authorId }) {
+  if (await isCelebrity(authorId)) return;          // handled at read time
+
+  for await (const batch of followers.inBatches(authorId, 1000)) {
+    const active = batch.filter((f) => f.lastSeenDays < 30);
+    const pipe = redis.pipeline();
+    for (const f of active) {
+      pipe.zadd(`feed:${f.id}`, postId, postId);     // score = time-sortable ID
+      pipe.zremrangebyrank(`feed:${f.id}`, 0, -801); // keep newest 800
+    }
+    await pipe.exec();
+  }
+}
+```
+
+A sorted set keyed by a time-sortable post ID keeps each feed ordered
+and makes the trim a single command. Pipelining sends a thousand followers'
+writes in one round trip. And skipping inactive followers cuts the write
+volume dramatically — in many apps, most accounts haven't opened the app
+this month.
+
+Because the post-created event comes from a log, a worker crash just means
+the batch is replayed. `ZADD` of the same ID twice is harmless — the write
+is [idempotent by construction](/blog/idempotency-keys).
+
+## 6. The celebrity problem
 
 Push breaks on the long tail. An account with 40 million followers turns one
 post into 40 million writes: the fan-out queue backs up, and followers see
@@ -70,7 +139,26 @@ small. Inactive users are another cheap win: don't maintain feeds for
 accounts that haven't logged in for months, and rebuild one with a pull
 query when they come back.
 
-## Storing posts and media
+```javascript
+async function readFeed(userId, cursor, limit = 20) {
+  const [pushed, celebs] = await Promise.all([
+    redis.zrevrangebyscore(`feed:${userId}`, `(${cursor}`, '-inf', 'LIMIT', 0, limit),
+    followedCelebrities(userId),                      // usually a handful
+  ]);
+  const pulled = await Promise.all(
+    celebs.map((c) => recentPostIds(c, cursor, limit)) // cached per celebrity
+  );
+  const ids = mergeDescending([pushed, ...pulled]).slice(0, limit);
+  return hydrate(ids);
+}
+```
+
+The celebrity side is cheap because `recentPostIds(celebrity)` is the
+same for every reader — one cache entry per celebrity, read millions of
+times. The expensive part of pull (a different query per reader) only
+applies to the push side, which is already precomputed.
+
+## 7. Storing posts and media
 
 - **Posts**: a table keyed by post ID. Use [time-sortable IDs](/blog/unique-id-generation-snowflake)
   so the IDs in feed lists also encode order.
@@ -80,14 +168,33 @@ query when they come back.
   batch from a post cache. Counts that change constantly — likes, replies —
   are fetched separately, so updating them doesn't invalidate the post.
 
-## Pagination
+The social graph — who follows whom — is its own store, queried two ways:
+"who does X follow" (feed reads, celebrity merge) and "who follows X"
+(fan-out). Keep both directions as separate tables keyed by the first
+user, so each query is a single partition read.
+
+### Counters
+
+A like is a write to a counter that a million people may be incrementing
+at once. Don't `UPDATE posts SET likes = likes + 1` on a hot row. Buffer
+increments and flush them in batches, or spread one logical counter over
+several sharded counters and sum them on read. A like count that's a few
+seconds behind is fine; a write hotspot that slows every other query on
+that partition is not.
+
+## 8. Pagination
 
 Offset pagination breaks here, because new posts shift every offset while
 the user scrolls. Use a cursor — "posts older than ID X" — which stays
 correct however many posts arrive. See
 [cursor vs. offset pagination](/blog/cursor-vs-offset-pagination).
 
-## Ranking
+With time-sortable IDs, the cursor is just the last post ID the client
+saw. When the user scrolls past the ~800 IDs kept in their precomputed
+list, fall back to a pull query for older pages — rare, and acceptable
+to be slower.
+
+## 9. Ranking
 
 A chronological feed is the baseline. Ranked feeds add a second stage:
 fetch a few hundred candidates (the precomputed list plus celebrity posts,
@@ -96,7 +203,57 @@ as author affinity, recency and predicted engagement, and return the top 20.
 The candidate stage is the architecture above; ranking is a service that
 runs on top of it.
 
-## What breaks first
+Two consequences follow. A ranked feed can't use "older than ID X" as its
+cursor, since order no longer follows IDs — store the ranked list for the
+session and page through *that*. And ranking makes the 200 ms budget
+tight: candidate fetch, feature lookup and model scoring must all fit, so
+features are precomputed and cached, and the model is small enough to
+score hundreds of candidates in a few milliseconds.
+
+## 10. Privacy and deletes
+
+A post's audience can change after fan-out: the author deletes it, blocks
+a follower, or makes their account private. Chasing every copy through
+millions of feed lists is expensive and racy. Instead, **filter at read
+time**: hydration checks that the post still exists and that the viewer
+may see it, and drops anything that fails. Feed lists are a cache of
+*candidates*, never a source of truth for permissions.
+
+### Follow and unfollow
+
+Changing the graph changes feeds that already exist:
+
+- **Follow**: the new followee's recent posts aren't in your list, because
+  fan-out happened before you followed. Backfill asynchronously — fetch
+  their last few dozen posts and `ZADD` them into your feed. Until that
+  finishes, the next read can merge them in pull-style, so the follow
+  feels instant.
+- **Unfollow**: their posts are still in your list. Remove them in the
+  background (a scan of 800 IDs is cheap), and filter by the current
+  follow set at read time meanwhile.
+
+Both operations are rare compared with reads, so doing a little extra work
+here to keep the read path simple is the right trade.
+
+### Bootstrapping a new user
+
+A brand-new account follows nobody, so the push path gives them an empty
+feed. New users get candidates from elsewhere — popular posts in their
+region, suggested accounts — mixed in at the ranking stage, until their own
+graph is big enough to fill a page. It's the same candidate-plus-ranking
+architecture, with a different candidate source.
+
+### Multiple regions
+
+Users in different regions follow each other, so a post written in one
+region has followers everywhere. Replicate the post-created log across
+regions and run fan-out workers in each region for the followers who live
+there; each region keeps feed lists only for its own users. Reads stay
+local. The cost is a cross-region replication delay before a post appears
+for distant followers — usually under a second, and invisible next to
+everything else in the feed.
+
+## 11. What breaks first
 
 - **Fan-out lag** during spikes: queue depth grows. Workers scale
   horizontally; prioritise fan-out for active followers.
@@ -105,6 +262,43 @@ runs on top of it.
   every copy.
 - **Hot posts**: one viral post read millions of times. It's in every
   cache, so replicate hot keys across cache nodes.
+- **Cache loss**: if a feed cache node dies, its users' feeds rebuild with
+  a pull query on next read. Throttle rebuilds so a node failure doesn't
+  become a database stampede — see
+  [cache stampedes](/blog/cache-stampede-and-thundering-herd).
+
+## 12. Trade-offs to state out loud
+
+<Table
+  data={{
+    headers: ['decision', 'choice here', 'what you give up'],
+    rows: [
+      ['feed assembly', 'hybrid: push for most, pull for celebrities', 'two code paths and a threshold to tune'],
+      ['feed storage', 'capped sorted sets of IDs', 'deep history needs a slower pull query'],
+      ['inactive users', 'no fan-out; rebuild on return', 'a slow first load after months away'],
+      ['deletes/privacy', 'filtered at read time', 'a little wasted space in feed lists'],
+      ['counters', 'batched, eventually consistent', 'exact real-time like counts'],
+    ],
+  }}
+/>
+
+## 13. Follow-up questions to expect
+
+- **"Where's the celebrity threshold?"** Where fan-out cost exceeds the
+  read-time merge cost — measure it. Some systems also push a celebrity's
+  posts to their *most engaged* followers only.
+- **"New post doesn't show up for the author."** The author's own posts
+  are merged in at read time from their recent posts, so they never wait
+  on fan-out — [read-your-writes](/blog/read-your-writes-and-replication-lag)
+  again.
+- **"Real-time updates while the feed is open."** Don't push full posts;
+  show a "new posts" pill from a lightweight notification over an existing
+  connection, and load them on tap.
+- **"Edits."** Feed lists hold IDs, so an edited post is just a new
+  version in the post store and cache. Nothing else changes.
+- **"Mute a word or an account."** Another read-time filter in hydration,
+  alongside privacy checks. Muting never touches the precomputed lists,
+  so un-muting is instant too.
 
 ## Practise it
 

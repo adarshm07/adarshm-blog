@@ -34,6 +34,47 @@ costs a fraction of normal price on repeat requests.
 prompt, changes constantly, or you've measured that prompting has hit a
 ceiling.
 
+### What "good prompting" actually means
+
+Before concluding that prompting has hit a ceiling, check that you've
+tried the techniques that close most gaps:
+
+- **Examples beat descriptions.** Three input/output pairs showing the
+  exact format and tone usually do more than a paragraph describing them.
+  Include a tricky case, not just easy ones.
+- **Say what to do when unsure.** "If the ticket doesn't fit any category,
+  use `other` and explain why" prevents confident guessing.
+- **Structured output for machine consumers.** A schema removes a whole
+  class of formatting failures — see
+  [structured outputs](/blog/structured-outputs-from-llms).
+- **Decompose.** One prompt that classifies, extracts and drafts a reply is
+  harder to get right than three small prompts chained in code, each with
+  its own eval.
+- **Give it room to think** on hard tasks, and keep reasoning out of the
+  final output when the consumer is code.
+
+A prompt like this one, with its examples cached as part of a stable
+prefix, is cheap to run at volume:
+
+```
+You classify support tickets. Categories: billing, bug, account, other.
+Reply with JSON: {"category": ..., "confidence": "high" | "low"}.
+
+Ticket: "I was charged twice for October."
+{"category": "billing", "confidence": "high"}
+
+Ticket: "The export button does nothing on Safari."
+{"category": "bug", "confidence": "high"}
+
+Ticket: "Can you delete my data and also why was I charged?"
+{"category": "account", "confidence": "low"}
+
+Ticket: "{{ticket}}"
+```
+
+Most teams that think they need fine-tuning for a classification task
+haven't yet tried twenty good examples and an eval.
+
 ## RAG: when the knowledge is big or changing
 
 [RAG](/blog/rag-retrieval-explained) splits your documents into chunks,
@@ -73,6 +114,49 @@ examples, a training run, an evaluation set to prove it helped, and you
 repeat all of it when you want to change the behaviour or move to a newer
 base model.
 
+### What the training data looks like
+
+Fine-tuning data is a file of examples in the same chat format you use
+for requests — typically JSON Lines, one conversation per line:
+
+```json
+{"messages": [{"role": "system", "content": "Classify the ticket."}, {"role": "user", "content": "I was charged twice for October."}, {"role": "assistant", "content": "{\"category\": \"billing\"}"}]}
+{"messages": [{"role": "system", "content": "Classify the ticket."}, {"role": "user", "content": "Export does nothing on Safari."}, {"role": "assistant", "content": "{\"category\": \"bug\"}"}]}
+```
+
+The model learns to produce the assistant turns. That makes the quality
+bar plain: every assistant turn is something you're teaching it to say.
+Inconsistent labels, sloppy formatting or wrong answers in the training set
+are learned as faithfully as the good ones. A few hundred carefully checked
+examples usually beat thousands of noisy ones.
+
+### Distillation: the most common good reason
+
+The use case that pays off most reliably is **distillation**: a large,
+capable model does the task well but is too slow or expensive at your
+volume. So:
+
+1. Prompt the large model carefully and validate its outputs on a
+   representative sample with your eval set.
+2. Run it over thousands of real inputs to generate training examples.
+3. Fine-tune a much smaller model on those examples.
+4. Evaluate the small model against the large one on held-out cases.
+
+If the small model matches the large one on this narrow task, you get its
+speed and price at the large model's quality — for this task only. That
+"for this task only" is the trade: the small model has learned a narrow
+skill, not general capability. Check your provider's terms on using one
+model's outputs to train another.
+
+### Lighter-weight tuning
+
+You don't always have to update every weight. **Parameter-efficient**
+methods such as LoRA train a small set of extra parameters on top of a
+frozen base model. They're far cheaper to train and store — one base model
+can serve many small adapters, one per task or customer — and are the
+usual way open-weight models are tuned. Hosted fine-tuning services often
+use similar techniques behind the scenes.
+
 ## Why fine-tuning is the wrong way to teach facts
 
 It's the most common misconception. Fine-tuning on your documents does not
@@ -84,7 +168,10 @@ reliably make a model *know* them:
 - Knowledge is frozen at training time; any update means retraining.
 - There's no source to cite and no way to restrict who sees what.
 
-For facts, retrieve them. For behaviour, consider tuning.
+For facts, retrieve them. For behaviour, consider tuning. A useful
+shorthand: retrieval changes what the model is *looking at*; fine-tuning
+changes what it *tends to do*. Teaching a fact by changing tendencies is
+indirect at best.
 
 ## Side by side
 
@@ -99,6 +186,88 @@ For facts, retrieve them. For behaviour, consider tuning.
   ]
 }} />
 
+## Questions that decide it
+
+When a team is debating which approach to use, these questions usually
+settle it faster than arguing about the techniques:
+
+- **Is the gap knowledge or behaviour?** If the model gives wrong *facts*
+  about your domain, it needs to see them: prompt or RAG. If it has the
+  facts but answers in the wrong *way* — format, tone, structure — that's
+  behaviour: prompting first, fine-tuning if prompting can't hold it.
+- **How often does the knowledge change?** Weekly or faster rules out
+  baking it into weights.
+- **Do answers need sources?** Users, auditors or regulators asking "where
+  did that come from?" points to retrieval.
+- **Do different users see different data?** Permissions are enforced at
+  retrieval time; a fine-tuned model can't forget what one user isn't
+  allowed to know.
+- **What's the volume and the latency budget?** High volume on a narrow
+  task is where a distilled small model earns its keep.
+- **Do you have an eval set?** If not, build it first. Without one, none of
+  the three approaches can be shown to work, and fine-tuning in particular
+  becomes an expensive way to change things you can't measure.
+
+If the answers are "knowledge, changes often, needs sources", the decision
+is made before anyone opens a training notebook.
+
+## Long context or RAG?
+
+Context windows are now large enough to hold entire manuals, which raises
+a fair question: why retrieve at all?
+
+- **Put it all in the prompt** when the corpus is small enough to fit
+  comfortably, doesn't change often, and the questions need to see the
+  whole thing — "compare section 4 with appendix B". With caching, a large
+  stable prefix is affordable on repeat requests.
+- **Retrieve** when the corpus is larger than the window, changes often,
+  needs per-user permissions, or when cost and latency per request matter
+  more than squeezing out the last bit of quality. Sending 200,000 tokens
+  on every question is slower and pricier than sending the right 3,000,
+  even with caching.
+
+The two also combine: retrieve whole relevant documents rather than small
+chunks, and let a long context hold them.
+
+## Three scenarios
+
+**A support assistant for a SaaS product.** The knowledge is the help
+centre (hundreds of articles, edited weekly) plus each customer's account
+state. *Prompting* sets tone and escalation rules; *RAG* over the help
+centre supplies answers with citations; *tools* fetch account data live.
+No fine-tuning — the knowledge changes too often, and the behaviour is easy
+to describe.
+
+**Classifying ten million documents a month.** A large model with a good
+prompt hits 96% on the eval set but costs too much at that volume.
+*Distil* it: generate labels with the large model, fine-tune a small one,
+confirm it scores within a point on held-out data, and run the small model
+through a batch API. Here fine-tuning is the right answer — after
+prompting proved the task was learnable.
+
+**Writing in a strict house style.** A legal team's drafts must follow a
+template and phrasing conventions. Start with the style guide and examples
+in a cached prompt. If evals show the model drifting over long documents
+despite that, fine-tuning on a few hundred approved drafts is a reasonable
+next step — while RAG still supplies the case facts.
+
+## The maintenance bill
+
+The upfront cost of each approach is visible; the ongoing cost is easy to
+underestimate:
+
+- **Prompts** need an eval set and a review when the model version changes.
+- **RAG** needs an ingestion pipeline, re-indexing on document changes, and
+  monitoring of retrieval quality.
+- **Fine-tuned models** need the training data kept current, retraining
+  when behaviour must change, and a full re-run of the whole process to
+  move to each newer base model — or you stay on an ageing one while the
+  general models around it improve.
+
+That last point is easy to miss: base models keep getting better, and a
+prompt or a RAG system usually benefits from an upgrade on day one. A
+fine-tuned model has to be rebuilt to benefit.
+
 ## The order to try them
 
 1. **Prompt.** Write clear instructions and examples; build a small
@@ -110,4 +279,6 @@ For facts, retrieve them. For behaviour, consider tuning.
 
 They also combine: a fine-tuned model can still use RAG. But most teams
 that skip straight to fine-tuning would have shipped sooner — and better —
-with a good prompt and a retrieval step.
+with a good prompt and a retrieval step. The expensive option is sometimes the right
+one; it should be the one you arrive at with evidence, not the one you
+start from because it sounds the most like "real" machine learning.

@@ -68,6 +68,55 @@ bug, and it manifests as "all my results are empty arrays". Second, the
 `start` index prevents revisiting earlier elements, which is what makes
 these *combinations* (order doesn't matter) rather than permutations.
 
+### The tree behind it
+
+It helps to see the tree the subsets function walks. Each node is the
+current `path`; each edge adds one element with a higher index than the
+last:
+
+```
+[]
+├── [1]
+│   ├── [1,2]
+│   │   └── [1,2,3]
+│   └── [1,3]
+├── [2]
+│   └── [2,3]
+└── [3]
+```
+
+Eight nodes, eight subsets — this tree records a result at every node,
+which is why the function pushes on entry rather than only at leaves. The
+order of the output above is simply a depth-first walk of this picture.
+Drawing the first two levels like this, before writing code, is the
+quickest way to check what a "choice" is and whether duplicates or
+missing branches will appear.
+
+The cost follows from the tree: 2ⁿ nodes, and copying a path of up to n
+elements at each, so O(n · 2ⁿ) time. The recursion depth is at most n,
+so the extra space — apart from the output — is O(n).
+
+### Subsets without recursion
+
+For subsets specifically there's a neat non-recursive alternative: each
+subset of n items corresponds to an n-bit number, where bit `i` says
+whether item `i` is included. Counting from 0 to 2ⁿ − 1 enumerates them
+all:
+
+```javascript
+function subsetsBits(nums) {
+  const out = [];
+  for (let mask = 0; mask < 1 << nums.length; mask++) {
+    out.push(nums.filter((_, i) => mask & (1 << i)));
+  }
+  return out;
+}
+```
+
+It's compact and handy for small n, but it can't prune — every mask is
+generated — so the recursive template wins whenever constraints let you
+skip branches. See [bit manipulation](/blog/bit-manipulation-fundamentals).
+
 ## Permutations: track what's used
 
 For permutations order *does* matter, so every level considers every
@@ -150,32 +199,17 @@ contain an answer.
 
 ## When backtracking is the right tool
 
-<table>
-  <thead>
-    <tr>
-      <th>Problem smell</th>
-      <th>Why backtracking fits</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>Generate ALL combinations / permutations / partitions</td>
-      <td>The tree enumerates exactly the answer space</td>
-    </tr>
-    <tr>
-      <td>Constraint puzzle (Sudoku, N-Queens, crosswords)</td>
-      <td>Constraints give aggressive pruning</td>
-    </tr>
-    <tr>
-      <td>Word search / path finding with used-cell rules</td>
-      <td>Choose–explore–unchoose maps to marking cells</td>
-    </tr>
-    <tr>
-      <td>"Return all valid …" in an interview</td>
-      <td>Almost always this template</td>
-    </tr>
-  </tbody>
-</table>
+<Table
+  data={{
+    headers: ['Problem smell', 'Why backtracking fits'],
+    rows: [
+      ['Generate ALL combinations / permutations / partitions', 'The tree enumerates exactly the answer space'],
+      ['Constraint puzzle (Sudoku, N-Queens, crosswords)', 'Constraints give aggressive pruning'],
+      ['Word search / path finding with used-cell rules', 'Choose–explore–unchoose maps to marking cells'],
+      ['"Return all valid …" in an interview', 'Almost always this template'],
+    ],
+  }}
+/>
 
 And when it isn't: if the problem asks for a *count* or an *optimum*
 rather than the solutions themselves, and subproblems repeat, dynamic
@@ -187,10 +221,164 @@ cleverness changes that — the *output itself* is that large. Pruning
 helps when constraints kill most branches; it can't help when you must
 emit every leaf.
 
+## Combination sum: when choices can repeat
+
+Find every combination of candidates (each usable any number of times)
+that sums to a target. Two small changes to the subsets template:
+
+```javascript
+function combinationSum(candidates, target) {
+  const results = [], path = [];
+  candidates.sort((a, b) => a - b);
+
+  function backtrack(start, remaining) {
+    if (remaining === 0) { results.push([...path]); return; }
+    for (let i = start; i < candidates.length; i++) {
+      if (candidates[i] > remaining) break;      // sorted: nothing later fits either
+      path.push(candidates[i]);
+      backtrack(i, remaining - candidates[i]);   // i, not i + 1: reuse allowed
+      path.pop();
+    }
+  }
+
+  backtrack(0, target);
+  return results;
+}
+
+combinationSum([2, 3, 6, 7], 7);   // [[2, 2, 3], [7]]
+```
+
+Passing `i` instead of `i + 1` lets the same candidate be chosen again;
+keeping `start` stops `[3, 2, 2]` appearing as a duplicate of `[2, 2, 3]`.
+Sorting first turns a `continue` into a `break` — once a candidate is too
+big, every later one is too — which prunes whole rows of the tree.
+
+## Duplicates in the input
+
+With input `[1, 2, 2]`, the plain subsets template produces `[1, 2]` twice
+— once with each 2. The fix: sort, then at each level skip a value equal
+to the previous one *at the same level*:
+
+```javascript
+for (let i = start; i < nums.length; i++) {
+  if (i > start && nums[i] === nums[i - 1]) continue;   // same value, same level
+  path.push(nums[i]);
+  backtrack(i + 1);
+  path.pop();
+}
+```
+
+The `i > start` condition is the subtle part. It allows the second 2 to be
+used *after* the first (giving `[2, 2]`), but not *instead of* it as the
+choice at the same position. The same sort-and-skip trick handles
+duplicate permutations and duplicate combination sums.
+
+## Word search: backtracking on a grid
+
+Is a word present in a grid of letters, moving between adjacent cells
+without reusing a cell? Choose a neighbour, explore, unchoose — where
+"choose" means marking the cell as used:
+
+```javascript
+function exist(board, word) {
+  const R = board.length, C = board[0].length;
+
+  function dfs(r, c, k) {
+    if (k === word.length) return true;               // matched every letter
+    if (r < 0 || c < 0 || r >= R || c >= C || board[r][c] !== word[k]) return false;
+
+    const saved = board[r][c];
+    board[r][c] = '#';                                // choose: mark used
+    const found = dfs(r + 1, c, k + 1) || dfs(r - 1, c, k + 1) ||
+                  dfs(r, c + 1, k + 1) || dfs(r, c - 1, k + 1);
+    board[r][c] = saved;                              // unchoose: restore
+    return found;
+  }
+
+  for (let r = 0; r < R; r++)
+    for (let c = 0; c < C; c++)
+      if (dfs(r, c, 0)) return true;
+  return false;
+}
+```
+
+Two habits show up here. The function **returns a boolean and stops at the
+first success** — the `||` short-circuits, so once one path matches, no
+other branch is explored. And the board itself is the visited set, marked
+and restored in place, which saves allocating one per path. Restoring
+*before* returning — even on success — keeps the board intact for the
+caller.
+
+## Sudoku: pruning with a heuristic
+
+A Sudoku solver is the template with a constraint check: pick an empty
+cell, try each digit that doesn't conflict, recurse, undo on failure.
+
+```javascript
+function solveSudoku(board) {
+  const rows = [...Array(9)].map(() => new Set());
+  const cols = [...Array(9)].map(() => new Set());
+  const boxes = [...Array(9)].map(() => new Set());
+  const box = (r, c) => Math.floor(r / 3) * 3 + Math.floor(c / 3);
+  const empty = [];
+
+  for (let r = 0; r < 9; r++)
+    for (let c = 0; c < 9; c++) {
+      const v = board[r][c];
+      if (v === '.') empty.push([r, c]);
+      else { rows[r].add(v); cols[c].add(v); boxes[box(r, c)].add(v); }
+    }
+
+  function solve(i) {
+    if (i === empty.length) return true;
+    const [r, c] = empty[i];
+    for (const d of '123456789') {
+      if (rows[r].has(d) || cols[c].has(d) || boxes[box(r, c)].has(d)) continue;
+      board[r][c] = d; rows[r].add(d); cols[c].add(d); boxes[box(r, c)].add(d);
+      if (solve(i + 1)) return true;
+      board[r][c] = '.'; rows[r].delete(d); cols[c].delete(d); boxes[box(r, c)].delete(d);
+    }
+    return false;
+  }
+  return solve(0);
+}
+```
+
+That solves typical puzzles quickly. For hard ones, the biggest speed-up
+isn't faster checks but **choosing which cell to fill next**: always pick
+the empty cell with the *fewest* legal digits. A cell with one option is
+forced; a cell with two halves the search. This "most constrained first"
+heuristic shrinks the tree dramatically, and it's a general rule for
+constraint problems: make the choice most likely to fail early.
+
+## Common mistakes
+
+- **Not copying the path** when recording a result — every result ends up
+  as the same (eventually empty) array.
+- **Asymmetric choose/unchoose** — setting `used[i] = true` but forgetting
+  to reset it, or popping without having pushed on some branch.
+- **Returning before restoring** shared state on an early exit, leaving
+  the board or sets corrupted for the caller.
+- **Pruning too late** — checking validity only at the leaves instead of
+  as each choice is made, so the search explores whole subtrees that were
+  doomed from the first bad choice.
+- **Using backtracking for a count or optimum** when the subproblems
+  repeat — that's dynamic programming's job.
+
+## Practice
+
+In order: subsets, permutations, combination sum, subsets with
+duplicates, palindrome partitioning, word search, N-Queens, Sudoku. For
+each, sketch the first two levels of the decision tree before coding —
+what is a "choice" at each level, and what makes a choice invalid? See also
+[bitmask DP](/blog/bitmask-dp-traveling-salesman), for when an
+exponential search over subsets has overlapping subproblems.
+
 ## Wrap-up
 
 Backtracking is DFS over a decision tree with three beats: choose,
 explore, unchoose. Copy the path when you record a result, keep
 choose/unchoose perfectly symmetric, and prune as early as the constraints
 allow. Master the subsets and permutations templates, and most "return all
-valid X" problems become fill-in-the-blanks.
+valid X" problems become fill-in-the-blanks. The rest is
+spotting the constraint that lets you prune.

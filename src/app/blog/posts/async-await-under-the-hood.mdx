@@ -80,7 +80,14 @@ Each `await expr` is a `yield expr` in the underlying generator: the
 generator pauses, the driver wraps the yielded value in
 `Promise.resolve()`, and resumes the generator (`.next()` or `.throw()`)
 only once that promise settles. That's the entire mechanism — no threads,
-no blocking, just a promise chain with generator syntax on top.
+no blocking, just a promise chain with generator syntax on top. Engines
+don't literally compile to this — V8 implements `async` functions natively
+— but the observable behaviour is the same, and it's what Babel and
+TypeScript emit when targeting older runtimes.
+
+The same model explains why an `async` function always returns a *new*
+promise, even when it returns one: the driver's `resolve(value)` adopts
+it, adding a layer the caller never sees.
 
 ## Why sequential await is slower than it needs to be
 
@@ -154,6 +161,212 @@ returned promise's eventual rejection happens **after** the function has
 already returned, outside the `try`/`catch`'s reach — an unhandled
 rejection instead of a caught error.
 
+### `return await` is not redundant inside try
+
+A related subtlety. These two look equivalent:
+
+```javascript
+async function a() {
+  try { return fetchJson(url) }          // returns the promise unawaited
+  catch { return fallback }
+}
+
+async function b() {
+  try { return await fetchJson(url) }    // awaits inside the try
+  catch { return fallback }
+}
+```
+
+In `a`, the function returns the promise before it settles, so a later
+rejection isn't thrown inside the `try` — the `catch` never runs and the
+caller gets the rejection. In `b`, the rejection is thrown at the `await`,
+inside the `try`, and the fallback is returned. Outside a `try` block the
+extra `await` makes no difference to behaviour, and it gives better stack
+traces, so many style guides simply recommend `return await` everywhere.
+
+### Errors from parallel work
+
+`Promise.all` rejects with the *first* failure and discards the rest —
+the other operations keep running, but their errors and results are lost.
+When you need every outcome:
+
+```javascript
+const results = await Promise.allSettled(ids.map(loadUser));
+const failed = results.filter((r) => r.status === 'rejected');
+if (failed.length) log.warn(`${failed.length} of ${ids.length} failed`, failed.map((f) => f.reason));
+const users = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+```
+
+## A timing puzzle
+
+Knowing that every `await` is a microtask boundary lets you predict
+interleavings exactly:
+
+```javascript
+async function one() {
+  console.log('1a');
+  await null;
+  console.log('1b');
+  await null;
+  console.log('1c');
+}
+async function two() {
+  console.log('2a');
+  await null;
+  console.log('2b');
+}
+one();
+two();
+console.log('sync');
+```
+
+Output: `1a 2a sync 1b 2b 1c`. Both functions run synchronously to their
+first `await`, then the synchronous code finishes. After that, each
+continuation is a microtask, queued in the order the awaits happened, so
+the two functions take turns — one step each. Any shared state they both
+touch can be observed half-updated between those steps, which is the root
+of most "it only fails sometimes" async bugs.
+
+## Async callbacks in array methods
+
+Array methods don't know about promises, so passing them an `async`
+callback rarely does what it looks like:
+
+<Table
+  data={{
+    headers: ['code', 'what actually happens'],
+    rows: [
+      ['items.forEach(async (x) => await save(x))', 'starts every save, returns immediately, ignores results and errors'],
+      ['items.map(async (x) => await load(x))', 'returns an array of promises — wrap in Promise.all'],
+      ['items.filter(async (x) => await check(x))', 'keeps everything: a promise is always truthy'],
+      ['items.reduce(async (acc, x) => …, init)', 'works only if each step awaits acc first; easy to get wrong'],
+    ],
+  }}
+/>
+
+The reliable patterns are `await Promise.all(items.map(fn))` for parallel
+work, a plain `for...of` loop with `await` for sequential work, and a
+concurrency-limited helper when there are many items — see
+[promises in depth](/blog/javascript-promises-in-depth).
+
+## Async iteration
+
+Some data arrives over time: pages of an API, lines of a file, messages
+from a socket. **Async generators** combine `async` and `yield`, and
+`for await...of` consumes them:
+
+```javascript
+async function* allPages(url) {
+  let cursor = null;
+  do {
+    const page = await fetch(`${url}?cursor=${cursor ?? ''}`).then((r) => r.json());
+    yield* page.items;                 // hand items out one at a time
+    cursor = page.nextCursor;
+  } while (cursor);
+}
+
+for await (const item of allPages('/api/orders')) {
+  if (item.total > 10_000) { notify(item); break; }   // stops fetching early
+}
+```
+
+This improves on the earlier `fetchAllPages`: the consumer processes items
+as they arrive instead of waiting for every page, memory holds one page at
+a time, and `break` stops the generator — no further pages are fetched.
+Node streams are async-iterable too, which is how the
+[streams post](/blog/streams-and-backpressure) gets backpressure from a
+plain loop.
+
+## Top-level await
+
+In ES modules (not CommonJS scripts), `await` works at the top level:
+
+```javascript
+// config.mjs
+export const config = await loadConfigFromVault();
+```
+
+Any module importing `config.mjs` waits until that promise settles before
+running. It's convenient for start-up work, and it can surprise you: one
+slow top-level await delays every module that depends on it, directly or
+indirectly. Keep it for genuine initialisation — see
+[ESM vs CommonJS](/blog/esm-vs-commonjs).
+
+## Cancelling an async function
+
+An `async` function can't be stopped from outside; it runs until it
+returns or throws. Cancellation is cooperative: accept an `AbortSignal`,
+pass it to anything that supports one, and check it between steps:
+
+```javascript
+async function syncAll(accounts, { signal } = {}) {
+  for (const account of accounts) {
+    signal?.throwIfAborted();                     // stop between steps
+    await syncAccount(account, { signal });       // and inside them
+  }
+}
+
+const controller = new AbortController();
+cancelButton.onclick = () => controller.abort();
+await syncAll(accounts, { signal: controller.signal });
+```
+
+See [AbortController and cancellation](/blog/abortcontroller-and-cancellation).
+
+## Debugging: async stack traces
+
+A long-standing complaint about callbacks was useless stack traces that
+started at the event loop. With native `async`/`await`, engines record the
+chain of awaiting functions, so an error thrown three awaits deep shows
+the async callers that led there in DevTools and in Node's error output.
+Two things break that chain: transpiling `async` functions down to older
+JavaScript (generators or state machines), and plain `.then` chains, which
+the engine can't always stitch together. Another quiet reason to prefer
+native `await` in modern targets.
+
+## Is await expensive?
+
+Each `await` costs at least one microtask turn — a trip through the
+queue — even when the value is already available. `await 42` still
+suspends the function and resumes it later. Early implementations were
+worse: awaiting a native promise took three microtask ticks because of
+extra wrapping, until the specification was changed (around 2019) to
+reuse native promises directly, cutting it to one. That change is why some
+old blog posts' "puzzle" outputs no longer match what modern engines print.
+
+In practice the cost is tiny next to any real I/O. It matters only in hot
+loops over values that are usually synchronous — a cache that's almost
+always warm, say. There, checking for the fast case first avoids a
+suspension per item:
+
+```javascript
+const cached = cache.get(key);
+const value = cached !== undefined ? cached : await loadAndCache(key);
+```
+
+## Testing async code
+
+Test frameworks understand promises, so the main rule is simple: return
+or await the promise, or the test finishes before the assertion runs.
+
+```javascript
+test('loads the user', async () => {
+  const user = await loadUser('u1');            // awaited: failures are reported
+  expect(user.name).toBe('Ada');
+});
+
+test('rejects for unknown ids', async () => {
+  await expect(loadUser('nope')).rejects.toThrow('not found');
+});
+```
+
+Two other habits make async tests reliable. Control time with fake timers
+instead of real waits, so a test of a 30-second retry runs in
+milliseconds. And when the code under test starts work without awaiting it
+(a fire-and-forget log write, for instance), expose a way to wait for it
+— returning the promise, or a `flush()` helper — rather than adding a
+`setTimeout` to the test and hoping it was long enough.
+
 ## Wrap-up
 
 `async`/`await` doesn't introduce a new concurrency primitive — it's
@@ -163,4 +376,7 @@ always been there. `async` guarantees the return value is a promise;
 awaited promise settles, without ever blocking the thread. Knowing that
 desugared shape is what makes the difference between code that reads
 sequential and code that accidentally *runs* sequential when it didn't
-need to.
+need to. Read every `await` as "other code may run here", start
+independent work before awaiting it, keep `await` inside the `try` it
+belongs to, and reach for async iteration when data arrives over time —
+those four habits cover nearly every bug this syntax makes easy to write.

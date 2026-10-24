@@ -1,7 +1,7 @@
 ---
 title: "Consistent Hashing: Scaling Without Reshuffling Everything"
 publishedAt: "2026-07-12"
-summary: "Why `hash % N` falls apart the moment you add a server, and how consistent hashing moves only a fraction of your keys when the cluster changes."
+summary: "Why `hash % N` falls apart the moment you add a server, how consistent hashing moves only a fraction of your keys when the cluster changes, virtual nodes, replicas on the ring, bounded loads, rendezvous and jump hashing, and what Cassandra and Redis Cluster actually do."
 tags: "System Design"
 ---
 
@@ -9,8 +9,8 @@ You have data — cache entries, sessions, database rows — and a set of
 servers to spread it across. The question is deceptively simple: *given a
 key, which server owns it?* The naive answer works fine until the day you
 add or remove a server, at which point it quietly melts down. Consistent
-hashing is the fix, and it's behind Redis Cluster, Cassandra, DynamoDB,
-CDNs, and load balancers everywhere.
+hashing is the fix, and it's behind Cassandra, DynamoDB, CDNs, and load
+balancers everywhere.
 
 ## The naive approach and why it breaks
 
@@ -31,6 +31,20 @@ across all keys and roughly **80% of them relocate**. For a cache, that's a
 mass miss storm: nearly everything has to be re-fetched from the origin at
 once. For a database, it's a giant, coordinated data migration just to add
 one node. The system is punished for growing.
+
+You can check the 80% in a few lines:
+
+```javascript
+let moved = 0;
+for (let k = 0; k < 1_000_000; k++) {
+  if (k % 4 !== k % 5) moved++;
+}
+console.log(moved / 1_000_000);   // 0.8
+```
+
+A key stays put only when `k % 4 === k % 5`, which happens for 4 out of
+every 20 consecutive keys. In general, going from N to N + 1 servers moves
+about N / (N + 1) of the keys — the bigger the cluster, the worse it gets.
 
 ## The ring
 
@@ -70,6 +84,28 @@ class HashRing {
 Removing a server is the mirror image: only *its* keys move, and they go to
 the next server clockwise. Everyone else is untouched.
 
+### A faster lookup
+
+The linear scan above is fine for teaching but O(number of ring points).
+Real implementations binary-search the sorted array:
+
+```javascript
+serverFor(key) {
+  const h = hash(key);
+  let lo = 0, hi = this.ring.length;          // find first node.hash >= h
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (this.ring[mid].hash < h) lo = mid + 1;
+    else hi = mid;
+  }
+  return this.ring[lo === this.ring.length ? 0 : lo].server;
+}
+```
+
+With 100 servers × 150 virtual nodes that's ~14 comparisons per lookup —
+effectively free next to the network call that follows. (See
+[binary search](/blog/binary-search-and-bst) for the pattern.)
+
 ## The uneven-load problem, and virtual nodes
 
 There's a catch. With only a few servers placed randomly on the ring, the
@@ -99,39 +135,161 @@ addServer(server, vnodes = 150) {
 Virtually every real implementation uses virtual nodes; the plain ring is
 just the teaching version.
 
+How many is enough? With one point per server, the busiest server
+commonly owns several times the average share. With ~100–200 points per
+server, the spread typically tightens to within roughly ±10% of the mean.
+More points mean a bigger ring array and slower rebuilds, so there's no
+reason to go to thousands. Virtual nodes also handle **unequal machines**:
+give a server with twice the capacity twice as many points.
+
+### Choosing the hash function
+
+The ring only spreads keys evenly if the hash does. Use a fast,
+well-distributed non-cryptographic hash — MurmurHash, xxHash — not a
+string-length or character-sum hash. Cryptographic hashes like SHA-256
+distribute well too but are slower than necessary. Whatever you choose,
+every client must use exactly the same function and the same server names,
+or they'll disagree about owners.
+
+## Replicas on the ring
+
+For storage systems, one owner per key isn't enough — you want copies. The
+ring gives a natural answer: a key's replicas are the **next R distinct
+physical servers** walking clockwise from the key.
+
+```javascript
+replicasFor(key, r = 3) {
+  const out = [];
+  let i = this.indexFor(hash(key));              // binary search as above
+  while (out.length < r && out.length < this.serverCount) {
+    const s = this.ring[i % this.ring.length].server;
+    if (!out.includes(s)) out.push(s);           // skip other vnodes of the same server
+    i++;
+  }
+  return out;
+}
+```
+
+The "distinct physical servers" check matters: with virtual nodes, the next
+three points might belong to the same machine, and three copies on one
+machine aren't three copies. Production systems go further and skip
+servers in the same rack or availability zone, so a zone outage can't take
+all replicas of a key. This is the scheme from Amazon's Dynamo paper, and
+Cassandra's replication strategies are variations of it — see
+[quorum reads and writes](/blog/quorum-reads-and-writes) for how those
+replicas are then read and written.
+
+## Hot keys: consistent hashing doesn't help
+
+Consistent hashing balances *keys*. It does nothing for one key that gets
+far more traffic than the rest — a viral post, a celebrity profile. That
+key still maps to exactly one server (or one replica set). Fixes live above
+the ring: replicate hot keys into a local cache on every app server, or
+split a hot key into several subkeys (`post:42#0` … `post:42#7`) that hash
+to different servers, reading from a random one.
+
+### Bounded loads
+
+A refinement for load balancers and caches: **consistent hashing with
+bounded loads** caps each server at, say, 1.25× the average load. When a
+key's owner is full, the key moves on to the next server clockwise with
+room. Assignments stay mostly stable — the ring property is preserved for
+almost all keys — but no server can be overwhelmed by an unlucky hash
+distribution. Load balancers that need session stickiness use this so
+popular backends don't melt.
+
+## Alternatives to the ring
+
+**Rendezvous (highest random weight) hashing.** For each key, compute
+`hash(key, server)` for every server and pick the highest score. Adding a
+server moves only the keys for which the new server now scores highest —
+about 1/N, like the ring — with no ring structure, no virtual nodes, and
+naturally even load. The cost is O(N) per lookup, which is fine for tens of
+servers and too slow for thousands.
+
+```javascript
+const owner = (key, servers) =>
+  servers.reduce((best, s) =>
+    hash(`${key}:${s}`) > hash(`${key}:${best}`) ? s : best);
+```
+
+**Jump consistent hash.** A few lines of arithmetic that map a key to one of
+N buckets with perfectly even distribution, no memory, and minimal
+movement when N grows. The catch: buckets are numbered 0…N−1, and you can
+only add or remove the *last* one. Great for sharding storage you control;
+unsuitable when arbitrary nodes can fail.
+
+**Fixed slots.** Redis Cluster doesn't use a ring at all. It hashes every key
+to one of **16,384 slots** (CRC16 of the key, mod 16384) and assigns slots to
+nodes explicitly. Adding a node means migrating some slots to it. It's the
+"logical shards" idea from [sharding and
+replication](/blog/database-sharding-and-replication): a fixed key→slot
+mapping that never changes, and a small slot→node table that does.
+
+<Table
+  data={{
+    headers: ['scheme', 'lookup', 'keys moved on change', 'best for'],
+    rows: [
+      ['hash % N', 'O(1)', '~all', 'fixed, never-changing server sets'],
+      ['ring + virtual nodes', 'O(log points)', '~1/N', 'caches, Dynamo-style stores'],
+      ['rendezvous', 'O(N)', '~1/N', 'small server sets, load balancers'],
+      ['jump hash', 'O(log N)', '~1/N', 'numbered shards you add to at the end'],
+      ['fixed slots + table', 'O(1)', 'only migrated slots', 'Redis Cluster, logical sharding'],
+    ],
+  }}
+/>
+
+## Who knows the ring?
+
+Every client must agree on the server list, or two clients will send the
+same key to different servers. Options:
+
+- **Static config** shipped to clients — simple, but every change is a
+  deploy.
+- **A coordination service** (ZooKeeper, etcd) holding membership, which
+  clients watch for changes.
+- **Gossip** among the servers themselves, with clients asking any server
+  for the current view — Cassandra's approach. See
+  [gossip protocols](/blog/gossip-protocols-and-failure-detection).
+
+During a membership change, clients briefly disagree. For a cache, that
+means a few extra misses. For a database, the servers must handle requests
+for keys they're in the middle of gaining or losing — usually by forwarding
+or redirecting (Redis Cluster's `MOVED` and `ASK` replies do exactly this).
+
+## Mistakes that bring the stampede back
+
+- **Naming servers by IP.** If a replacement machine comes up with a new IP,
+  its points land in different places on the ring, and you've moved twice
+  as many keys as necessary. Hash a stable logical name (`cache-07`), not
+  the address.
+- **Different vnode counts or hash seeds across clients.** Two client
+  versions with different settings disagree on every key's owner — a
+  cache hit rate that silently halves after a partial deploy. Treat ring
+  parameters as part of the protocol.
+- **Rebuilding the ring on every request.** Sorting tens of thousands of
+  points per lookup turns a microsecond operation into a millisecond one.
+  Build once per membership change and share it.
+- **Adding many nodes at once without warming.** Even at 1/N per node,
+  doubling a cache cluster in one step moves half the keys. Add nodes
+  gradually, or pre-warm new nodes before they take traffic.
+- **Forgetting removal is a load spike.** When a node dies, its keys go to
+  its neighbours instantly. Leave headroom on every node for its share of
+  a failed peer's load.
+
 ## The trade-offs
 
-<table>
-  <thead>
-    <tr>
-      <th></th>
-      <th>hash % N</th>
-      <th>Consistent hashing</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>Lookup cost</td>
-      <td>O(1)</td>
-      <td>O(log N) (binary search the ring)</td>
-    </tr>
-    <tr>
-      <td>Keys moved when adding a node</td>
-      <td>~all of them</td>
-      <td>~1/N of them</td>
-    </tr>
-    <tr>
-      <td>Even load</td>
-      <td>Yes, automatically</td>
-      <td>Needs virtual nodes</td>
-    </tr>
-    <tr>
-      <td>Complexity</td>
-      <td>Trivial</td>
-      <td>Moderate</td>
-    </tr>
-  </tbody>
-</table>
+<Table
+  data={{
+    headers: ['', 'hash % N', 'Consistent hashing'],
+    rows: [
+      ['Lookup cost', 'O(1)', 'O(log N) (binary search the ring)'],
+      ['Keys moved when adding a node', '~all of them', '~1/N of them'],
+      ['Even load', 'Yes, automatically', 'Needs virtual nodes'],
+      ['Complexity', 'Trivial', 'Moderate'],
+    ],
+  }}
+/>
 
 If your server set truly never changes, `% N` is fine — don't over-engineer.
 Consistent hashing earns its complexity precisely when nodes come and go:
@@ -143,6 +301,9 @@ deploy shouldn't invalidate everything.
 `hash % N` ties every key's location to the exact server count, so changing
 that count reshuffles nearly everything. Consistent hashing puts keys and
 servers on a ring and assigns each key to the next server clockwise, so a
-membership change disturbs only a thin slice of keys — and virtual nodes
-keep that slice evenly spread. It's the standard answer to "how do I add a
-server without a stampede?"
+membership change disturbs only a thin slice of keys — virtual nodes keep
+that slice evenly spread, and walking further clockwise gives you replicas.
+Rendezvous hashing, jump hashing and fixed slots solve the same problem
+with different trade-offs. It's the standard answer to "how do I add a
+server without a stampede?" — as long as you remember it balances keys,
+not hot keys.

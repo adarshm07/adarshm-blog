@@ -46,6 +46,31 @@ Other costs follow from that:
   Most message brokers, SaaS APIs and NoSQL stores don't, and a card
   network certainly won't hold a lock for you.
 
+### Walking through the failure
+
+The blocking problem is easiest to see on a timeline:
+
+1. Coordinator sends `PREPARE` to orders, payments and inventory.
+2. All three write their changes, take locks, write "prepared" to their
+   logs, and vote yes.
+3. The coordinator writes `COMMIT` to its own log — and crashes before
+   telling anyone.
+
+Every participant is now stuck. Each one has voted yes, so it can't abort
+on its own (the coordinator may have decided to commit). It can't commit
+either (the coordinator may have decided to abort — if, say, a vote had
+been lost). The only safe thing is to wait, holding locks, while every
+other transaction touching those rows queues behind it. Participants can
+ask each other, but if none of them heard the decision, asking doesn't
+help.
+
+**Three-phase commit** adds an extra "pre-commit" round to avoid this
+blocking, but it assumes a network where messages aren't delayed
+indefinitely, which real networks don't promise; it's rarely used. The
+practical fix is to make the coordinator itself fault-tolerant — replicate
+its decision log with [Raft](/blog/raft-leader-election) or Paxos — so a
+coordinator crash is just a leader election.
+
 2PC is used inside systems that control all the participants — distributed
 databases such as Spanner and CockroachDB run commit protocols across their
 own shards, with consensus making the coordinator fault-tolerant. Across
@@ -100,6 +125,125 @@ two or three steps; orchestration scales better as flows grow.
 Either way, each service must update its database *and* publish its event
 reliably. That's the [outbox pattern](/blog/dual-writes-and-the-outbox-pattern).
 
+## An orchestrator, in code
+
+The core of an orchestrator is small: a list of steps with their
+compensations, and a durable record of how far each saga has got.
+
+```javascript
+const placeOrder = [
+  { name: 'reserveStock',  run: inventory.reserve, undo: inventory.release },
+  { name: 'chargeCard',    run: payments.charge,   undo: payments.refund   },
+  { name: 'confirmOrder',  run: orders.confirm,    undo: null              }, // after the pivot
+];
+
+async function runSaga(sagaId, steps, input) {
+  let state = await sagaLog.load(sagaId);           // { completed: [...], status }
+
+  for (const step of steps) {
+    if (state.completed.includes(step.name)) continue; // resumed after a crash
+    try {
+      await step.run(input, { idempotencyKey: `${sagaId}:${step.name}` });
+      state = await sagaLog.markDone(sagaId, step.name);
+    } catch (err) {
+      if (isRetryable(err)) throw err;              // let the runner retry later
+      await sagaLog.setStatus(sagaId, 'compensating');
+      return compensate(sagaId, steps, state.completed, input);
+    }
+  }
+  await sagaLog.setStatus(sagaId, 'completed');
+}
+
+async function compensate(sagaId, steps, completed, input) {
+  for (const name of [...completed].reverse()) {
+    const step = steps.find((s) => s.name === name);
+    if (!step.undo) continue;
+    await retryForever(() =>
+      step.undo(input, { idempotencyKey: `${sagaId}:undo:${name}` }));
+  }
+  await sagaLog.setStatus(sagaId, 'compensated');
+}
+```
+
+Three things make this safe rather than just plausible:
+
+- **The saga log is written after every step**, so a crashed orchestrator
+  restarts, loads the log, and skips completed steps. It never re-runs a
+  step it already recorded — and for the one step that might have run
+  without being recorded (crash between `run` and `markDone`), the
+  idempotency key makes the repeat harmless.
+- **Retryable and permanent failures are different.** A timeout from the
+  payment API isn't "the card was declined". Retrying the former and
+  compensating on the latter keeps the saga from refunding orders that
+  would have succeeded a second later.
+- **Compensations retry indefinitely.** They're the path back to a
+  consistent state, so giving up isn't an option — escalate to a human
+  queue after a while, but keep the saga marked `compensating` until
+  someone resolves it.
+
+A workflow engine gives you all of this — durable state, retries, timers,
+visibility — without writing the runner yourself, which is why teams with
+more than a couple of sagas usually adopt one.
+
+### Timeouts and stuck sagas
+
+Every saga needs a deadline. A step that neither succeeds nor fails — a
+payment that's "processing" for an hour — leaves the saga hanging and the
+order pending forever. Give each step a timeout, decide what the timeout
+means (retry? compensate? ask the provider for the status?), and run a
+periodic sweep for sagas that have been in a non-final state too long.
+Those are your operational alerts.
+
+## Try–Confirm–Cancel
+
+A variation worth knowing is **TCC**. Each service exposes three
+operations instead of two:
+
+- **Try** reserves resources tentatively — a hold on the card, a soft
+  reservation of stock — without making anything final.
+- **Confirm** turns every reservation into a real change, once all tries
+  have succeeded.
+- **Cancel** releases the reservations if any try failed.
+
+It looks like 2PC at the application level, but each phase is an ordinary
+local transaction, nothing blocks waiting on a coordinator, and
+reservations expire on their own if no confirm arrives. Card payments
+already work this way — authorise, then capture or void — which makes TCC
+a natural fit for checkout flows.
+
+## Side by side
+
+<Table
+  data={{
+    headers: ['', 'Two-phase commit', 'Saga', 'TCC'],
+    rows: [
+      ['Atomicity', 'Yes', 'No — compensations instead', 'Yes, at the business level'],
+      ['Isolation', 'Locks held until commit', 'None between steps', 'Reservations are visible'],
+      ['Blocking on coordinator failure', 'Yes', 'No', 'No — reservations expire'],
+      ['Participant requirements', 'Must speak the protocol', 'Local transaction + undo action', 'Try/confirm/cancel endpoints'],
+      ['Typical home', 'Inside a distributed database', 'Microservices, long workflows', 'Payments, bookings, inventory'],
+    ],
+  }}
+/>
+
+## Testing sagas
+
+Sagas fail in the gaps between steps, so tests have to create those gaps:
+
+- **Fail each step in turn.** For a three-step saga, run it three times,
+  forcing step 1, then 2, then 3 to fail permanently, and assert the end
+  state each time: the right compensations ran, in reverse order, and
+  nothing else did.
+- **Crash between run and record.** Kill the orchestrator after a step
+  succeeds but before it's logged, restart it, and check the step isn't
+  applied twice.
+- **Duplicate every message.** Deliver each command and event twice. If
+  anything changes the second time, a step isn't idempotent.
+- **Fail a compensation.** Make the refund fail a few times, then succeed,
+  and check the saga ends `compensated`, not stuck.
+
+These four tests catch most saga bugs before production does.
+
 ## The parts sagas don't solve for you
 
 **Retries mean duplicates.** The orchestrator retries any step whose result
@@ -119,9 +263,31 @@ countermeasures:
 - **Re-reading values**: check that data hasn't changed before a step that
   depends on it, as optimistic locking does.
 
-**Compensations can fail too.** A refund API might be down. Compensations
+**Compensations can fail too.** A refund API might be down, rate-limited,
+or reject a refund for a charge it hasn't finished settling. Compensations
 must be retried until they succeed, with an alert and a human queue as the
 last resort.
+
+## A production checklist
+
+Before a saga ships, each of these should have an answer someone can point
+to:
+
+- **Step order**: undoable and likely-to-fail steps first; the pivot as
+  late as possible; only retryable steps after it.
+- **Idempotency**: every step and every compensation accepts a key derived
+  from the saga ID and step name.
+- **Durable progress**: the orchestrator's state survives a restart, and
+  each service publishes its events through an outbox.
+- **Retry policy**: which errors are transient, how many attempts, with
+  [backoff and jitter](/blog/retries-backoff-and-jitter).
+- **Timeouts**: a deadline per step, and a sweep for sagas stuck in a
+  non-final state.
+- **Visibility**: a way to look up any saga by ID and see its steps,
+  status and last error — support will ask "what happened to order 42?"
+  long before anyone reads a log file.
+- **The human path**: a queue for compensations that keep failing, with
+  enough context for a person to finish the job.
 
 ## Which one?
 
@@ -134,4 +300,5 @@ last resort.
 
 The question to ask in a design review is: "What does the user see if this
 fails halfway, and how does it get fixed?" A saga is a way of answering it
-explicitly.
+explicitly — and the checklist above is how you make sure the answer holds
+up on the day it's tested for real.

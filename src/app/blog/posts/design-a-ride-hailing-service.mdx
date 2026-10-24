@@ -1,7 +1,7 @@
 ---
 title: "System Design Case Study: A Ride-Hailing Service"
 publishedAt: "2026-10-18"
-summary: "How an app like Uber or Ola matches riders with drivers: a high-write location service indexed by geo cell, matching ranked by ETA rather than distance, a trip state machine, live tracking over WebSockets, and the consistency questions behind 'two riders, one driver'."
+summary: "How an app like Uber or Ola matches riders with drivers: a high-write location service indexed by geo cell, matching ranked by ETA rather than distance, a trip state machine, live tracking over WebSockets, surge pricing, and the consistency questions behind 'two riders, one driver'."
 tags: "System Design"
 ---
 
@@ -10,26 +10,89 @@ problems meet: knowing where hundreds of thousands of moving drivers are,
 right now, and assigning each ride request to the right driver — exactly
 once — within seconds.
 
-## Requirements
+What makes this a good interview question is that the two problems want
+opposite things. The location stream wants raw write throughput and doesn't
+care about losing an update. The trip wants correctness and durability and
+doesn't care much about throughput. Most of the design is keeping those two
+apart.
 
-**Functional**: riders request a ride from a pickup point; nearby drivers get
-offers and accept; both see each other's live position; trips progress to
-completion; fares are calculated and charged.
+## 1. Requirements
 
-**Non-functional**: a match within a few seconds; location updates visible
-within a second or two; no driver assigned to two trips; the trip record must
-never be lost.
+**Functional**
 
-**Numbers**: say 500,000 drivers online at peak, each sending a location
-every 4 seconds — **125,000 location writes a second**. Ride requests are
-far fewer: perhaps 1,000 a second at peak. The design is dominated by the
-location stream.
+- Riders request a ride from a pickup point to a destination, and see a
+  price estimate first.
+- Nearby drivers get offers and accept or decline.
+- Both see each other's live position until pickup; the rider sees the car
+  during the trip.
+- Trips progress to completion; fares are calculated and charged; both
+  sides rate each other.
 
-## The flow
+**Non-functional**
+
+- A match within a few seconds of the request.
+- Location updates visible within a second or two.
+- **No driver assigned to two trips.** No rider charged twice.
+- The trip record must never be lost — it's a financial record.
+- Location data can be lossy; trip data cannot.
+
+**Out of scope**: driver onboarding and documents, scheduled rides, pooled
+rides (mention them as extensions), fraud detection.
+
+## 2. The numbers
+
+Say 500,000 drivers online at peak, each sending a location every 4
+seconds, and roughly 1,000 ride requests a second at peak. The
+[back-of-the-envelope post](/blog/back-of-the-envelope-estimation) explains
+the method:
+
+<Table
+  data={{
+    headers: ['quantity', 'estimate', 'what it means'],
+    rows: [
+      ['location writes', '500,000 ÷ 4 s = 125,000/s', 'dominates everything; must be in memory'],
+      ['location payload', '~100 bytes → ~12 MB/s inbound', 'bandwidth is fine; the write rate is what hurts'],
+      ['current-position state', '500,000 × ~100 B = ~50 MB', 'fits in RAM on one node — but shard for throughput and blast radius'],
+      ['location history', '~1 TB/day', 'to a log and object storage, never the trip database'],
+      ['ride requests', '~1,000/s peak', 'modest; a durable relational DB is fine'],
+      ['trips/day', '~20–30 million', '~10 GB/day of trip rows'],
+    ],
+  }}
+/>
+
+The single most useful thing these numbers say: the location service and
+the trip service are different systems. Draw them as separate boxes.
+
+## 3. APIs
+
+```
+# driver app
+PUT  /drivers/me/location     { lat, lng, heading, speed, ts }   (or over a socket)
+PUT  /drivers/me/status       { status: "available" | "offline" }
+POST /offers/{offerId}/accept
+POST /offers/{offerId}/decline
+
+# rider app
+POST /quotes                  { pickup, dropoff, vehicleType } → { quoteId, fare, surge, expiresAt }
+POST /trips                   { quoteId }   Idempotency-Key: ... → { tripId, status }
+POST /trips/{id}/cancel
+GET  /trips/{id}
+
+# both, during a trip
+WS   /trips/{id}/live         ← driver positions, status changes
+```
+
+Two details are worth saying out loud. Location updates usually ride on a
+long-lived connection rather than 125,000 separate HTTP requests a second —
+the connection is already open for offers anyway. And `POST /trips` takes
+an [idempotency key](/blog/idempotency-keys), because a rider on a train
+tapping "Request" twice must not get two cars.
+
+## 4. The flow
 
 <RideHailingVisualizer />
 
-## The location service
+## 5. The location service
 
 125,000 updates a second, each replacing the last, needs a different store
 from the trip records:
@@ -47,7 +110,41 @@ from the trip records:
 Shard by geography: a city's drivers and riders live on the same shard, and
 cross-shard queries are rare.
 
-## Matching
+### What an update does
+
+```javascript
+async function onLocation(driverId, { lat, lng, ts }) {
+  const cell = h3.latLngToCell(lat, lng, 9);        // ~0.1 km² hexagons
+  const prev = await redis.hget(`driver:${driverId}`, 'cell');
+
+  const tx = redis.multi()
+    .hset(`driver:${driverId}`, { lat, lng, ts, cell })
+    .expire(`driver:${driverId}`, 30);              // silent drivers vanish
+  if (prev !== cell) {
+    if (prev) tx.srem(`cell:${prev}`, driverId);
+    tx.sadd(`cell:${cell}`, driverId);
+  }
+  await tx.exec();
+
+  locationLog.publish({ driverId, lat, lng, ts }); // history, async
+}
+```
+
+The cell index only changes when a driver crosses a cell boundary — a
+small fraction of updates — so most writes are a single hash overwrite.
+The TTL is the cheap failure detector: a driver whose phone dies stops
+refreshing the key and drops out of matching within 30 seconds, with no
+cleanup job.
+
+### Why hexagons
+
+Square geohash cells have neighbours at two different distances (edges
+and corners), and cell sizes vary with latitude. H3's hexagons have six
+equidistant neighbours, so "this cell plus one ring around it" is a
+roughly circular search area. Either works in an interview; say which
+and why.
+
+## 6. Matching
 
 Finding candidates is a geo query over the rider's cell and its neighbours.
 Choosing among them is the interesting part:
@@ -59,7 +156,36 @@ Choosing among them is the interesting part:
   and — at scale — a global view: matching a batch of nearby requests at
   once can beat greedy one-by-one assignment.
 
-## Exactly one trip per driver
+```javascript
+async function findCandidates(pickup, vehicleType) {
+  const origin = h3.latLngToCell(pickup.lat, pickup.lng, 9);
+  for (const k of [1, 2, 3]) {                      // widen until enough
+    const cells = h3.gridDisk(origin, k);
+    const ids = await redis.sunion(cells.map((c) => `cell:${c}`));
+    const drivers = (await loadDrivers(ids))
+      .filter((d) => d.status === 'available' && d.vehicleType === vehicleType);
+    if (drivers.length >= 5) return rankByEta(pickup, drivers);
+  }
+  return [];
+}
+```
+
+`rankByEta` calls the routing service with one origin-to-many-destinations
+request, not one per driver. ETA is the expensive step, so cap the
+candidate list (say the 10 nearest by straight line) before asking for
+road times.
+
+### Greedy vs batched
+
+Greedy matching assigns each request to its best driver the moment it
+arrives. It's simple and fast, but it's locally optimal: rider A takes the
+driver who was the *only* good option for rider B two seconds later.
+Batched matching collects requests for a second or two per area and solves
+them together as an assignment problem, minimising total pickup time.
+Large platforms batch; in an interview, start greedy and name batching as
+the improvement.
+
+## 7. Exactly one trip per driver
 
 Two dispatchers might offer the same driver to two riders at the same
 moment. The assignment must be atomic:
@@ -70,10 +196,30 @@ moment. The assignment must be atomic:
 - Give the offer a timeout. If the driver doesn't respond in 15 seconds, the
   reservation is released and the next driver is tried.
 
+In Redis, the conditional update is a small Lua script, which runs
+atomically:
+
+```lua
+-- KEYS[1] = driver:{id}   ARGV[1] = tripId   ARGV[2] = offer TTL (s)
+if redis.call('HGET', KEYS[1], 'status') ~= 'available' then
+  return 0
+end
+redis.call('HSET', KEYS[1], 'status', 'reserved', 'trip', ARGV[1])
+redis.call('SET', KEYS[1] .. ':offer', ARGV[1], 'EX', ARGV[2])
+return 1
+```
+
 This is the same "check and set in one step" as reserving a spot in the
 [parking lot design](/blog/design-a-parking-lot-lld), just distributed.
 
-## Trips as a state machine
+There's a subtlety: the reservation lives in the fast, lossy store, but the
+*trip* lives in the durable database. If the location shard restarts mid-
+offer, the reservation is gone. That's acceptable — the offer times out and
+matching retries — as long as the durable trip row is the source of truth
+for "this driver is on trip X", and the fast store is rebuilt from it.
+Never let the in-memory flag be the only record of an accepted trip.
+
+## 8. Trips as a state machine
 
 A trip moves through `REQUESTED → ACCEPTED → DRIVER_ARRIVED → IN_PROGRESS →
 COMPLETED`, or to `CANCELLED` from the early states. Model it explicitly
@@ -82,7 +228,44 @@ durable database, and validate every transition. Make the transition requests
 [idempotent](/blog/idempotency-keys): a driver's phone retrying "start trip"
 on a bad connection mustn't start it twice.
 
-## Live tracking
+```sql
+-- every transition is a conditional update: it only succeeds
+-- from the state the caller thinks the trip is in
+UPDATE trips
+SET status = 'IN_PROGRESS', started_at = now(), version = version + 1
+WHERE id = $1 AND status = 'DRIVER_ARRIVED' AND driver_id = $2
+RETURNING version;
+```
+
+Zero rows updated means the trip wasn't where the client thought —
+cancelled by the rider a moment ago, or already started by an earlier
+retry. The client re-reads the trip instead of guessing. This one pattern
+handles the race between "rider cancels" and "driver starts trip" that
+otherwise produces a trip that is somehow both.
+
+Keep an append-only `trip_events` table alongside: every transition, with
+who triggered it and from which device. Support teams, fare disputes and
+fraud checks all start there.
+
+## 9. Pricing and surge
+
+The fare quote happens *before* matching, so the rider sees a price and
+commits to it:
+
+- **Base fare** from the route's estimated distance and time.
+- **Surge multiplier** per area, recomputed every minute or so from open
+  requests versus available drivers in that area's cells. It's a
+  streaming aggregation over the same request and location events, not a
+  query at request time.
+- **The quote is stored** with an expiry (`quoteId`, a couple of minutes),
+  and `POST /trips` references it. The price the rider accepted is the
+  price you charge, adjusted only by rules they agreed to (a longer route
+  they asked for, waiting time).
+
+Storing the quote matters: if surge drops while the rider is deciding,
+recomputing at booking time would charge them a price they never saw.
+
+## 10. Live tracking
 
 During a trip, the rider sees the car move. The driver's location updates
 are fanned out to the rider over a [WebSocket](/blog/websockets-sse-polling),
@@ -90,13 +273,79 @@ via the same gateway pattern as a [chat system](/blog/design-a-chat-system).
 Clients smooth the movement between updates, so the car glides instead of
 jumping.
 
-## After the trip
+The fan-out is tiny — one driver, one rider (plus any shared-trip
+viewers) — but the connections are many: hundreds of thousands of open
+sockets across a fleet of gateway servers. The location service publishes
+`trip:{id}` updates to a pub/sub channel; whichever gateway holds the
+rider's socket is subscribed to it. Gateways stay stateless apart from
+their open connections, so a deploy just drops sockets and the apps
+reconnect.
+
+When the rider's app is backgrounded or offline, don't queue every missed
+location. Only the latest position matters; send it on reconnect.
+
+## 11. After the trip
 
 Fare calculation (distance, time, surge multiplier), payment, receipts and
 ratings all happen after `COMPLETED`, asynchronously, through a queue. A slow
 payment provider must never block the next ride. If charging fails, retry
 with backoff, and run the overall flow as a [saga](/blog/sagas-and-two-phase-commit)
 with compensations where needed.
+
+The `COMPLETED` transition and the "charge this trip" message must not
+diverge — a trip completed but never charged is lost revenue, and a charge
+for a trip that was rolled back is a support ticket. Write both in one
+transaction using the [outbox pattern](/blog/dual-writes-and-the-outbox-pattern),
+and give the payment call an idempotency key derived from the trip ID.
+
+## 12. What breaks first
+
+- **A stadium empties.** Thousands of requests from three cells in one
+  minute. Batched matching and surge exist for exactly this; also shed
+  load on non-essential calls (map tiles, promotions) before matching.
+- **A location shard dies.** Drivers in that city vanish from matching
+  until their apps reconnect to a replacement and re-send positions —
+  about one update interval. Keep a replica per shard if even that gap is
+  too long.
+- **The routing service is slow.** Matching stalls on ETA calls. Use a
+  [circuit breaker](/blog/circuit-breaker-pattern) and fall back to
+  straight-line distance times a city-specific factor. Slightly worse
+  matches beat no matches.
+- **Flaky phone networks.** Duplicate accepts, out-of-order location
+  updates, stale `ts`. Drop location updates older than the one stored;
+  make every trip transition conditional and idempotent.
+
+## 13. Trade-offs to state out loud
+
+<Table
+  data={{
+    headers: ['decision', 'choice here', 'what you give up'],
+    rows: [
+      ['current locations', 'in memory, TTL, lossy', 'durability — rebuilt from the next update'],
+      ['geo index', 'H3 cells + neighbour rings', 'exactness at cell edges (fixed by ranking)'],
+      ['candidate ranking', 'road ETA on a capped list', 'latency of a routing call per request'],
+      ['assignment', 'atomic reserve + offer timeout', 'a few seconds lost on each decline'],
+      ['matching strategy', 'greedy first, batch later', 'global efficiency, until batching is added'],
+      ['payments', 'async saga after completion', 'the rider sees the charge a little later'],
+    ],
+  }}
+/>
+
+## 14. Follow-up questions to expect
+
+- **"Add pooled rides."** Matching becomes a routing problem: insert a new
+  rider into an existing trip only if every passenger's detour stays under
+  a limit. The trip model needs multiple pickups and drop-offs.
+- **"How do you compute ETAs fast?"** Precomputed road-graph shortcuts
+  (contraction hierarchies) plus live traffic speeds per road segment,
+  served from memory. Not Dijkstra over the whole city per request.
+- **"How do you stop GPS spoofing?"** Plausibility checks — speed between
+  updates, jumps across rivers — on the location stream, flagged
+  asynchronously.
+- **"Driver goes offline mid-trip."** The trip is durable; it doesn't
+  depend on the socket. The rider's view freezes on the last position, the
+  driver's app resumes on reconnect, and support tooling can see the
+  `trip_events` history.
 
 ## Practise it
 
