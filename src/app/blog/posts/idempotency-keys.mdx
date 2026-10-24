@@ -112,7 +112,9 @@ in one atomic step.
 
 **Fingerprint the request.** If a client bug reuses a key for a different
 payload, replaying the old response silently does the wrong thing. Store a
-hash of the body and reject mismatches.
+hash of the body and reject mismatches. Hash a canonical form — keys
+sorted, whitespace removed — so the same payload serialised by two client
+versions doesn't look different.
 
 **Decide what "in progress" means after a crash.** If the server dies
 between claiming the key and finishing, the record sits in `in_progress`

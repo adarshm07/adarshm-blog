@@ -8,7 +8,8 @@ tags: "AI Engineering"
 A prototype that costs a few cents a request and takes eight seconds is fine
 for a demo. At a million requests a day, the bill and the wait both matter.
 Most of the improvement comes from understanding what you're paying for,
-then applying a handful of levers.
+then applying a handful of levers. This post works through the arithmetic first,
+because the biggest savings are usually not where people expect them.
 
 ## What you pay for
 
@@ -32,6 +33,70 @@ cost both money and total time.
 
 The prices in the visualizer are examples. Check your provider's current
 pricing, but the arithmetic carries over.
+
+## A worked bill
+
+Prices change; the shape of the arithmetic doesn't. Use symbols, then
+plug in your provider's current numbers. Say input costs **P** per million
+tokens and output costs **5P** — a common ratio.
+
+A support assistant handles 100,000 requests a day. Each request sends a
+6,000-token prefix (instructions, tool definitions, policy documents), a
+2,000-token variable part (retrieved chunks and the user's question), and
+gets back 400 tokens.
+
+<Table
+  data={{
+    headers: ['', 'tokens per request', 'per day', 'cost per day'],
+    rows: [
+      ['input', '8,000', '800M', '800 × P'],
+      ['output', '400', '40M', '40 × 5P = 200 × P'],
+      ['total', '', '', '1,000 × P'],
+    ],
+  }}
+/>
+
+Input is 80% of the bill even though output is five times the price per
+token, because there's twenty times as much of it. Now apply two levers:
+
+- **Cache the 6,000-token prefix.** Cache reads at a tenth of the input
+  price turn 600M tokens a day from `600 × P` into `60 × P` (plus a small
+  premium for occasional cache writes). The bill drops from `1,000 × P` to
+  roughly `460 × P`.
+- **Cut the answer from 400 to 250 tokens** by asking for concise replies
+  and structured output where possible: output falls from `200 × P` to
+  `125 × P`.
+
+Together that's about `385 × P` — a 60% saving, with no change of model and
+no loss of quality, and first-token latency drops too because most of the
+prompt no longer needs prefilling. That's the typical pattern: the first
+two levers are the cheapest to pull and move the most.
+
+## Caching, precisely
+
+Prompt caching is a prefix match, so the order of the prompt is the whole
+game:
+
+```
+[ tool definitions ][ system prompt ][ reference docs ]  ← stable: cached
+[ conversation history ]                                 ← grows: cached up to the last turn
+[ retrieved chunks ][ latest user message ]              ← changes every request
+```
+
+- **Stable first, variable last.** Anything that changes per request —
+  today's date, the user's name, retrieved chunks — goes after the cached
+  content, or every request misses.
+- **Deterministic serialisation.** Tool definitions generated from an
+  object whose key order varies, or JSON with unstable whitespace, change
+  the bytes and break the match.
+- **Cache writes cost a little extra** and cache entries expire after a few
+  minutes without use (longer lifetimes are available at a higher write
+  price). Caching pays off when the same prefix is reused several times
+  within that window — true for busy endpoints and for every turn of an
+  agent loop, not for a prompt used once an hour.
+- **Verify it.** Responses report cached input tokens separately. A cache
+  read count of zero on a busy endpoint means something near the top of
+  the prompt is changing.
 
 ## The levers, roughly in order
 
@@ -71,6 +136,78 @@ history. Summarise or drop old turns, and in [RAG](/blog/rag-retrieval-explained
 send the 5 best chunks rather than 20 mediocre ones — a
 [reranker](/blog/reranking-with-cross-encoders) makes that possible.
 
+### A router in code
+
+Routing doesn't need to be clever to pay off. A two-tier cascade:
+
+```typescript
+async function answer(question: string) {
+  // cheap first pass: classify and maybe answer
+  const quick = await client.messages.create({
+    model: SMALL_MODEL, max_tokens: 300,
+    system: 'Answer if the question is a simple FAQ covered by the policy. ' +
+            'Otherwise reply with exactly ESCALATE.',
+    messages: [{ role: 'user', content: question }],
+  })
+  const text = firstText(quick)
+  if (text.trim() !== 'ESCALATE') return { text, model: SMALL_MODEL }
+
+  const full = await client.messages.create({
+    model: LARGE_MODEL, max_tokens: 1500,
+    system: FULL_SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: question }],
+  })
+  return { text: firstText(full), model: LARGE_MODEL }
+}
+```
+
+If 70% of traffic is answered by a model costing a tenth as much, the
+blended cost falls by more than half — even counting the wasted small-model
+call on the 30% that escalate. The risk is the small model answering
+something it should have escalated, which is exactly what an eval set of
+labelled "easy" and "hard" questions measures before you ship the router.
+
+## Where the latency goes
+
+For a typical RAG request, a rough budget:
+
+<Table
+  data={{
+    headers: ['step', 'typical time', 'lever'],
+    rows: [
+      ['embed the query', '20–50 ms', 'cache embeddings for repeated queries'],
+      ['retrieve + rerank', '50–300 ms', 'smaller candidate set; run in parallel with other prep'],
+      ['time to first token', '300 ms – 2 s', 'shorter or cached prompt; smaller model'],
+      ['generation', 'output tokens ÷ tokens per second', 'shorter outputs; smaller model'],
+      ['tool calls (agents)', 'per call, per turn', 'parallel calls; fewer turns'],
+    ],
+  }}
+/>
+
+Generation usually dominates for long answers: at a few dozen to a hundred
+tokens a second, a 1,000-token answer takes 10–30 seconds however fast
+everything else is. That's why "write less" is a latency lever as well as a
+cost lever, and why streaming matters so much for anything long.
+
+## Controlling output length
+
+"Write less" is easy to say and easy to get wrong. Some practical ways to
+actually get shorter outputs:
+
+- **Say the format and length**: "Answer in at most three sentences" or
+  "Return only the JSON object" works better than "be concise".
+- **Show it.** One or two examples of the desired short answer in the
+  prompt anchor length better than instructions alone.
+- **Use `max_tokens` as a guard, not a tool.** It truncates mid-sentence;
+  hitting it means the prompt failed to ask for brevity. Track how often it
+  triggers.
+- **Use stop sequences** for formats with a natural end marker, so the
+  model doesn't keep going after the useful part.
+- **Leave reasoning where it helps.** For hard problems, letting the model
+  think first improves answers; cutting that to save tokens can cost more
+  in wrong results and retries than it saves. Spend thinking budget on the
+  requests that need it, not on every one.
+
 ## Making it feel faster
 
 Perceived latency matters as much as total latency:
@@ -88,7 +225,76 @@ Perceived latency matters as much as total latency:
 ## Measure per feature
 
 Log tokens in, tokens out, cache hits, model, and latency for every request,
-tagged by feature. The cost of an LLM app is usually concentrated: one
+tagged by feature. A thin wrapper around the client is enough:
+
+```typescript
+async function tracked(feature: string, params: Anthropic.MessageCreateParams) {
+  const start = performance.now()
+  const res = await client.messages.create(params)
+  const u = res.usage
+  metrics.record({
+    feature,
+    model: params.model,
+    inputTokens: u.input_tokens,
+    cacheReadTokens: u.cache_read_input_tokens ?? 0,
+    cacheWriteTokens: u.cache_creation_input_tokens ?? 0,
+    outputTokens: u.output_tokens,
+    ms: performance.now() - start,
+    stopReason: res.stop_reason,
+  })
+  return res
+}
+```
+
+With that in place, the questions that drive optimisation have answers:
+which feature costs the most per day, which has the worst p95 latency,
+which has a cache hit rate near zero, and how often responses hit
+`max_tokens` (truncated answers that users then retry, paying twice). The cost of an LLM app is usually concentrated: one
 feature with a huge prompt, or one agent that loops ten times. Optimise
 there, and check with evals that quality didn't drop. A cheaper answer that's
 wrong isn't a saving.
+
+## The levers at a glance
+
+<Table
+  data={{
+    headers: ['lever', 'saves', 'effort', 'quality risk'],
+    rows: [
+      ['prompt caching', 'large share of input cost; first-token latency', 'low', 'none'],
+      ['shorter outputs', 'output cost and generation time', 'low', 'low — check with evals'],
+      ['trim context / fewer RAG chunks', 'input cost', 'low–medium', 'medium — can drop needed facts'],
+      ['answer caching', 'whole requests', 'medium', 'low for exact; medium for semantic'],
+      ['routing to smaller models', 'large share of total cost', 'medium', 'medium — needs evals'],
+      ['batch API', 'about half, for offline work', 'low', 'none — but hours of latency'],
+      ['streaming / parallel calls', 'perceived and total latency', 'low', 'none'],
+    ],
+  }}
+/>
+
+## Rate limits are a cost too
+
+Providers cap requests and tokens per minute per account. A feature that's
+cheap per request can still fail at peak because it's hitting a token
+limit, and the symptom — `429` errors and retries — adds latency on top.
+Everything above that reduces tokens also raises how much traffic fits
+under the same limits. Beyond that: retry `429`s with backoff that honours
+`Retry-After` (see [retries, backoff and jitter](/blog/retries-backoff-and-jitter)),
+smooth bursts with a queue for non-interactive work, and move offline jobs
+to the batch API, which typically has separate, higher limits.
+
+## A checklist for a new feature
+
+Before an LLM feature ships, it's worth five minutes to check:
+
+1. Is the stable part of the prompt first, deterministic, and cached?
+2. Is `max_tokens` set to what the feature actually needs, and is the
+   output format as compact as it can be?
+3. Could a smaller model handle most requests? Is there an eval to prove it?
+4. Is anything here really a lookup, a rule or a template rather than a
+   model call?
+5. Can any of it run in the batch API instead of in the request path?
+6. Are tokens, cache hits and latency logged per feature?
+
+The order matters less than doing it before launch: costs that are designed
+in are easy to remove, and costs that users have come to depend on — long,
+chatty answers, say — are much harder to take away later.

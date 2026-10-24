@@ -93,6 +93,132 @@ two independently-computed vectors — and because it only runs on a
 shortlist, it stays affordable. With a reranker in place, `k` can drop back
 to 3–5 and quality goes *up*.
 
+## An end-to-end build in Postgres
+
+You don't need a dedicated vector database to start. Postgres with the
+`pgvector` extension holds the chunks, the vectors and a full-text index
+side by side, which makes hybrid search one query:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE chunks (
+  id          bigserial PRIMARY KEY,
+  doc_id      text NOT NULL,
+  heading     text NOT NULL,                 -- "Expenses › Travel › Approvals"
+  body        text NOT NULL,
+  product     text,                          -- metadata for filtering
+  updated_at  timestamptz NOT NULL,
+  embedding   vector(1024) NOT NULL,         -- dimension = your embedding model's
+  tsv         tsvector GENERATED ALWAYS AS (to_tsvector('english', heading || ' ' || body)) STORED
+);
+
+CREATE INDEX ON chunks USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX ON chunks USING gin (tsv);
+```
+
+Ingestion splits each document, prefixes the heading path, embeds, and
+upserts:
+
+```typescript
+for (const doc of docs) {
+  const chunks = splitByHeadings(doc, { maxTokens: 400, overlapTokens: 60 })
+  const vectors = await embed(chunks.map((c) => `${c.heading}\n\n${c.body}`))
+  await db.tx(async (t) => {
+    await t.none('DELETE FROM chunks WHERE doc_id = $1', [doc.id])  // re-index whole doc
+    for (const [i, c] of chunks.entries()) {
+      await t.none(
+        `INSERT INTO chunks (doc_id, heading, body, product, updated_at, embedding)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [doc.id, c.heading, c.body, doc.product, doc.updatedAt, toSql(vectors[i])])
+    }
+  })
+}
+```
+
+Retrieval runs both searches and merges them with **reciprocal rank
+fusion** — each result scores `1 / (60 + rank)` in each list, and the
+scores are summed. It needs no tuning of how to weigh a cosine distance
+against a BM25 score, because it only uses ranks:
+
+```sql
+WITH semantic AS (
+  SELECT id, row_number() OVER (ORDER BY embedding <=> $1) AS r
+  FROM chunks WHERE product = $3
+  ORDER BY embedding <=> $1 LIMIT 50
+),
+keyword AS (
+  SELECT id, row_number() OVER (ORDER BY ts_rank(tsv, q) DESC) AS r
+  FROM chunks, websearch_to_tsquery('english', $2) q
+  WHERE tsv @@ q AND product = $3
+  ORDER BY ts_rank(tsv, q) DESC LIMIT 50
+)
+SELECT c.id, c.heading, c.body,
+       coalesce(1.0 / (60 + s.r), 0) + coalesce(1.0 / (60 + k.r), 0) AS score
+FROM chunks c
+LEFT JOIN semantic s ON s.id = c.id
+LEFT JOIN keyword  k ON k.id = c.id
+WHERE s.id IS NOT NULL OR k.id IS NOT NULL
+ORDER BY score DESC
+LIMIT 30;
+```
+
+Those 30 go to the reranker; the top 5 go into the prompt. The details of
+fusion are in [hybrid search and rank fusion](/blog/hybrid-search-and-rank-fusion),
+and reranking in [reranking with cross-encoders](/blog/reranking-with-cross-encoders).
+
+### How big should chunks be?
+
+There's no universal number, but there's a sensible starting range:
+roughly 200–500 tokens for prose, with 10–20% overlap. Smaller chunks
+retrieve more precisely and lose context; larger ones carry context and
+dilute the embedding with unrelated sentences. Tune with the eval below,
+not by intuition — and remember that the structural boundaries of your
+documents (headings, list items, functions) usually matter more than the
+exact token count.
+
+## The generation prompt
+
+Retrieval decides what the model sees; the prompt decides how it uses it.
+Three instructions do most of the work:
+
+```
+Answer the question using only the sources below.
+Cite the source id in square brackets after each claim, like [3].
+If the sources don't contain the answer, say you don't know — don't guess.
+
+<sources>
+<source id="1" title="Refunds › Processing times">…</source>
+<source id="2" title="Refunds › Eligibility">…</source>
+</sources>
+
+Question: How long does a refund take?
+```
+
+"Only the sources" reduces answers from memory; citations make every
+claim checkable — and make retrieval failures visible, because an answer
+that can't cite anything is a retrieval miss you can count. "Say you don't
+know" gives the model a sanctioned alternative to inventing an answer, one
+of the main defences against [hallucination](/blog/why-llms-hallucinate).
+Validate the citations in code: an id that wasn't in the sources is a red
+flag worth logging.
+
+## Keeping the index fresh
+
+A RAG system is a cache of your documents, and it has the usual cache
+problem: staleness.
+
+- **Re-index on change**, not on a schedule, when the source can tell you
+  what changed — a CMS webhook, a git push, a database change event.
+- **Delete what was deleted.** A retired policy that's still in the index
+  is worse than a missing one, because the model will cite it with
+  confidence. Re-index per document, replacing all its chunks, as above.
+- **Store `updated_at` and filter or boost by it**, so newer versions of a
+  document beat older ones when both exist.
+- **Re-embed everything when you change embedding models.** Vectors from
+  two models live in different spaces and can't be compared. Build the new
+  index alongside the old one and switch over.
+
 ## Evaluate retrieval separately
 
 This is the discipline that separates RAG systems that improve from ones
@@ -102,6 +228,22 @@ pairs, a hundred is plenty, and measure retrieval on its own:
 - **Recall@k** — is the right chunk in the top k at all? If this is low,
   nothing downstream can save you.
 - **MRR / precision@k** — how high does it rank?
+
+Computing both takes a few lines once the labelled pairs exist:
+
+```typescript
+let hits = 0, reciprocal = 0
+for (const { question, relevantIds } of evalSet) {
+  const ids = (await retrieve(question, { k: 10 })).map((c) => c.id)
+  const rank = ids.findIndex((id) => relevantIds.includes(id))
+  if (rank !== -1) { hits++; reciprocal += 1 / (rank + 1) }
+}
+console.log({ recallAt10: hits / evalSet.length, mrr: reciprocal / evalSet.length })
+```
+
+Run it on every change to chunking, embeddings, filters or fusion. A
+chunking change that looks harmless and drops recall from 0.92 to 0.81 is
+exactly the regression you want to see before users do.
 
 Then, separately, measure whether the model answers correctly *given* the
 right chunks. Two numbers, two different fixes. Without the split, every
@@ -121,6 +263,31 @@ weeks.
 - **Citations in the output.** Ask for the chunk id alongside each claim.
   It makes retrieval failures visible instead of silent, and it lets users
   check.
+
+## Debugging one bad answer
+
+When a user reports a wrong answer, work backwards through the pipeline
+instead of starting with the prompt:
+
+1. **Find the right chunk by hand.** Search the corpus for the sentence
+   that answers the question. If it isn't there — the document was never
+   ingested, or is outdated — no retrieval tuning will help.
+2. **Was it retrieved?** Log the candidate list for the query. If the
+   right chunk is missing from the top 50, it's a recall problem: try the
+   keyword side (an exact term the embedding missed?), the chunk boundaries
+   (is the answer split across two chunks?), or a metadata filter that
+   excluded it.
+3. **Was it ranked high enough?** If it's in the top 50 but not the top 5
+   after reranking, look at what outranked it — usually chunks that repeat
+   the question's words without answering it.
+4. **Did the model use it?** If the right chunk was in the prompt and the
+   answer is still wrong, *now* it's a generation problem — conflicting
+   sources, a confusing chunk, or a prompt that doesn't insist on
+   grounding.
+
+Add the case to the eval set either way. Each step points at a different
+fix, and skipping straight to step 4 is how teams spend weeks rewording a
+prompt to work around a chunking bug.
 
 ## When RAG is the wrong tool
 

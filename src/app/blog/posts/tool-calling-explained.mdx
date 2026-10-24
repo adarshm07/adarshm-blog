@@ -65,7 +65,8 @@ Useful descriptions answer questions the model will otherwise guess at:
   cannot be undone."
 
 That last one matters more than it looks. A model that knows an action is
-irreversible behaves noticeably more conservatively about calling it.
+irreversible behaves noticeably more conservatively about calling it. It's also cheap to
+add: one sentence per tool, written once.
 
 ## Validate, always
 
@@ -151,6 +152,158 @@ Splitting results across several user messages is the trap: it breaks the
 pairing between `tool_use` and `tool_result` blocks and trains the model out
 of batching, which makes every subsequent turn slower.
 
+## Controlling whether a tool is called
+
+By default the model decides whether to use a tool at all. The request's
+`tool_choice` parameter changes that:
+
+<Table
+  data={{
+    headers: ['tool_choice', 'Behaviour', 'Use for'],
+    rows: [
+      ['auto (default)', 'model may answer directly or call tools', 'assistants and agents'],
+      ['any', 'model must call one of the tools', 'routing: always pick an action'],
+      ['tool, with a name', 'model must call that specific tool', 'forcing structured output'],
+      ['none', 'tools are visible but cannot be called', 'a turn that must be prose only'],
+    ],
+  }}
+/>
+
+You can also disable parallel tool use when your tools must run strictly
+one at a time — say, because each depends on state the previous one
+changed.
+
+### A tool as an output format
+
+Forcing a specific tool is a reliable way to get structured data out of a
+model even when nothing is "called":
+
+```typescript
+const response = await client.messages.create({
+  model, max_tokens: 1024,
+  tools: [{
+    name: 'record_ticket_triage',
+    description: 'Record the triage decision for a support ticket.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        category: { type: 'string', enum: ['billing', 'bug', 'account', 'other'] },
+        priority: { type: 'string', enum: ['low', 'normal', 'urgent'] },
+        summary: { type: 'string', description: 'One sentence, for the queue view' },
+      },
+      required: ['category', 'priority', 'summary'],
+      additionalProperties: false,
+    },
+  }],
+  tool_choice: { type: 'tool', name: 'record_ticket_triage' },
+  messages: [{ role: 'user', content: ticketText }],
+})
+
+const triage = response.content.find((b) => b.type === 'tool_use')!.input
+```
+
+The "tool" never runs; its input *is* the result. This predates dedicated
+structured-output features and still works well — see
+[structured outputs from LLMs](/blog/structured-outputs-from-llms) for the
+trade-offs between the approaches.
+
+## What a good tool result looks like
+
+The result is prompt input for the next turn, and it's re-sent on every
+turn after that. Design it as carefully as the description:
+
+- **Small and relevant.** Return the fields the model needs to act, not
+  the whole API response. A 40-field order object where the question was
+  "has it shipped?" costs tokens and attention for twenty more turns.
+- **Readable.** Short JSON or plain text with labels both work; deeply
+  nested JSON with opaque keys (`st: 3`) forces the model to guess. Use the
+  words a person would use.
+- **Explicit about emptiness and truncation.** "No orders found for
+  c_8812" and "Showing 20 of 312 orders; pass `cursor` to see more" both
+  prevent the model inventing a conclusion.
+- **Self-contained IDs.** If the model will need to refer to an item in a
+  later call, include the exact ID it should pass back.
+
+## Timeouts and side effects
+
+Your tool handlers are ordinary backend code running on the model's
+behalf, so the ordinary rules apply:
+
+- **Give every tool a timeout**, and return a timeout as an error result
+  ("The search took too long; try a narrower query") rather than letting
+  the whole loop hang.
+- **Make write tools idempotent.** The harness may retry a tool after a
+  network failure, and the model may call the same tool twice. Pass an
+  [idempotency key](/blog/idempotency-keys) derived from the `tool_use`
+  ID, so a repeated call is harmless.
+- **Separate reads from writes.** Read tools can usually run freely and in
+  parallel; write tools deserve confirmation, rate limits and audit logs.
+  Naming them so the difference is obvious helps both the model and your
+  policy layer.
+
+## When the tool surface is large
+
+Past a few dozen tools, a flat list stops working. Three patterns:
+
+- **Group into fewer, broader tools** with an `action` argument — one
+  `github` tool with `action: "search_issues" | "get_pr" | …` — at the
+  cost of a more complex schema.
+- **Tool search**: give the model a `find_tools(query)` tool that returns
+  the definitions of the few relevant tools, and add those to the request.
+  The model starts each task with a small surface and loads what it needs.
+- **Scope by task**: decide in code which tools a request type needs, and
+  send only those. A billing question doesn't need the deployment tools.
+
+## Measuring tool selection
+
+"Does the model pick the right tool?" is an empirical question. Build a
+small set of realistic user requests, each labelled with the tool (and key
+arguments) a good agent should call first, and run it whenever you change
+a description, add a tool or switch models:
+
+```typescript
+for (const c of cases) {
+  const res = await client.messages.create({ model, tools, max_tokens: 512,
+    messages: [{ role: 'user', content: c.input }] })
+  const call = res.content.find((b) => b.type === 'tool_use')
+  record(c.id, call?.name === c.expectedTool)
+}
+```
+
+Fifty cases catch most description regressions. The confusions it
+surfaces — two tools the model keeps mixing up — usually point to a
+description to sharpen or two tools to merge. See
+[evals for LLM apps](/blog/evals-for-llm-apps).
+
+## A description, before and after
+
+A real pattern: an agent keeps calling `get_customer` with an email
+address, the lookup fails, and it apologises to the user. The tool:
+
+```
+name: get_customer
+description: Gets a customer.
+input: { id: string }
+```
+
+Nothing tells the model `id` isn't an email. The fix is almost entirely
+prose:
+
+```
+name: get_customer
+description: Look up one customer by internal id (format c_XXXX) or by
+  email address. Returns name, plan, signup date and account status.
+  Use this before any billing or order tool, which need the internal id.
+  Returns an error if no customer matches; it never guesses.
+input: { id?: string (c_XXXX), email?: string } — provide exactly one
+```
+
+Three changes did the work: the tool now accepts what users actually
+give (an email), the description says what comes back and which tools
+need its output, and the schema says the two inputs are alternatives.
+Run the selection eval before and after a change like this; it's the
+fastest feedback loop available for agent quality.
+
 ## Approval gates belong in the harness
 
 The model asking to do something and your code doing it are separate events,
@@ -171,7 +324,9 @@ if (DESTRUCTIVE.has(block.name)) {
 ```
 
 Note the denial is phrased as an instruction, not just a status. "Denied"
-invites a retry; "the user declined, do not retry" ends it.
+invites a retry; "the user declined, do not retry" ends it. Log the decision either way —
+who approved what, and when — because for destructive actions the audit
+trail matters as much as the gate.
 
 ## The summary
 
@@ -181,3 +336,7 @@ invites a retry; "the user declined, do not retry" ends it.
 - Error strings are prompt input. Make them say how to fix the problem.
 - Fewer, coarser, non-overlapping tools beat a complete API surface.
 - Return every result, in one message, including the failures.
+- Keep results small, explicit about truncation, and carrying the IDs the
+  model will need next.
+- Measure tool selection with a labelled set of requests, and rerun it on
+  every description change.

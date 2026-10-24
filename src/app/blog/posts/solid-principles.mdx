@@ -61,7 +61,20 @@ else if (order.method === 'upi') { /* … */ }   // edit, re-test, redeploy
 ```
 
 With a `PaymentGateway` interface, a new method is a new class. Existing,
-tested code isn't touched. That is the whole idea: put the parts that *will*
+tested code isn't touched. The service picks a gateway by method, and adding one
+is a registration, not an edit:
+
+```typescript
+const gateways: Record<PaymentMethod, PaymentGateway> = {
+  card: new CardGateway(cardClient),
+  upi: new UpiGateway(upiClient),          // the whole change for UPI
+}
+const receipt = await gateways[order.method].charge(order.total, order.token)
+```
+
+With `PaymentMethod` as a union type, TypeScript also refuses to compile
+until every method has a gateway — the compiler checks the extension for
+you. That is the whole idea: put the parts that *will*
 vary behind an interface, so variation means adding code rather than
 editing it.
 
@@ -82,7 +95,11 @@ The classic violation is the square that extends a rectangle: setting a
 square's width also changes its height, so code that sets width and height
 separately on "a rectangle" gets the wrong area. The smell in real code is
 `instanceof` checks: if callers have to ask which subtype they got, the
-subtypes aren't substitutable.
+subtypes aren't substitutable. The fix is rarely a cleverer subclass. Usually it's
+admitting the two types don't share a contract — a square and a rectangle
+can both be `Shape`s with an `area()` method without one extending the
+other — or moving the varying behaviour behind a strategy instead of an
+override.
 
 ## I — Interface segregation
 
@@ -118,6 +135,186 @@ The "inversion" is in the direction of the dependency: the low-level
 `CardGateway` now depends on an interface that the high-level module defines,
 instead of the high-level module depending on the card SDK.
 
+## The refactored service, whole
+
+After all five steps, the service reads like a description of the
+business process, with every detail behind something it can name:
+
+```typescript
+interface OrderRepository { save(order: Order, receipt: Receipt): Promise<void> }
+interface PaymentGateway  { charge(amount: number, token: string): Promise<Receipt> }  // throws Declined
+interface Notifier        { orderPlaced(order: Order): Promise<void> }
+
+class Order {
+  validate() {
+    if (this.items.length === 0) throw new EmptyOrderError()
+    if (this.total > 100_000) throw new NeedsApprovalError()
+  }
+}
+
+class OrderService {
+  constructor(
+    private orders: OrderRepository,
+    private payments: PaymentGateway,
+    private notifier: Notifier,
+  ) {}
+
+  async place(order: Order) {
+    order.validate()
+    const receipt = await this.payments.charge(order.total, order.cardToken)
+    await this.orders.save(order, receipt)
+    await this.notifier.orderPlaced(order)
+  }
+}
+```
+
+Count the reasons to change now. A new payment provider: a new
+`PaymentGateway` class. A schema change: the repository. A new email:
+the notifier. A new validation rule: `Order`. `OrderService` changes only
+if the *sequence* of placing an order changes — its one responsibility.
+
+Notice also what didn't happen: no `AbstractOrderServiceFactory`, no
+interface for `Order`, no generic `Handler<T>`. Three interfaces, each at a
+boundary with an external system. That's usually the right amount.
+
+## Liskov, in real code
+
+The rectangle-and-square example is famous and a bit abstract. A more
+realistic violation:
+
+```typescript
+interface Cache {
+  get(key: string): Promise<string | undefined>
+  set(key: string, value: string, ttlSeconds: number): Promise<void>
+}
+
+class RedisCache implements Cache { /* honours the TTL */ }
+
+class NoopCache implements Cache {           // fine: always a miss, never stores
+  async get() { return undefined }
+  async set() {}
+}
+
+class LocalCache implements Cache {
+  private map = new Map<string, string>()
+  async get(k: string) { return this.map.get(k) }
+  async set(k: string, v: string) { this.map.set(k, v) }   // ignores ttlSeconds!
+}
+```
+
+All three compile. `NoopCache` is substitutable: callers must already
+handle misses. `LocalCache` isn't: callers rely on entries expiring — a
+session cache that never expires is a security bug — and nothing in the
+type system says so. Liskov is about the *promises* in a contract,
+including the ones only written in comments and docs. Tests written
+against the interface and run against every implementation are the
+practical way to enforce it.
+
+## Interface segregation, in real code
+
+A repository interface that grew with every feature:
+
+```typescript
+interface UserRepository {
+  findById(id: string): Promise<User>
+  findByEmail(email: string): Promise<User>
+  save(user: User): Promise<void>
+  exportAllAsCsv(): Promise<Buffer>        // added for the admin panel
+  rebuildSearchIndex(): Promise<void>      // added for a migration
+}
+```
+
+The login handler needs one method. Its test fake must implement five, and
+a change to CSV export recompiles and re-tests login. Split by client:
+
+```typescript
+interface UserReader { findById(id: string): Promise<User>; findByEmail(email: string): Promise<User> }
+interface UserWriter { save(user: User): Promise<void> }
+interface UserExport { exportAllAsCsv(): Promise<Buffer> }
+
+class PostgresUsers implements UserReader, UserWriter, UserExport { /* … */ }
+```
+
+One class can still implement all of them; what changes is what each
+*caller* depends on. In TypeScript you don't even need named interfaces —
+`Pick<UserRepository, 'findByEmail'>` as a parameter type gives the same
+narrowing.
+
+## Dependency inversion is not dependency injection
+
+The two are related and often confused:
+
+- **Dependency injection** is a technique: pass collaborators in instead of
+  constructing them inside. See [dependency injection](/blog/dependency-injection).
+- **Dependency inversion** is a principle about *which way* source-code
+  dependencies point: the interface belongs to the high-level module that
+  uses it, and the low-level module conforms to it.
+
+You can inject a concrete `CardApiClient` and still depend on the card
+SDK's types throughout `OrderService` — injection without inversion. The
+test for inversion is in the imports: does `order-service.ts` import
+anything from the payment provider's package? If it does, the high-level
+policy still depends on the detail.
+
+## SOLID without classes
+
+The principles are about dependencies and change, not about the `class`
+keyword. In a codebase of modules and functions:
+
+- **Single responsibility** — a module with one reason to change.
+- **Open/closed** — a function that takes a strategy function, or a map
+  of handlers keyed by type, instead of a growing `switch`.
+- **Liskov** — any function passed where a type `(order: Order) => Promise<Receipt>`
+  is expected must honour the same contract.
+- **Interface segregation** — functions that take the narrow object they
+  need (`{ email: string }`), not the whole `User`.
+- **Dependency inversion** — the core module defines the function types it
+  needs; the edges of the app pass in implementations.
+
+The vocabulary transfers almost unchanged, which is a good sign the ideas
+are about structure rather than syntax.
+
+## Smells and the principle behind them
+
+<Table
+  data={{
+    headers: ['you notice…', 'principle', 'usual fix'],
+    rows: [
+      ['one file edited by unrelated features', 'Single responsibility', 'move each concern to the object that owns it'],
+      ['a growing if/else or switch on a type', 'Open/closed', 'an interface and one class per case'],
+      ['instanceof checks on an abstraction', 'Liskov', 'fix the contract, or stop pretending they share one'],
+      ['test fakes full of methods that throw "not implemented"', 'Interface segregation', 'split the interface by client'],
+      ['business logic importing an SDK or ORM', 'Dependency inversion', 'define an interface in the core; implement at the edge'],
+    ],
+  }}
+/>
+
+## When following them makes code worse
+
+Each principle has a characteristic way of being overdone:
+
+- **Single responsibility, overdone**: a feature split into fifteen
+  one-method classes, so reading one request means opening fifteen files.
+  Responsibility is about *reasons to change*; pieces that always change
+  together belong together.
+- **Open/closed, overdone**: an interface, a factory and a registry for a
+  behaviour that has exactly one implementation and no second one in
+  sight. You paid the indirection cost and bought nothing.
+- **Liskov, overdone**: refusing any inheritance at all for fear of
+  breaking it. Plenty of hierarchies — an `HttpError` with
+  `NotFoundError` and `ConflictError` subclasses — are perfectly
+  substitutable.
+- **Interface segregation, overdone**: one interface per method, so every
+  class implements eight tiny interfaces and nobody can see what a type
+  actually does.
+- **Dependency inversion, overdone**: abstracting the standard library or
+  your own pure functions. `interface IDateProvider` is worth it for a
+  clock you need to fake in tests; `interface IStringUtils` is not.
+
+The counterweights are YAGNI ("you aren't gonna need it") and plain
+readability. A design is good when the *likely* changes are cheap — not
+every conceivable one.
+
 ## How to use them
 
 SOLID principles are heuristics for managing change, not rules to satisfy.
@@ -134,6 +331,13 @@ changes.
 - **In an interview**, name the principle when you make a decision, not as
   a checklist at the end: "I'll put pricing behind an interface because
   weekend pricing is already a second rule."
+- **In a code review**, tie the comment to a concrete future change:
+  "when we add UPI, this `if` grows another branch — could the gateway be
+  passed in?" is persuasive in a way that naming the principle alone
+  isn't.
+- **When refactoring legacy code**, apply them one seam at a time. Extract
+  the payment call behind an interface first, add tests through it, then
+  move on. A big-bang "make it SOLID" rewrite rarely lands.
 
 Try it on a real problem: the [LLD practice tool](/tools/lld) scores
 designs on responsibilities and extensibility, which is most of SOLID in

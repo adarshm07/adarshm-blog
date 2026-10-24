@@ -139,6 +139,166 @@ Put a `Date.now()` in the system prompt and every turn is a full-price cache
 miss. That one line is the most common — and most expensive — bug in agent
 code.
 
+### What the growing transcript costs
+
+The arithmetic is worth doing once. Say the system prompt and tool
+definitions are 4,000 tokens, and each turn adds about 3,000 tokens of tool
+output and model text. The input billed on each turn is everything so far:
+
+<Table
+  data={{
+    headers: ['turn', 'input tokens that turn', 'cumulative input tokens'],
+    rows: [
+      ['1', '4,000', '4,000'],
+      ['5', '16,000', '~50,000'],
+      ['10', '31,000', '~175,000'],
+      ['20', '61,000', '~650,000'],
+    ],
+  }}
+/>
+
+Twenty turns re-read roughly 650,000 tokens to produce one answer — the
+cost grows with the *square* of the number of turns, because every turn
+pays for all the turns before it. With caching, most of each turn's input
+is a cache read at a fraction of the normal price, which is why caching
+isn't an optimisation for agents; it's what makes long runs affordable.
+The other lever is keeping tool output small. See
+[LLM cost and latency optimisation](/blog/llm-cost-and-latency-optimization).
+
+## Every stop reason, handled
+
+`tool_use` and `end_turn` are the common cases. A robust loop handles the
+rest explicitly instead of treating them as "done":
+
+```typescript
+switch (response.stop_reason) {
+  case 'tool_use':
+    break                                   // run tools, continue the loop
+  case 'end_turn':
+  case 'stop_sequence':
+    return finalText(response)              // normal completion
+  case 'max_tokens':
+    // truncated mid-thought: continue, or raise max_tokens and retry
+    messages.push({ role: 'user', content: 'Continue from where you stopped.' })
+    continue
+  case 'pause_turn':
+    // a long-running server-side tool paused the turn: send it back as-is
+    continue
+  case 'refusal':
+    return handleRefusal(response)          // don't retry in a loop
+  default:
+    throw new Error(`Unhandled stop_reason: ${response.stop_reason}`)
+}
+```
+
+The `default` throw is deliberate: when the API adds a new stop reason,
+you want a loud error in testing rather than an agent that silently treats
+it as a finished answer.
+
+## Permissions live in the harness
+
+Since the model only *asks* for actions, the harness is where you decide
+which asks need a human. A simple policy layer, applied before every tool
+runs:
+
+```typescript
+const policy: Record<string, 'allow' | 'confirm' | 'deny'> = {
+  search_issues: 'allow',
+  read_file: 'allow',
+  create_issue: 'confirm',
+  delete_branch: 'confirm',
+  run_shell: 'deny',
+}
+
+async function gatedRun(block: Anthropic.ToolUseBlock) {
+  const rule = policy[block.name] ?? 'deny'          // unknown tools are denied
+  if (rule === 'deny') return errorResult(block, 'This tool is not allowed here.')
+  if (rule === 'confirm' && !(await askUser(block))) {
+    return errorResult(block, 'The user declined this action. Ask before retrying.')
+  }
+  return runTool(block)
+}
+```
+
+Two details matter. Default to deny for tools not in the policy, so a new
+tool doesn't quietly get full access. And when the user declines, return
+that as a tool result, so the model knows and can choose another approach
+— the same "errors are results" rule. This gate is also your main defence
+against [prompt injection](/blog/prompt-injection): an injected
+instruction can make the model *ask* to send an email, but it can't make
+your harness skip the confirmation.
+
+## Keeping the context under control
+
+For long tasks, the transcript eventually gets too expensive or too long
+for the context window. The options, roughly in order of how often
+they're worth it:
+
+- **Smaller tool results.** Return summaries, counts and IDs instead of
+  full payloads; let the model ask for details with a second tool.
+- **Clear old tool results.** After a few turns, a file the model read
+  twenty turns ago can usually be replaced by a placeholder ("file
+  contents removed; read again if needed"). The model keeps its notes
+  about the file without carrying the file.
+- **Compaction.** When the transcript passes a threshold, ask the model to
+  summarise the work so far — goal, decisions, open questions, files
+  touched — and restart the loop with that summary as the first message.
+- **External memory.** Have the agent write notes or intermediate results
+  to files or a store through a tool, and read them back when needed,
+  instead of holding everything in the transcript.
+
+Each trades some fidelity for cost and focus. Very long transcripts don't
+just cost more; models also tend to attend less reliably to details buried
+in the middle of a huge context, so trimming often improves quality too.
+See [context windows and caching](/blog/context-windows-and-caching).
+
+## Streaming, subagents and tracing
+
+**Streaming.** For anything user-facing, stream the model's text as it's
+generated and show tool activity as it happens ("Searching issues…"). The
+loop is the same; you consume events instead of waiting for the full
+response. See [streaming LLM responses](/blog/streaming-llm-responses).
+
+**Subagents.** A subagent is the same loop, started by a tool call from a
+parent agent, with its own fresh transcript and a narrower set of tools.
+It returns only its final answer to the parent. The benefit is context
+isolation — a subagent can read fifty files to answer one question, and
+the parent sees one paragraph. The cost is that the subagent starts with
+no memory of the parent's conversation, so the task description has to
+carry everything it needs.
+
+**Tracing.** Log every turn as a span: the request size, `stop_reason`,
+tool names and durations, token usage including cache reads, and the
+cumulative cost. When an agent gives a strange answer, the trace — which
+tool returned what, and what the model did next — is the only way to find
+out why, and the same traces become test cases for
+[evals](/blog/evals-for-llm-apps).
+
+## Testing the harness without the model
+
+Most of an agent's code can be tested deterministically, because the
+model is just a function from messages to a response. Replace it with a
+scripted fake:
+
+```typescript
+const scripted = fakeModel([
+  toolUse('search_issues', { query: 'login' }),
+  toolUse('search_issues', { query: 'login' }),   // repeat → loop guard
+  text('Found 3 issues.'),
+])
+
+const run = await agent({ model: scripted, tools: handlers, maxTurns: 10 })
+expect(run.stoppedBy).toBe('repeat-guard')
+```
+
+With a fake model you can check the things that are easy to get wrong:
+that every `tool_use` gets exactly one `tool_result`, that errors come
+back as results rather than exceptions, that the turn and token limits
+stop the loop, that denied actions never reach the handler, and that the
+cached prefix is byte-identical across turns. Save real-model testing —
+which is slower, costs money and varies run to run — for behaviour that
+only the model can show, like choosing the right tool.
+
 ## Where the difficulty actually is
 
 The loop is easy. What decides whether an agent is useful:
@@ -156,6 +316,11 @@ tokens that will be resent on every subsequent turn.
 recovering from their own mistakes. The quality of your error messages is,
 quite literally, part of the prompt.
 
+**Latency.** Every turn is a full model call. A task that takes twelve
+turns at three seconds each is a 36-second wait, so parallel tool calls,
+smaller models for simple steps, and streaming progress matter as much as
+correctness.
+
 **Knowing when not to.** A loop that can go off and do arbitrary work is the
 right shape for open-ended tasks and the wrong shape for anything you could
 have written as a sequence of steps. If you can specify the steps, write the
@@ -168,4 +333,6 @@ your code executes it. The model contributes judgement; the harness
 contributes everything else — permissions, retries, budgets, error framing,
 what goes into the context and what gets dropped.
 
-Most agent problems that look like model problems are harness problems.
+Most agent problems that look like model problems are harness problems. Fix the
+harness first: it's cheaper, it's deterministic, and it's the part you
+own.
