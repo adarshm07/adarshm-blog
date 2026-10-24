@@ -31,7 +31,11 @@ Immediate retries triple your traffic against a service that is already
 struggling — the retries arrive while the original overload is still in
 progress. And if the service is down rather than flaky, all three attempts
 fail, so the caller waits three timeouts to learn what the first one already
-told it.
+told it. And it can't tell errors apart: the moment someone adds
+`if (!res.ok) throw` inside the `try`, it starts retrying `400 Bad Request`
+too — a request that will be rejected identically every time — wasting
+two more round trips before surfacing a bug the caller needed to see
+immediately.
 
 ## Exponential backoff, and why it isn't enough
 
@@ -96,6 +100,30 @@ Also cap the ceiling. Uncapped doubling reaches absurd waits by attempt
 fifteen, and a retry two hours later is not a retry — it's a scheduled job
 in disguise.
 
+## One blip, three policies
+
+Numbers make the difference concrete. A service normally handles 1,000
+requests a second with room for about 1,500. It restarts and refuses
+connections for two seconds. Clients make up to three attempts.
+
+- **Immediate retries.** During the outage, every request fails and is
+  retried twice at once: ~3,000 requests a second hit a service that's
+  down. When it comes back, the first second brings new traffic plus the
+  tail of retries — well over its 1,500 capacity. It fails again. The
+  two-second blip becomes a minute of flapping.
+- **Exponential backoff, no jitter.** The 2,000 requests that failed
+  during the outage all come back at exactly +1 s and +2 s after their
+  failures, on top of the normal 1,000 a second. The service recovers to a
+  queue of synchronised retries, around 2,000–3,000 a second, and
+  struggles to catch up.
+- **Backoff with full jitter.** Those same retries are spread uniformly
+  over the next few seconds: an extra few hundred requests a second on top
+  of the normal 1,000, inside the 1,500 capacity. The service absorbs them
+  and the blip is over in a little more than two seconds.
+
+Same number of retries in all three cases. Only the timing changed, and
+the timing decided whether the outage was two seconds or a minute.
+
 ## Retry only what is retryable
 
 Retrying a request that will never succeed wastes capacity and delays the
@@ -155,6 +183,108 @@ Two guards:
   When failures are widespread, retries are dropped rather than multiplied,
   because a broadly failing dependency will not be fixed by more requests.
 
+A retry budget is a token bucket that refills from *successful* traffic:
+
+```javascript
+class RetryBudget {
+  constructor(ratio = 0.1, minPerSecond = 10) {
+    this.ratio = ratio;            // retries allowed per request
+    this.tokens = minPerSecond;
+    this.min = minPerSecond;
+    setInterval(() => { this.tokens = Math.max(this.tokens, this.min); }, 1000);
+  }
+  onRequest() { this.tokens = Math.min(this.tokens + this.ratio, 1000); }
+  tryRetry() {
+    if (this.tokens < 1) return false;
+    this.tokens -= 1;
+    return true;
+  }
+}
+```
+
+Every request deposits a tenth of a token; every retry spends a whole one.
+When things are healthy, the occasional retry always finds a token. When a
+dependency fails broadly, retries quickly use up the deposits and further
+retries are refused — total traffic can rise by at most 10%, instead of
+tripling. The small floor keeps low-traffic clients able to retry at all.
+gRPC and service meshes like Envoy implement exactly this idea.
+
+## Deadlines, not just attempt counts
+
+"Three attempts" says nothing about how long the caller waits. Three
+attempts with 10-second timeouts and backoff can keep a user staring at a
+spinner for over half a minute. Bound the whole operation instead:
+
+```javascript
+async function retryWithDeadline(fn, { deadlineMs = 3000, base = 100 } = {}) {
+  const deadline = Date.now() + deadlineMs;
+  for (let i = 0; ; i++) {
+    const remaining = deadline - Date.now();
+    try {
+      return await fn({ signal: AbortSignal.timeout(remaining) });
+    } catch (err) {
+      const wait = Math.random() * base * 2 ** i;
+      if (!isRetryable(err) || Date.now() + wait >= deadline) throw err;
+      await sleep(wait);
+    }
+  }
+}
+```
+
+Each attempt gets only the time that's left, and the loop gives up when
+another wait would overrun the deadline. Better still, **propagate the
+deadline** downstream — pass the remaining budget in a header such as
+`x-request-deadline`, as gRPC does with its deadline field — so a service
+three hops away doesn't keep working on a request whose caller has already
+given up. See [AbortController and cancellation](/blog/abortcontroller-and-cancellation)
+for the client side of this.
+
+## Listen when the server tells you
+
+A `429` or `503` with a `Retry-After` header is the server doing your
+backoff calculation for you. Honour it, and add a little jitter on top so
+all the clients told "30 seconds" don't return in the same millisecond:
+
+```javascript
+function retryDelay(res, attempt, base = 200) {
+  const header = res?.headers?.get('Retry-After');
+  if (header) {
+    const seconds = Number(header);
+    const ms = Number.isFinite(seconds)
+      ? seconds * 1000
+      : new Date(header).getTime() - Date.now();   // HTTP-date form
+    return Math.max(0, ms) + Math.random() * 1000;
+  }
+  return Math.random() * base * 2 ** attempt;
+}
+```
+
+The server side of the same contract: when overloaded, **fail fast** with
+`503` and a `Retry-After`, instead of accepting work you'll time out on.
+A quick, honest rejection is what lets well-behaved clients back off — see
+[load shedding](/blog/load-shedding-and-graceful-degradation) and
+[rate limiting](/blog/rate-limiting-algorithms).
+
+## Hedged requests: retrying for latency
+
+Retries usually respond to failure. **Hedging** responds to slowness: if a
+request hasn't answered by the 95th-percentile latency, send a second copy
+to another replica and take whichever finishes first. It cuts tail latency
+dramatically for a few percent of extra load, because the slow responses
+are usually slow for reasons specific to one server (a GC pause, a busy
+disk). Only hedge idempotent reads, cancel the loser, and include hedges in
+the retry budget so they can't multiply load during an incident.
+
+## Retries in background jobs
+
+Queues and job runners retry for you, and the same rules apply with
+longer timescales. BullMQ, Sidekiq and SQS all support exponential backoff
+per job; configure it rather than relying on immediate redelivery. Add
+jitter for jobs that fail together (all of them hitting the same broken
+API). And set a final destination — a dead-letter queue or a `failed`
+state that alerts — so a job that will never succeed stops consuming
+retries and gets a human's attention.
+
 ## Retries and circuit breakers
 
 Retries handle the *individual* request that hit a blip. They're the wrong
@@ -162,6 +292,20 @@ tool for a dependency that's genuinely down — that's what a
 [circuit breaker](/blog/circuit-breaker-pattern) is for. The two compose:
 the breaker decides whether it's worth calling at all, and the retry policy
 handles transient failures while the breaker is closed.
+
+## Testing retry behaviour
+
+Retry logic is rarely exercised until an incident, which is the worst
+time to discover it retries `400`s or never gives up. Test it on purpose:
+
+- **Unit-test the policy** with a fake clock and a fake `fn` that fails
+  N times: assert the number of attempts, that waits fall within the
+  jitter range, and that non-retryable errors throw on the first try.
+- **Inject faults** in staging — a proxy that returns `503` for 20% of
+  requests, or adds two seconds of latency — and watch the downstream
+  request rate. It should rise modestly, not multiply.
+- **Graph retries as their own metric.** A rising retry rate is often the
+  earliest sign of a dependency degrading, well before error rates move.
 
 ## The checklist
 
@@ -172,3 +316,8 @@ handles transient failures while the breaker is closed.
 - A bounded number of attempts, and a bounded total deadline.
 - Retry at one layer, with a budget.
 - A circuit breaker for the case where nothing is going to work.
+- Respect `Retry-After` when the server sends it.
+- A total deadline, propagated downstream, rather than an attempt count
+  alone.
+- Retries visible as their own metric, so a degrading dependency shows up
+  before it fails outright.

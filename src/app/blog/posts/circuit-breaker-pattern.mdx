@@ -125,6 +125,69 @@ Starting points, to be tuned against real traffic:
   }}
 />
 
+### A rolling-window breaker
+
+Counting failure *rate* over a window means keeping recent outcomes. A
+ring of one-second buckets is cheap and accurate enough:
+
+```javascript
+class RollingWindow {
+  constructor(seconds = 10) {
+    this.buckets = Array.from({ length: seconds }, () => ({ t: 0, ok: 0, fail: 0 }));
+  }
+  bucket(now = Date.now()) {
+    const sec = Math.floor(now / 1000);
+    const b = this.buckets[sec % this.buckets.length];
+    if (b.t !== sec) { b.t = sec; b.ok = 0; b.fail = 0; }   // reuse a stale slot
+    return b;
+  }
+  record(success) { this.bucket()[success ? 'ok' : 'fail']++; }
+  stats(now = Date.now()) {
+    const oldest = Math.floor(now / 1000) - this.buckets.length + 1;
+    let ok = 0, fail = 0;
+    for (const b of this.buckets) if (b.t >= oldest) { ok += b.ok; fail += b.fail; }
+    return { total: ok + fail, rate: fail / Math.max(1, ok + fail) };
+  }
+}
+
+// in the breaker, after each call:
+//   window.record(success);
+//   const { total, rate } = window.stats();
+//   if (state === 'closed' && total >= 20 && rate > 0.5) open();
+```
+
+Old buckets age out on their own, memory is fixed, and both recording and
+checking are constant-time.
+
+### What counts as a failure?
+
+Not every error means the dependency is unhealthy:
+
+- **Count**: timeouts, connection errors, `5xx` responses, and `429`
+  (the dependency is telling you it's overloaded).
+- **Don't count**: `4xx` client errors like `400`, `404` or `422`. A
+  thousand requests for missing products say nothing about the product
+  service's health — tripping on them would cut off every user because
+  some of them made bad requests.
+- **Consider counting slow successes**: a call that succeeds in 8 seconds
+  when the p99 is 200 ms is a failure as far as your users are concerned.
+  Several libraries let you set a "slow call" threshold that counts toward
+  the rate.
+
+### Half-open, more carefully
+
+Letting exactly one request through in half-open is the textbook version.
+In production, a single probe can be unlucky either way, and if many
+requests arrive at the moment the cooldown ends, all of them may try to be
+"the probe". Two refinements:
+
+- **A small, bounded number of probes** — say five concurrent trial calls
+  — and close only if most succeed. Everything beyond the probe limit
+  keeps failing fast.
+- **Growing cooldowns** — 30 s, then 60 s, then 120 s, capped — for a
+  dependency that keeps failing its probes, so a long outage isn't
+  interrupted by a burst of probes every half-minute.
+
 ## Timeouts come first
 
 A breaker that trips on failures is useless if calls never fail — they just
@@ -171,10 +234,114 @@ Without the breaker, retries make an outage worse. Without the bulkhead, a
 slow dependency exhausts your thread pool before the breaker has collected
 enough evidence to trip.
 
+A bulkhead in Node is a semaphore around the call — Node has no thread
+pool to exhaust, but sockets, memory and the event loop's patience are
+just as finite:
+
+```javascript
+class Bulkhead {
+  constructor(maxConcurrent, maxQueue = 0) {
+    Object.assign(this, { maxConcurrent, maxQueue, active: 0, queue: [] });
+  }
+  async run(fn) {
+    if (this.active >= this.maxConcurrent) {
+      if (this.queue.length >= this.maxQueue) throw new Error('bulkhead full');
+      await new Promise((resolve) => this.queue.push(resolve));
+    }
+    this.active++;
+    try { return await fn(); }
+    finally {
+      this.active--;
+      this.queue.shift()?.();          // let the next waiter in
+    }
+  }
+}
+```
+
+### Which wraps which?
+
+The order of the layers changes the behaviour:
+
+```
+caller → retry → circuit breaker → bulkhead → timeout → network
+```
+
+- **Retry outside the breaker**, so an open breaker's instant rejection
+  isn't retried. Treat "circuit open" as non-retryable.
+- **Breaker outside the bulkhead**, so short-circuited calls don't occupy
+  bulkhead slots.
+- **Timeout innermost**, so every individual attempt is bounded and its
+  failure is recorded by the breaker.
+
+Getting this backwards — retries inside the breaker — makes each logical
+call count three times toward the failure rate and trips the breaker
+early.
+
+## Libraries and infrastructure
+
+You rarely need to write the full version yourself:
+
+- **Node.js** — `opossum` provides a circuit breaker with rolling windows,
+  fallbacks and events for metrics.
+- **JVM** — Resilience4j covers breakers, bulkheads, rate limiters and
+  retries with consistent configuration.
+- **.NET** — Polly does the same.
+- **Service mesh / proxies** — Envoy and Istio implement circuit breaking
+  as connection and request limits per upstream, plus outlier detection
+  that ejects individual bad hosts. That protects every service in the
+  mesh without code changes — but it can't return a domain-specific
+  fallback, which still belongs in the application.
+
+## Testing the breaker
+
+Like retries, breakers only matter during incidents, so rehearse one:
+
+- With a fake clock, drive the breaker through closed → open → half-open
+  → closed, and half-open → open, asserting the state at each step.
+- Point a staging service at a dependency that returns `503`s or hangs,
+  and check that latency drops to near zero once the breaker opens, that
+  the fallback is served, and that the breaker closes within a cooldown or
+  two of the dependency recovering.
+- Run the same test under load, to make sure probes don't stampede the
+  recovering dependency.
+
+## A worked failure: the slow payment provider
+
+Picture a checkout service handling 200 requests a second, each calling a
+payment provider that normally answers in 300 ms. With Node's default
+agent and a pool capped at 50 sockets, that's about 60 calls in flight —
+comfortable.
+
+The provider degrades and starts taking 20 seconds per call.
+
+- **No timeout, no breaker.** In-flight calls climb towards
+  200 × 20 = 4,000. The 50-socket pool fills within a second; every other
+  call queues behind it, including ones that would have succeeded. Memory
+  grows with queued requests, latency for the whole checkout page hits
+  the client's timeout, and the load balancer starts marking checkout
+  instances unhealthy. The provider's problem is now your outage.
+- **A 1-second timeout, no breaker.** Each call fails after a second
+  instead of twenty, so in-flight calls cap around 200. Checkout stays up
+  but every payment attempt costs a second and fails, and the struggling
+  provider still receives the full 200 requests a second.
+- **Timeout, bulkhead and breaker.** Within the first window the failure
+  rate passes 50% and the breaker opens. Payment calls now fail in
+  microseconds, the provider gets a breather, the bulkhead keeps the
+  socket pool from ever filling, and checkout returns "payment temporarily
+  unavailable — your cart is saved" while every other part of the page
+  works. Half-open probes detect recovery and traffic resumes gradually.
+
+The third case still fails payments — nothing can make a broken provider
+work — but it fails *only* payments, quickly, with a message the user can
+act on.
+
 ## Make it observable
 
 A breaker that trips silently is a mystery outage. Emit the state
 transitions, the current state per dependency, and the count of
 short-circuited calls. "Payments breaker open for 4 minutes" is a far better
 alert than "elevated error rate", because it names the dependency and the
-decision your own system made about it.
+decision your own system made about it. Put breaker state on the same
+dashboard as the dependency's own health, so on-call can see at a glance
+whether the breaker is reacting to a real outage or tripping on noise and
+needs its thresholds tuned.

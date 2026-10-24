@@ -73,6 +73,80 @@ If the broker is down, nothing is lost — the rows stay, and the next run
 picks them up. `FOR UPDATE SKIP LOCKED` is what lets several relay
 instances run without publishing the same row twice.
 
+### The table, properly
+
+The outbox is a normal table, but a few columns and one index make the
+difference between a pattern that works in a demo and one that works at a
+few thousand events a second:
+
+```sql
+CREATE TABLE outbox (
+  id            uuid PRIMARY KEY,
+  aggregate_id  text        NOT NULL,   -- e.g. the order id; becomes the partition key
+  topic         text        NOT NULL,
+  payload       jsonb       NOT NULL,
+  headers       jsonb       NOT NULL DEFAULT '{}',  -- trace id, schema version
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  sent_at       timestamptz,
+  attempts      int         NOT NULL DEFAULT 0,
+  last_error    text
+);
+
+-- the relay only ever looks at unsent rows; keep that index tiny
+CREATE INDEX outbox_unsent ON outbox (created_at) WHERE sent_at IS NULL;
+```
+
+The partial index is the important line. Sent rows vastly outnumber unsent
+ones, and an index over only the unsent rows stays a few pages in size no
+matter how large the table grows. Storing a trace ID in `headers` lets
+distributed tracing follow a request from the HTTP call, through the
+outbox, to every consumer — see [distributed tracing](/blog/distributed-tracing).
+
+### Writing to it from application code
+
+Wrap the pattern in one helper so nobody writes the two inserts by hand:
+
+```javascript
+async function createOrder(input) {
+  return db.tx(async (t) => {
+    const order = await t.one(
+      `INSERT INTO orders (id, customer_id, total)
+       VALUES ($1, $2, $3) RETURNING *`,
+      [uuid(), input.customerId, input.total]);
+
+    await t.none(
+      `INSERT INTO outbox (id, aggregate_id, topic, payload)
+       VALUES ($1, $2, 'OrderCreated', $3)`,
+      [uuid(), order.id, { eventId: uuid(), orderId: order.id, total: order.total }]);
+
+    return order;
+  });
+}
+```
+
+The rule to enforce in review: **no `broker.publish` inside request
+handlers**. Every event goes through the outbox.
+
+## Every crash point, checked
+
+The pattern is only convincing if every crash point lands somewhere safe:
+
+<Table
+  data={{
+    headers: ['crash happens…', 'state afterwards', 'outcome'],
+    rows: [
+      ['before COMMIT', 'neither order nor outbox row exists', 'request failed; client retries — nothing to clean up'],
+      ['after COMMIT, before relay runs', 'order + unsent outbox row', 'relay publishes on its next run'],
+      ['after publish, before marking sent', 'event published, row still unsent', 'published again — consumers dedupe on eventId'],
+      ['after marking sent', 'everything consistent', 'done'],
+    ],
+  }}
+/>
+
+No row in that table loses an event or publishes one for an order that
+doesn't exist. The one imperfection — a duplicate publish — is the one
+idempotent consumers already handle.
+
 ## Two ways to run the relay
 
 **Polling** — a loop like the one above, every second or so. Simple, no
@@ -86,6 +160,47 @@ of infrastructure to run and understand.
 
 Start with polling. Move to CDC when the latency or the query load actually
 bothers you.
+
+### Cutting polling latency with LISTEN/NOTIFY
+
+In Postgres there's a middle ground. Have the writing transaction send a
+notification, and have the relay wait for one instead of sleeping:
+
+```sql
+-- inside the same transaction as the outbox insert
+NOTIFY outbox_new;
+```
+
+```javascript
+await listener.query('LISTEN outbox_new');
+listener.on('notification', () => relayNow());   // wake immediately
+setInterval(relayNow, 5000);                     // and poll as a safety net
+```
+
+Notifications are delivered only after commit, so the relay never wakes for
+a row it can't see yet. They aren't durable — a relay that's down misses
+them — which is why the slow poll stays as the backstop. Latency drops to
+milliseconds without running a CDC pipeline.
+
+### What CDC looks like
+
+With Debezium, the relay is configuration rather than code: a connector
+reads the write-ahead log, and an outbox "event router" turns each inserted
+outbox row into a message on the topic named in the row, keyed by
+`aggregate_id`. The outbox rows can even be deleted right after insert —
+the log already captured them — so the table never grows. The trade is
+operating Kafka Connect and a replication slot, and making sure that slot
+doesn't fall behind and fill the database's disk with retained WAL.
+
+## The inbox: the consumer's half
+
+The idempotent consumer above is sometimes formalised as an **inbox**: the
+consumer writes each incoming event into an `inbox` table (with a unique
+event ID) in the same transaction as its own state changes. It's the
+mirror image of the outbox — one local transaction on each side, with the
+broker in between — and together they give end-to-end effectively-once
+processing out of at-least-once parts. A worker can also process the inbox
+asynchronously, which decouples receiving an event from acting on it.
 
 ## At-least-once, not exactly-once
 
@@ -132,6 +247,63 @@ move repeat offenders aside after a threshold.
 with a partition key (the order id, the customer id) and let the broker
 keep order within that key. Global ordering through a single relay is a
 throughput ceiling you don't want.
+
+**Batch the publishes.** The relay above publishes and updates one row at
+a time — two round trips per event. At volume, publish the whole batch of
+100 in one producer call, wait for all acks, then mark them sent with a
+single `UPDATE outbox SET sent_at = now() WHERE id = ANY($1)`. Throughput
+goes up by an order of magnitude, and the failure behaviour is unchanged:
+a crash mid-batch just republishes the batch.
+
+**Keep the transaction short.** Don't hold the `FOR UPDATE` lock while
+waiting on a slow broker for seconds; select and lock the batch, publish
+with a timeout, mark, commit. If the broker is slow, fail fast and let the
+next run retry.
+
+## Alternatives, and why they usually lose
+
+- **Distributed transactions (XA / 2PC)** across the database and the
+  broker would make the two writes atomic, but most brokers don't support
+  it, and those that do pay heavily in latency and availability — see
+  [sagas vs two-phase commit](/blog/sagas-and-two-phase-commit).
+- **Publish first, then have the service consume its own event to write
+  the database** ("listen to yourself"). Atomic in the sense that the log
+  is the single source of truth, but the service can't read its own write
+  immediately, and every request becomes asynchronous.
+- **Event sourcing**: make the events themselves the database. Then
+  there's only one write by construction. Powerful, and a much bigger
+  commitment than an outbox table — see
+  [event sourcing and CQRS](/blog/event-sourcing-and-cqrs).
+
+For a service that already has a relational database, the outbox is the
+smallest change that removes the bug.
+
+## Events are an API
+
+Once events leave the outbox, other teams depend on their shape, so treat
+the payload like a public API:
+
+- **Version it.** Put a schema version in the headers or the event type
+  (`OrderCreated.v2`). Consumers can then handle old and new shapes side by
+  side during a rollout.
+- **Only add, never repurpose.** Adding an optional field is safe;
+  renaming or changing the meaning of one breaks every consumer that
+  hasn't been redeployed. If a change is incompatible, publish a new event
+  type and run both until consumers have moved.
+- **Carry enough to act on, not the whole row.** An event with only an ID
+  forces every consumer to call back into your service (and hit a replica
+  that may not have the row yet). An event with the entire row couples
+  consumers to your table layout. Include the fields that describe what
+  happened — "order 42 was placed by customer 7 for ₹1,250" — and nothing
+  internal.
+- **Use a schema registry** once several teams publish and consume. It
+  rejects incompatible changes at publish time instead of at 3 a.m. in a
+  consumer.
+
+Because the outbox stores the payload exactly as it will be published,
+it's also the natural place to validate it: check the event against its
+schema before inserting, and an invalid event fails the business
+transaction instead of poisoning the relay later.
 
 ## When you don't need it
 

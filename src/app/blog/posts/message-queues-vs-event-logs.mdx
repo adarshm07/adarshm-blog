@@ -299,4 +299,5 @@ events, change data capture, analytics pipelines.
 
 And running both is normal. An event log as the backbone for facts about
 what happened, with plain queues for the fire-and-forget jobs, is a common
-and reasonable shape.
+and reasonable shape. A common bridge is a small consumer that reads the
+log and enqueues jobs for the slow, per-item work.

@@ -67,6 +67,134 @@ Many systems already give you the ingredients: conditional writes on S3 and
 DynamoDB, `WHERE version = ?` on a SQL row, compare-and-swap in etcd. A
 version column *is* a fencing token when you use it as one.
 
+## A Redis lock, done carefully
+
+Even for an efficiency lock, the naive Redis version has bugs. Here is the
+version that gets the small things right:
+
+```javascript
+const crypto = require('node:crypto');
+
+async function acquire(redis, key, ttlMs) {
+  const owner = crypto.randomUUID();
+  // NX: only if absent. PX: expire automatically. One atomic command.
+  const ok = await redis.set(key, owner, 'NX', 'PX', ttlMs);
+  return ok ? owner : null;
+}
+
+// Delete only if we still own it — atomically.
+const RELEASE = `
+  if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("DEL", KEYS[1])
+  end
+  return 0`;
+
+async function release(redis, key, owner) {
+  return redis.eval(RELEASE, 1, key, owner);
+}
+```
+
+Each detail fixes a specific failure:
+
+- **`SET ... NX PX` in one command.** The old `SETNX` followed by `EXPIRE`
+  leaves a window where a crash creates a lock with no expiry — held
+  forever.
+- **A random owner value.** Without it, release is a plain `DEL`. If your
+  lease expired and someone else acquired the lock, your `DEL` removes
+  *their* lock, and a third client walks in. Comparing the owner before
+  deleting prevents that.
+- **Compare-and-delete in a script.** A `GET` followed by a `DEL` from the
+  client is itself a race; the Lua script runs atomically on the server.
+
+None of this makes it a correctness lock — a paused client still writes
+after its lease expires — but it removes the bugs that don't even need a
+pause.
+
+### Renewing the lease
+
+For work that might outlast the TTL, renew while working instead of
+choosing a huge TTL (which makes crash recovery slow):
+
+```javascript
+const EXTEND = `
+  if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("PEXPIRE", KEYS[1], ARGV[2])
+  end
+  return 0`;
+
+function keepAlive(redis, key, owner, ttlMs, onLost) {
+  const timer = setInterval(async () => {
+    const ok = await redis.eval(EXTEND, 1, key, owner, ttlMs);
+    if (!ok) { clearInterval(timer); onLost(); }   // someone else has it now
+  }, ttlMs / 3);
+  return () => clearInterval(timer);
+}
+```
+
+Renewing at a third of the TTL leaves room for two missed renewals. And
+`onLost` matters: when renewal fails, the worker must stop as soon as it
+can, because it no longer holds the lock. But notice the limit — a renewal
+timer can't fire during the very GC pause that causes the problem. Renewal
+shortens the danger window; it doesn't close it. Only fencing does.
+
+## Fencing with a database you already have
+
+The cheapest correctness lock is often a row in the database the protected
+work writes to. A lock table with a version column issues fencing tokens
+naturally:
+
+```sql
+-- acquire: take the lock if free or expired, and bump the token
+UPDATE locks
+SET owner = $1, expires_at = now() + interval '30 seconds', token = token + 1
+WHERE name = 'invoice-run' AND (owner IS NULL OR expires_at < now())
+RETURNING token;
+```
+
+The protected write then checks the token in the same statement:
+
+```sql
+UPDATE invoices
+SET status = 'sent', fence = $2
+WHERE id = $1 AND fence < $2;      -- rejected if a newer holder has written
+```
+
+Zero rows updated means a newer lock holder got there first, and the
+stale worker should stop. Postgres also has **advisory locks**
+(`pg_try_advisory_lock`), which are tied to a session and released
+automatically if the connection drops — handy for "only one instance runs
+this job", though connection poolers that share sessions can make them
+behave surprisingly.
+
+## etcd and ZooKeeper
+
+Consensus-backed stores provide the two pieces a correctness lock needs:
+
+- **Leases tied to a session.** A client's keys disappear when its session
+  expires, without anyone running cleanup.
+- **A monotonic number with every write** — etcd's revision, ZooKeeper's
+  `zxid` or sequential node numbers. The revision at which you acquired the
+  lock *is* your fencing token.
+
+etcd's lock recipe has each client create a key under a common prefix and
+wait for every key with a lower revision to disappear. Clients queue in
+order instead of all retrying at once, which also avoids a thundering herd
+when a popular lock is released.
+
+## The Redlock debate, briefly
+
+Redlock acquires the same lock on a majority of N independent Redis nodes
+to survive one node failing. Its critics' argument, in short: it assumes
+bounded network delay, bounded process pauses and bounded clock drift — the
+very things that break leases in the first place — and it issues no
+fencing token, so the resource can't reject stale writes. The defence is
+that, for many practical systems, those bounds hold well enough.
+
+The practical takeaway doesn't depend on who wins the argument: if you need
+correctness, you need fencing at the resource, and Redlock doesn't give you
+a token to fence with. If you only need efficiency, a single Redis node is
+simpler and nearly as good.
+
 ## Lock services, briefly
 
 <Table
@@ -110,6 +238,55 @@ And that last option is usually better:
   one process can touch a key.
 - **A queue.** Serialise the work by construction instead of coordinating
   access to it.
+
+## A worked example: one scheduled job, many instances
+
+A common real case: ten instances of a service each run a scheduler, and
+the nightly invoice job must run once, not ten times. Walk through the
+options with the efficiency-or-correctness question in mind.
+
+**Is a duplicate run harmful?** If running twice sends every customer two
+invoices, it's a correctness problem. So the lock alone isn't enough —
+the job must also be safe to run twice.
+
+A design that holds up:
+
+1. Each instance tries to acquire the lock at the scheduled time. One
+   wins; the others skip. This is the efficiency layer — it prevents nine
+   wasted runs on a normal night.
+2. The job records each invoice it sends with a natural key:
+   `(customer_id, billing_period)`, under a unique constraint. Sending is
+   "insert the record, and only if the insert succeeded, send". This is
+   the correctness layer — even if two instances both believe they hold
+   the lock, each invoice is created once.
+3. The job processes customers in batches and records its progress, so if
+   the lock is lost mid-run, the next holder resumes rather than starting
+   over.
+
+The lock went from being the thing that guarantees correctness to a cheap
+optimisation in front of a design that's correct without it. That's the
+pattern to aim for. Many job-queue libraries (BullMQ's repeatable jobs,
+for example) do step 1 for you; step 2 is always yours.
+
+## Testing for the pause
+
+Lock bugs don't show up in normal tests, because nothing pauses. Make the
+pause happen:
+
+- **Inject a sleep** between acquiring and writing, longer than the TTL,
+  in one worker; start a second worker during the sleep. Assert the first
+  worker's write is rejected (with fencing) or that the outcome is still
+  correct (with idempotency).
+- **Freeze a process** with `SIGSTOP` and resume it with `SIGCONT` in an
+  integration test — the closest simulation of a long GC pause.
+- **Kill the lock holder** mid-work and check the lock becomes available
+  within the TTL and the next holder picks up cleanly.
+- **Fail over the lock store.** For a single Redis with a replica, force
+  a failover while a lock is held; with asynchronous replication, the
+  replica may not have the lock key, and a second client acquires it.
+  Know whether your design survives that.
+
+If a test like the first one passes without fencing, the test is wrong.
 
 ## The summary
 
